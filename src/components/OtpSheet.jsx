@@ -2,6 +2,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import { Phone, ShieldCheck, ArrowRight } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import { sendOtp, verifyOtp } from '../lib/api';
+// verifyOtp returns { success, token, user } — token is stored by completeAuth
 
 export default function OtpSheet() {
   const { authGate: gate, completeAuth } = useApp();

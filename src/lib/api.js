@@ -1,150 +1,75 @@
-import { supabase, isOnline } from './supabase';
+// All API calls go to our Express server.
+// JWT is stored in localStorage and sent with every authenticated request.
 
-// ─── OTP ──────────────────────────────────────────────────────────────────────
+const BASE = '';  // same origin — Express serves both app and API
 
-export async function sendOtp(phone) {
-  const res = await fetch('/api/send-otp', {
+function getToken() { return localStorage.getItem('zm_token'); }
+export function setToken(t) { localStorage.setItem('zm_token', t); }
+export function clearToken() { localStorage.removeItem('zm_token'); }
+export function isLoggedIn() { return !!getToken(); }
+
+function authHeaders() {
+  const t = getToken();
+  return t ? { Authorization: `Bearer ${t}` } : {};
+}
+
+async function post(path, body, auth = false) {
+  const res = await fetch(path, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ phone }),
+    headers: { 'Content-Type': 'application/json', ...(auth ? authHeaders() : {}) },
+    body: JSON.stringify(body),
   });
   const data = await res.json();
-  if (!res.ok) throw new Error(data.error || 'Failed to send OTP');
+  if (!res.ok) throw new Error(data.error || 'Request failed');
   return data;
 }
 
-export async function verifyOtp(phone, otp) {
-  const res = await fetch('/api/verify-otp', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ phone, otp }),
+async function get(path) {
+  const res = await fetch(path, { headers: authHeaders() });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error || 'Request failed');
+  return data;
+}
+
+async function put(path, body) {
+  const res = await fetch(path, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+    body: JSON.stringify(body),
   });
   const data = await res.json();
-  if (!res.ok) throw new Error(data.error || 'Invalid OTP');
-  // data.token is a Supabase custom token or session
+  if (!res.ok) throw new Error(data.error || 'Request failed');
   return data;
 }
 
-// ─── Razorpay ─────────────────────────────────────────────────────────────────
+// ── Auth ──────────────────────────────────────────────────────────────────────
+export const sendOtp    = (phone)      => post('/api/send-otp', { phone });
+export const verifyOtp  = (phone, otp) => post('/api/verify-otp', { phone, otp });
 
-export async function createRazorpayOrder(amount = 2900) {
-  const res = await fetch('/api/create-order', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ amount }),
-  });
-  const data = await res.json();
-  if (!res.ok) throw new Error(data.error || 'Payment setup failed');
-  return data; // { order_id, amount, currency, key_id }
-}
+// ── Profile ───────────────────────────────────────────────────────────────────
+export const fetchProfile  = ()      => get('/api/profile');
+export const updateProfile = (data)  => put('/api/profile', data);
 
-export async function verifyPayment(payload) {
-  const res = await fetch('/api/verify-payment', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload),
-  });
-  const data = await res.json();
-  if (!res.ok) throw new Error(data.error || 'Payment verification failed');
-  return data;
-}
+// ── Products ──────────────────────────────────────────────────────────────────
+export const fetchProducts = () => get('/api/products');
 
-// ─── Products ─────────────────────────────────────────────────────────────────
+export const insertProduct = (listing, user) => post('/api/products', {
+  title:           listing.title,
+  category:        listing.category,
+  emoji:           listing.emoji,
+  condition:       listing.condition,
+  description:     listing.description || '',
+  photo_url:       listing.photo || null,
+  nearby_eligible: true,
+}, true);
 
-export async function fetchProducts() {
-  if (!isOnline()) return null;
-  const { data, error } = await supabase
-    .from('products')
-    .select('*')
-    .eq('status', 'active')
-    .order('created_at', { ascending: false });
-  if (error) { console.error('[ZeroMart] fetchProducts:', error); return null; }
-  return data.map(p => ({
-    id: p.id,
-    title: p.title,
-    category: p.category,
-    emoji: p.emoji,
-    distance: p.distance,
-    condition: p.condition,
-    description: p.description || '',
-    photo: p.photo_url || null,
-    nearbyEligible: p.nearby_eligible,
-    listed: p.listed,
-    seller: { name: p.seller_name, karma: p.seller_karma, initials: p.seller_initials },
-    sellerId: p.seller_id,
-  }));
-}
+// ── Favourites ────────────────────────────────────────────────────────────────
+export const fetchFavourites  = ()   => get('/api/favourites').catch(() => []);
+export const toggleFavouriteAPI = (id) => post(`/api/favourites/${id}`, {}, true);
 
-export async function insertProduct(listing, user) {
-  if (!isOnline()) return null;
-  const session = await supabase.auth.getSession();
-  const uid = session.data?.session?.user?.id;
-  const { data, error } = await supabase
-    .from('products')
-    .insert({
-      title: listing.title,
-      category: listing.category,
-      emoji: listing.emoji,
-      condition: listing.condition,
-      description: listing.description || '',
-      photo_url: listing.photo || null,
-      nearby_eligible: true,
-      listed: 'just now',
-      seller_id: uid || null,
-      seller_name: user.name,
-      seller_karma: user.karma,
-      seller_initials: user.initials,
-    })
-    .select()
-    .single();
-  if (error) { console.error('[ZeroMart] insertProduct:', error); return null; }
-  return data.id;
-}
+// ── Orders ────────────────────────────────────────────────────────────────────
+export const fetchOrders = () => get('/api/orders').catch(() => []);
 
-// ─── Favourites ───────────────────────────────────────────────────────────────
-
-export async function fetchFavourites(userId) {
-  if (!isOnline() || !userId) return null;
-  const { data, error } = await supabase
-    .from('favourites')
-    .select('product_id')
-    .eq('user_id', userId);
-  if (error) return null;
-  return data.map(f => f.product_id);
-}
-
-export async function addFavourite(userId, productId) {
-  if (!isOnline() || !userId) return;
-  await supabase.from('favourites').insert({ user_id: userId, product_id: productId });
-}
-
-export async function removeFavourite(userId, productId) {
-  if (!isOnline() || !userId) return;
-  await supabase.from('favourites').delete().eq('user_id', userId).eq('product_id', productId);
-}
-
-// ─── Profile ──────────────────────────────────────────────────────────────────
-
-export async function fetchProfile(userId) {
-  if (!isOnline() || !userId) return null;
-  const { data } = await supabase.from('profiles').select('*').eq('id', userId).single();
-  return data;
-}
-
-export async function upsertProfile(userId, updates) {
-  if (!isOnline() || !userId) return;
-  await supabase.from('profiles').upsert({ id: userId, ...updates }, { onConflict: 'id' });
-}
-
-// ─── Orders ───────────────────────────────────────────────────────────────────
-
-export async function fetchOrders(userId) {
-  if (!isOnline() || !userId) return null;
-  const { data, error } = await supabase
-    .from('orders')
-    .select('*')
-    .eq('buyer_id', userId)
-    .order('created_at', { ascending: false });
-  if (error) return null;
-  return data;
-}
+// ── Payment ───────────────────────────────────────────────────────────────────
+export const createRazorpayOrder = (amount = 2900) => post('/api/create-order', { amount });
+export const verifyPayment = (payload) => post('/api/verify-payment', payload, true);
