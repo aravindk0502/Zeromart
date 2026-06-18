@@ -1,0 +1,36 @@
+{
+  "name": "zeromart",
+  "version": "1.0.0",
+  "private": true,
+  "dependencies": {
+    "@supabase/supabase-js": "^2.108.2",
+    "cors": "^2.8.6",
+    "express": "^5.2.1",
+    "lucide-react": "^0.383.0",
+    "razorpay": "^2.9.6",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
+    "react-scripts": "5.0.1"
+  },
+  "scripts": {
+    "start": "react-scripts start",
+    "build": "react-scripts build",
+    "server": "node server.js",
+    "railway": "npm run build && node server.js"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "browserslist": {
+    "production": [
+      ">0.2%",
+      "not dead",
+      "not op_mini all"
+    ],
+    "development": [
+      "last 1 chrome version",
+      "last 1 firefox version",
+      "last 1 safari version"
+    ]
+  }
+}
