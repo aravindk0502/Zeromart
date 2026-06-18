@@ -37,8 +37,13 @@ export default function ProductSheet() {
   return (
     <div className="overlay" onClick={() => setSelectedProduct(null)}>
       <div className="sheet" onClick={e => e.stopPropagation()}>
-        {/* Handle */}
-        <div style={{ width: 40, height: 4, borderRadius: 999, background: 'var(--zm-border)', margin: '0 auto 16px' }} />
+        {/* Header row */}
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
+          <div style={{ width: 40, height: 4, borderRadius: 999, background: 'var(--zm-border)', flex: 1, maxWidth: 40, margin: '0 auto' }} />
+          <button onClick={() => setSelectedProduct(null)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--zm-text-muted)', marginLeft: 'auto' }}>
+            <X size={20} />
+          </button>
+        </div>
 
         {/* Product image */}
         <div style={{ fontSize: 80, textAlign: 'center', background: 'var(--zm-surface2)', borderRadius: 16, padding: '24px 0', marginBottom: 16 }}>

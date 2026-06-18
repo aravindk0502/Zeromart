@@ -75,6 +75,7 @@ const DEFAULT_USER = {
 
 function dbToUser(row) {
   return {
+    id:           row.id,
     name:         row.name,
     initials:     row.initials,
     mode:         row.mode,
@@ -100,6 +101,7 @@ function dbToProduct(row) {
     photo:          row.photo_url || null,
     nearbyEligible: row.nearby_eligible,
     listed:         row.listed,
+    area:           row.pickup_area || '',
     seller:         { name: row.seller_name, karma: row.seller_karma, initials: row.seller_initials },
     sellerId:       row.seller_id,
   };
@@ -111,6 +113,7 @@ export function AppProvider({ children }) {
   const [authGate, setAuthGate]   = useState(null);
   const nextId                    = useRef(100);
   const isBuyerRef                = useRef(false);
+  const userIdRef                 = useRef(null); // stable ref for async callbacks
   const [products, setProducts]   = useState(MOCK_PRODUCTS);
   const [favourites, setFavourites] = useState([3, 5]);
   const [karmaPopup, setKarmaPopup] = useState(null);
@@ -128,27 +131,50 @@ export function AppProvider({ children }) {
   const [collectRequest, setCollectRequest]   = useState(null);
   const [viewingSeller, setViewingSeller]     = useState(null);
 
+  // ── Helpers ───────────────────────────────────────────────────────────────────
+  function mergeProducts(rows, prev, uid) {
+    const dbIds = new Set(rows.map(r => r.id));
+    const localOnly = prev.filter(p => p.isOwn && !dbIds.has(p.id));
+    const id = uid ?? userIdRef.current;
+    return [
+      ...localOnly,
+      ...rows.map(row => ({ ...dbToProduct(row), isOwn: !!(id && row.seller_id == id) })),
+    ];
+  }
+
+  function refreshProducts(uid) {
+    fetchProducts()
+      .then(rows => { if (rows?.length) setProducts(prev => mergeProducts(rows, prev, uid)); })
+      .catch(() => {});
+  }
+
   // ── Bootstrap: load real products + restore session ──────────────────────────
   useEffect(() => {
-    // Load products from DB (falls back gracefully to mock if API unavailable)
-    fetchProducts()
-      .then(rows => { if (rows && rows.length > 0) setProducts(rows.map(dbToProduct)); })
-      .catch(() => {});
+    refreshProducts(null);
 
-    // Restore session from localStorage token
     if (isLoggedIn()) {
       fetchProfile()
         .then(row => {
-          setUser(prev => ({ ...prev, ...dbToUser(row) }));
+          const u = dbToUser(row);
+          userIdRef.current = u.id;
+          setUser(prev => ({ ...prev, ...u }));
           isBuyerRef.current = row.is_buyer;
+          // Re-fetch products now that we know the user id
+          refreshProducts(u.id);
           fetchFavourites().then(favs => { if (favs.length) setFavourites(favs); }).catch(() => {});
           fetchOrders().then(dbOrders => { if (dbOrders.length) setOrders(dbOrders); }).catch(() => {});
         })
-        .catch(() => clearToken()); // token expired — log out
+        .catch(() => clearToken());
     }
+  
   }, []);
 
   useEffect(() => { isBuyerRef.current = user.isBuyer; }, [user.isBuyer]);
+  useEffect(() => { userIdRef.current = user.id ?? null; }, [user.id]);
+  // Reactive sign-out navigation — whenever user logs out, go home
+  useEffect(() => {
+    if (!user.isLoggedIn) setPage('home');
+  }, [user.isLoggedIn]); // eslint-disable-line
 
   // ── Auth ──────────────────────────────────────────────────────────────────────
   const requireAuth = useCallback((action) => {
@@ -157,39 +183,60 @@ export function AppProvider({ children }) {
   }, [user.isLoggedIn]);
 
   const completeAuth = useCallback((phone, data) => {
+    let uid = null;
     if (data?.token) {
       setToken(data.token);
-      if (data.user) setUser(prev => ({ ...prev, ...dbToUser(data.user), isLoggedIn: true }));
+      if (data.user) {
+        const u = dbToUser(data.user);
+        uid = u.id;
+        userIdRef.current = uid;
+        setUser(prev => ({ ...prev, ...u, isLoggedIn: true }));
+      }
     }
     setUser(prev => ({ ...prev, isLoggedIn: true, phone: phone || prev.phone }));
+    // Refresh products so newly logged-in user's own listings are marked
+    if (uid) refreshProducts(uid);
     setAuthGate(prev => {
       if (prev?.pendingAction) setTimeout(prev.pendingAction, 0);
       return null;
     });
+  
   }, []);
 
   const signOut = useCallback(() => {
     clearToken();
-    setUser(DEFAULT_USER);
+    userIdRef.current = null;
     isBuyerRef.current = false;
+    setFavourites([]);
+    setUser(DEFAULT_USER); // isLoggedIn: false → triggers useEffect → setPage('home')
   }, []);
 
   // ── Products ──────────────────────────────────────────────────────────────────
   const addProduct = useCallback(async (listing) => {
     const localId = ++nextId.current;
+    const uid = userIdRef.current;
     const newProduct = {
       id: localId, title: listing.title, category: listing.category,
       emoji: listing.emoji, distance: 0, condition: listing.condition,
       seller: { name: user.name, karma: user.karma, initials: user.initials },
+      sellerId: uid,
       description: listing.description || '', nearbyEligible: true,
       listed: 'just now', photo: listing.photo || null, isOwn: true,
+      area: listing.area || '',
     };
     setProducts(prev => [newProduct, ...prev]);
     try {
       const res = await insertProduct(listing, user);
-      if (res?.id) setProducts(prev => prev.map(p => p.id === localId ? { ...p, id: res.id } : p));
-    } catch {}
+      if (res?.id) {
+        setProducts(prev => prev.map(p => p.id === localId ? { ...p, id: res.id, sellerId: uid } : p));
+        // Refresh from DB — mergeProducts will mark isOwn correctly using uid
+        refreshProducts(uid);
+      }
+    } catch (err) {
+      console.error('[addProduct]', err);
+    }
     return localId;
+  
   }, [user]);
 
   // ── Favourites ────────────────────────────────────────────────────────────────
@@ -245,7 +292,8 @@ export function AppProvider({ children }) {
     setNotifications(prev => prev.map(n => ({ ...n, read: true })));
   }, []);
 
-  const userListings = products.filter(p => p.isOwn);
+  // eslint-disable-next-line eqeqeq
+  const userListings = products.filter(p => p.isOwn || (userIdRef.current && p.sellerId == userIdRef.current));
 
   return (
     <AppContext.Provider value={{

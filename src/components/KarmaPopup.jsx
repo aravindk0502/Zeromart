@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Star } from 'lucide-react';
+import { Star, X } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 
 export default function KarmaPopup() {
@@ -20,7 +20,10 @@ export default function KarmaPopup() {
 
   return (
     <div className="sheet-center">
-      <div className="modal" style={{ textAlign: 'center' }}>
+      <div className="modal" style={{ textAlign: 'center', position: 'relative' }}>
+        <button onClick={closeKarmaPopup} style={{ position: 'absolute', top: 0, right: 0, background: 'none', border: 'none', cursor: 'pointer', color: 'var(--zm-text-muted)', padding: 4 }}>
+          <X size={18} />
+        </button>
         {given ? (
           <div style={{ padding: '24px 0' }}>
             <div style={{ fontSize: 56, marginBottom: 12 }}>✨</div>

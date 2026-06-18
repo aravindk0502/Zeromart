@@ -1,11 +1,11 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Phone, ShieldCheck, ArrowRight } from 'lucide-react';
+import { Phone, ShieldCheck, ArrowRight, X } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import { sendOtp, verifyOtp } from '../lib/api';
 // verifyOtp returns { success, token, user } — token is stored by completeAuth
 
 export default function OtpSheet() {
-  const { authGate: gate, completeAuth } = useApp();
+  const { authGate: gate, completeAuth, setAuthGate } = useApp();
 
   const [step, setStep]       = useState('phone');
   const [phone, setPhone]     = useState('');
@@ -83,7 +83,12 @@ export default function OtpSheet() {
   return (
     <div className="overlay">
       <div className="sheet" onClick={e => e.stopPropagation()}>
-        <div style={{ width: 40, height: 4, borderRadius: 999, background: 'var(--zm-border)', margin: '0 auto 20px' }} />
+        <div style={{ display: 'flex', alignItems: 'center', marginBottom: 20 }}>
+          <div style={{ width: 40, height: 4, borderRadius: 999, background: 'var(--zm-border)', flex: 1 }} />
+          <button onClick={() => setAuthGate(null)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--zm-text-muted)', marginLeft: 8, display: 'flex' }}>
+            <X size={20} />
+          </button>
+        </div>
 
         {step === 'done' ? (
           <div style={{ textAlign: 'center', padding: '24px 0 8px' }}>

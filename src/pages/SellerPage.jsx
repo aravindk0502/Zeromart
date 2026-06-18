@@ -1,5 +1,5 @@
 import React from 'react';
-import { Star, Zap, Gift, Package, Award } from 'lucide-react';
+import { Star, Zap, Gift, Package, Award, ArrowLeft } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 
 const KARMA_MILESTONES = [
@@ -10,7 +10,7 @@ const KARMA_MILESTONES = [
 ];
 
 export default function SellerPage() {
-  const { user, userListings, setListingSheet, triggerKarmaPopup } = useApp();
+  const { user, userListings, setListingSheet, triggerKarmaPopup, setPage } = useApp();
 
   const nextMilestone = KARMA_MILESTONES.find(m => m.at > user.karma);
   const progress = nextMilestone ? (user.karma / nextMilestone.at) * 100 : 100;
@@ -20,6 +20,9 @@ export default function SellerPage() {
       {/* Header */}
       <div style={{ padding: '0 16px 20px', background: 'linear-gradient(180deg, rgba(124,92,252,0.08) 0%, transparent 100%)' }}>
         <div style={{ marginBottom: 16 }}>
+          <button onClick={() => setPage('home')} style={{ display: 'flex', alignItems: 'center', gap: 6, background: 'none', border: 'none', color: 'var(--zm-text-muted)', cursor: 'pointer', fontSize: 13, padding: '0 0 12px', fontFamily: 'Inter, sans-serif' }}>
+            <ArrowLeft size={16} /> Back
+          </button>
           <div style={{ fontSize: 20, fontWeight: 700, fontFamily: 'Sora, sans-serif', marginBottom: 2 }}>My Seller Hub</div>
           <div style={{ fontSize: 12, color: 'var(--zm-amber)', fontStyle: 'italic' }}>✨ Do good. Get good. — every item given sends good karma back.</div>
         </div>

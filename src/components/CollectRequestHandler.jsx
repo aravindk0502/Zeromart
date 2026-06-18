@@ -1,5 +1,5 @@
 import React from 'react';
-import { MapPin, Check, X } from 'lucide-react';
+import { MapPin, Check, X, ArrowLeft } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 
 export default function CollectRequestHandler() {
@@ -20,7 +20,10 @@ export default function CollectRequestHandler() {
 
   return (
     <div className="sheet-center">
-      <div className="modal">
+      <div className="modal" style={{ position: 'relative' }}>
+        <button onClick={decline} style={{ position: 'absolute', top: 0, right: 0, background: 'none', border: 'none', cursor: 'pointer', color: 'var(--zm-text-muted)', padding: 4 }}>
+          <X size={18} />
+        </button>
         <div style={{ textAlign: 'center', marginBottom: 20 }}>
           <div style={{ fontSize: 40, marginBottom: 12 }}>📍</div>
           <div style={{ fontSize: 18, fontWeight: 700, fontFamily: 'Sora, sans-serif', marginBottom: 6 }}>Collect request sent!</div>

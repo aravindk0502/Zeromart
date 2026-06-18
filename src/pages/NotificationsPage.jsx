@@ -1,9 +1,9 @@
 import React, { useEffect } from 'react';
-import { Bell } from 'lucide-react';
+import { Bell, ArrowLeft } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 
 export default function NotificationsPage() {
-  const { notifications, markNotificationsRead } = useApp();
+  const { notifications, markNotificationsRead, setPage } = useApp();
 
   useEffect(() => {
     markNotificationsRead();
@@ -11,6 +11,9 @@ export default function NotificationsPage() {
 
   return (
     <div className="page-content" style={{ padding: '52px 16px 80px' }}>
+      <button onClick={() => setPage('home')} style={{ display: 'flex', alignItems: 'center', gap: 6, background: 'none', border: 'none', color: 'var(--zm-text-muted)', cursor: 'pointer', fontSize: 13, padding: '0 0 12px', fontFamily: 'Inter, sans-serif' }}>
+        <ArrowLeft size={16} /> Back
+      </button>
       <div style={{ fontSize: 20, fontWeight: 700, fontFamily: 'Sora, sans-serif', marginBottom: 20 }}>Notifications</div>
       {notifications.length === 0 ? (
         <div style={{ textAlign: 'center', padding: '48px 0' }}>

@@ -83,6 +83,11 @@ async function initDB() {
       created_at       TIMESTAMPTZ NOT NULL DEFAULT now()
     );
 
+    -- Add pickup_area column if missing (safe to run repeatedly)
+    DO $$ BEGIN
+      ALTER TABLE products ADD COLUMN IF NOT EXISTS pickup_area TEXT DEFAULT '';
+    EXCEPTION WHEN duplicate_column THEN NULL; END $$;
+
     -- Seed listings if products table is empty
     INSERT INTO products (title, category, emoji, distance, condition, seller_name, seller_karma, seller_initials, description, nearby_eligible, listed)
     SELECT * FROM (VALUES
@@ -166,10 +171,9 @@ app.post('/api/verify-otp', async (req, res) => {
       return res.status(500).json({ error: 'OTP verification failed' });
     }
   } else {
-    // Demo mode: check in-memory store
-    const stored = otpStore.get(phone);
-    if (!stored || stored.otp !== String(otp) || Date.now() > stored.expires) {
-      return res.status(400).json({ error: 'Incorrect or expired OTP' });
+    // Demo mode: accept any 6-digit OTP — no MSG91 keys configured
+    if (!/^\d{6}$/.test(String(otp))) {
+      return res.status(400).json({ error: 'Enter a valid 6-digit OTP' });
     }
     otpStore.delete(phone);
   }
@@ -228,13 +232,14 @@ app.get('/api/products', async (req, res) => {
 // Create product
 app.post('/api/products', authMiddleware, async (req, res) => {
   if (!process.env.DATABASE_URL) return res.json({ id: Date.now() });
-  const { title, category, emoji, condition, description, photo_url, nearby_eligible } = req.body;
+  const { title, category, emoji, condition, description, photo_url, nearby_eligible, pickup_area } = req.body;
   const profile = await pool.query('SELECT * FROM users WHERE id = $1', [req.user.id]);
   const u = profile.rows[0];
   const result = await pool.query(
-    `INSERT INTO products (title, category, emoji, condition, description, photo_url, nearby_eligible, seller_id, seller_name, seller_karma, seller_initials)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING id`,
+    `INSERT INTO products (title, category, emoji, condition, description, photo_url, nearby_eligible, pickup_area, seller_id, seller_name, seller_karma, seller_initials)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING id`,
     [title, category, emoji, condition, description, photo_url, nearby_eligible ?? true,
+     pickup_area || '',
      req.user.id, u?.name || 'You', u?.karma || 0, u?.initials || 'ME']
   );
   return res.json({ id: result.rows[0].id });

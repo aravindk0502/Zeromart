@@ -61,6 +61,7 @@ export const insertProduct = (listing, user) => post('/api/products', {
   description:     listing.description || '',
   photo_url:       listing.photo || null,
   nearby_eligible: true,
+  pickup_area:     listing.area || '',
 }, true);
 
 // ── Favourites ────────────────────────────────────────────────────────────────

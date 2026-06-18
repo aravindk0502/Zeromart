@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Package, MapPin, Truck, Users, CheckCircle, Clock, ChevronDown, ChevronUp } from 'lucide-react';
+import { Package, MapPin, Truck, Users, CheckCircle, Clock, ChevronDown, ChevronUp, ArrowLeft } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 
 function StatusDot({ done, active }) {
@@ -106,7 +106,7 @@ function OrderCard({ order }) {
 }
 
 export default function OrdersPage() {
-  const { orders } = useApp();
+  const { orders, setPage } = useApp();
   const [tab, setTab] = useState('active');
 
   const active = orders.filter(o => o.status !== 'delivered');
@@ -117,6 +117,9 @@ export default function OrdersPage() {
     <div className="page-content" style={{ padding: '52px 16px 80px' }}>
       {/* Header */}
       <div style={{ marginBottom: 20 }}>
+        <button onClick={() => setPage('home')} style={{ display: 'flex', alignItems: 'center', gap: 6, background: 'none', border: 'none', color: 'var(--zm-text-muted)', cursor: 'pointer', fontSize: 13, padding: '0 0 12px', fontFamily: 'Inter, sans-serif' }}>
+          <ArrowLeft size={16} /> Back
+        </button>
         <div style={{ fontSize: 20, fontWeight: 700, fontFamily: 'Sora, sans-serif', marginBottom: 4 }}>My Orders</div>
         <div style={{ fontSize: 13, color: 'var(--zm-text-muted)' }}>Track requests and collection history</div>
       </div>
