@@ -1,223 +1,417 @@
-import React, { useState } from 'react';
-import { Star, Package, Heart, Settings, ChevronRight, LogOut, Zap, Gift, X, Bell, Shield, Info } from 'lucide-react';
-import { useApp } from '../context/AppContext';
+import { useEffect, useState } from 'react';
+import { ArrowLeft, LocateFixed, LogOut, MapPin, PackageCheck, ShieldCheck, Truck } from 'lucide-react';
+import { useLocationEngine } from '../hooks/useLocationEngine';
+import LocationMap from '../components/LocationMap';
+import OrderTrackingModal from '../components/OrderTrackingModal';
+import CollectionPass, { getCollectionPassState } from '../components/CollectionPass';
 
-function SettingsSheet({ onClose }) {
-  const { user, setUser } = useApp();
-  const [name, setName] = useState(user.name || '');
+const makeFallbackRows = (count, label, status) => {
+  const total = Math.max(0, Number(count) || 0);
+  const visible = Math.min(total, 8);
+  return Array.from({ length: visible }, (_, index) => ({
+    id: `${label}-${index + 1}`,
+    title: `${label} ${index + 1}`,
+    meta: status,
+    status,
+  }));
+};
 
-  function saveName() {
-    if (name.trim()) setUser(prev => ({ ...prev, name: name.trim(), initials: name.trim().split(' ').map(w => w[0]).join('').toUpperCase().slice(0, 2) }));
-    onClose();
+export default function ProfilePage({ user, items = [], orders = [], receivedOrders = [], onLogin, onBack, onLogout, onUpdateUser, onSelectItem }) {
+  const locationEngine = useLocationEngine();
+  const [selectedStat, setSelectedStat] = useState('Items listed');
+  const [selectedOrder, setSelectedOrder] = useState(null);
+
+  useEffect(() => {
+    if (locationEngine.location) onUpdateUser?.({ location: locationEngine.location });
+  }, [locationEngine.location?.updatedAt]);
+
+  const handleProfileImage = (event) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      onUpdateUser?.({ profileImage: reader.result });
+    };
+    reader.readAsDataURL(file);
+  };
+
+  if (!user) {
+    return (
+      <div className="space-y-4">
+        <button onClick={onBack} className="inline-flex items-center gap-2 rounded-full border border-amber-200 bg-white/80 px-3 py-2 text-sm font-semibold text-slate-600 shadow-sm transition hover:bg-amber-50">
+          <ArrowLeft size={16} /> Back
+        </button>
+        <div className="rounded-[2rem] border border-amber-100 bg-white p-6 shadow-sm">
+          <h2 className="text-xl font-semibold text-slate-900">Your profile</h2>
+          <p className="mt-2 text-sm text-slate-500">Login with your mobile number to view karma, listings, and exchange history.</p>
+          <button onClick={onLogin} className="mt-5 rounded-2xl bg-violet-600 px-4 py-3 font-semibold text-white">Login with OTP</button>
+        </div>
+      </div>
+    );
   }
 
+  const listedItems = items.filter((item) => item.sellerName === user.name || item.sellerName === 'You');
+  const activeItems = listedItems.filter((item) => (item.status || 'Available') !== 'Completed');
+  const collectedOrders = orders.filter((order) => order.type === 'delivery' || order.type === 'in-person');
+  const givenAwayOrders = orders.filter((order) => order.type === 'in-person');
+  const statCards = [
+    {
+      label: 'Items listed',
+      value: user.listed,
+      detail: 'Items you have listed for ₹0 so others can reuse them.',
+      rows: listedItems.length
+        ? listedItems.map((item) => ({
+            id: item.id,
+            title: item.title,
+            meta: `${item.category} · ${item.condition}`,
+            status: item.status || 'Available',
+            image: item.image,
+            item,
+          }))
+        : makeFallbackRows(user.listed, 'Listed item', 'Listed for ₹0'),
+    },
+    {
+      label: 'Items collected',
+      value: user.collected,
+      detail: 'Items you have collected personally or through delivery.',
+      rows: collectedOrders.length
+        ? collectedOrders.map((order) => ({
+            id: order.id,
+            title: order.title,
+            meta: `${order.location}${order.distance ? ` · ${order.distance}` : ''}`,
+            status: order.type === 'delivery' ? 'Delivery order' : 'Collected personally',
+            image: order.image,
+          }))
+        : makeFallbackRows(user.collected, 'Collected item', 'Collected personally'),
+    },
+    {
+      label: 'Active listings',
+      value: user.activeListings,
+      detail: 'Your currently live listings visible on ZeroMart.',
+      rows: activeItems.length
+        ? activeItems.map((item) => ({
+            id: item.id,
+            title: item.title,
+            meta: `${item.location} · ${item.category}`,
+            status: item.status || 'Available',
+            image: item.image,
+            item,
+          }))
+        : makeFallbackRows(user.activeListings, 'Active listing', 'Available'),
+    },
+    {
+      label: 'Given away',
+      value: user.givenAway,
+      detail: 'Items successfully given away for good karma.',
+      rows: givenAwayOrders.length
+        ? givenAwayOrders.map((order) => ({
+            id: order.id,
+            title: order.title,
+            meta: `Given to collector · ${order.createdAt}`,
+            status: 'Good karma received',
+            image: order.image,
+          }))
+        : makeFallbackRows(user.givenAway, 'Given away item', 'Good karma received'),
+    },
+  ];
+  const activeStat = statCards.find((stat) => stat.label === selectedStat) || statCards[0];
+  const hiddenRowCount = Math.max(0, Number(activeStat.value || 0) - activeStat.rows.length);
+  const collectionOrders = orders.filter((order) => order.collectionCode);
+  const activeCollectionOrders = collectionOrders.filter((order) => getCollectionPassState(order).active);
+  const currentLocationLines = [
+    locationEngine.location?.street,
+    locationEngine.location?.subLocality || locationEngine.location?.locality || locationEngine.location?.area,
+    locationEngine.location?.city,
+    locationEngine.location?.district,
+    locationEngine.location?.state,
+    locationEngine.location?.country,
+  ].filter((value, index, values) => value && values.indexOf(value) === index);
+
   return (
-    <div className="overlay" onClick={onClose}>
-      <div className="sheet" onClick={e => e.stopPropagation()}>
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 20 }}>
-          <div style={{ fontSize: 18, fontWeight: 700, fontFamily: 'Sora, sans-serif' }}>Settings</div>
-          <button onClick={onClose} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--zm-text-muted)', display: 'flex' }}><X size={20} /></button>
+    <div className="space-y-4">
+      <button onClick={onBack} className="inline-flex items-center gap-2 rounded-full border border-amber-200 bg-white/80 px-3 py-2 text-sm font-semibold text-slate-600 shadow-sm transition hover:bg-amber-50">
+        <ArrowLeft size={16} /> Back
+      </button>
+
+      <section className="rounded-[2rem] border border-amber-100 bg-white p-5 shadow-sm">
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <p className="text-sm font-semibold text-violet-600">Your profile</p>
+            <h2 className="text-xl font-semibold text-slate-900">{user.name}</h2>
+            <p className="mt-1 text-sm text-slate-500">One account to buy and sell</p>
+          </div>
+          <div className="text-right">
+            <label className="group block cursor-pointer">
+              <div className="ml-auto flex h-16 w-16 items-center justify-center overflow-hidden rounded-full border-2 border-amber-100 bg-amber-50 text-violet-600 transition group-hover:border-violet-200">
+                {user.profileImage ? (
+                  <img src={user.profileImage} alt={user.name} className="h-full w-full object-cover" />
+                ) : (
+                  <ShieldCheck size={22} />
+                )}
+              </div>
+              <input type="file" accept="image/*" className="hidden" onChange={handleProfileImage} />
+              <span className="mt-2 block text-xs font-semibold text-violet-700">Add photo</span>
+            </label>
+          </div>
         </div>
 
-        <div style={{ marginBottom: 16 }}>
-          <div style={{ fontSize: 12, color: 'var(--zm-text-muted)', marginBottom: 6 }}>Display name</div>
-          <input
-            className="input"
-            value={name}
-            onChange={e => setName(e.target.value)}
-            placeholder="Your name"
-            style={{ width: '100%', boxSizing: 'border-box' }}
-          />
-        </div>
-
-        <div style={{ marginBottom: 20 }}>
-          <div style={{ fontSize: 12, color: 'var(--zm-text-muted)', marginBottom: 6 }}>Phone</div>
-          <div className="input" style={{ color: 'var(--zm-text-dim)', fontSize: 14 }}>+91 {user.phone || '—'}</div>
-        </div>
-
-        {[
-          { icon: <Bell size={15} />, label: 'Notification preferences', sub: 'All alerts on' },
-          { icon: <Shield size={15} />, label: 'Privacy & data', sub: 'Your data is safe' },
-          { icon: <Info size={15} />, label: 'About ZeroMart', sub: 'v1.0 · Terms & Privacy' },
-        ].map((item, i) => (
-          <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 0', borderBottom: '1px solid var(--zm-border)' }}>
-            <span style={{ color: 'var(--zm-accent)' }}>{item.icon}</span>
-            <div style={{ flex: 1 }}>
-              <div style={{ fontSize: 14 }}>{item.label}</div>
-              <div style={{ fontSize: 11, color: 'var(--zm-text-dim)' }}>{item.sub}</div>
+        <div className="mt-4 rounded-[1.5rem] border border-amber-100 bg-gradient-to-r from-amber-50 to-violet-50 p-4">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <p className="text-sm font-semibold text-violet-700">Good karma points</p>
+              <p className="mt-1 text-3xl font-bold text-slate-900">{user.karma}</p>
             </div>
-            <ChevronRight size={14} color="var(--zm-text-dim)" />
+            <div className="rounded-full bg-white px-3 py-2 text-sm font-semibold text-violet-700">
+              Karma
+            </div>
           </div>
-        ))}
-
-        <button className="btn btn-primary btn-full" style={{ marginTop: 20 }} onClick={saveName}>Save changes</button>
-      </div>
-    </div>
-  );
-}
-
-function KarmaHistorySheet({ onClose }) {
-  const { user } = useApp();
-  const events = user.karma > 0
-    ? Array.from({ length: user.karma }, (_, i) => ({ label: `Item ${i + 1} given`, pts: 1, time: `${i + 1} day${i > 0 ? 's' : ''} ago` }))
-    : [];
-
-  return (
-    <div className="overlay" onClick={onClose}>
-      <div className="sheet" onClick={e => e.stopPropagation()}>
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 20 }}>
-          <div style={{ fontSize: 18, fontWeight: 700, fontFamily: 'Sora, sans-serif' }}>Karma history</div>
-          <button onClick={onClose} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--zm-text-muted)', display: 'flex' }}><X size={20} /></button>
-        </div>
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, marginBottom: 20, padding: 16, background: 'var(--zm-accent-soft)', borderRadius: 12 }}>
-          <Star size={20} color="var(--zm-amber)" fill="var(--zm-amber)" />
-          <span style={{ fontSize: 24, fontWeight: 700, color: 'var(--zm-amber)' }}>{user.karma}</span>
-          <span style={{ fontSize: 14, color: 'var(--zm-text-muted)' }}>total karma</span>
-        </div>
-        {events.length === 0 ? (
-          <div style={{ textAlign: 'center', padding: '32px 0', color: 'var(--zm-text-dim)', fontSize: 13 }}>
-            <div style={{ fontSize: 36, marginBottom: 10 }}>⭐</div>
-            Give items away to earn karma points
-          </div>
-        ) : (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-            {events.map((e, i) => (
-              <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '10px 0', borderBottom: '1px solid var(--zm-border)' }}>
-                <div style={{ width: 32, height: 32, borderRadius: '50%', background: 'var(--zm-amber-soft)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                  <Star size={14} color="var(--zm-amber)" />
-                </div>
-                <div style={{ flex: 1 }}>
-                  <div style={{ fontSize: 13 }}>{e.label}</div>
-                  <div style={{ fontSize: 11, color: 'var(--zm-text-dim)' }}>{e.time}</div>
-                </div>
-                <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--zm-amber)' }}>+{e.pts}</span>
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
-    </div>
-  );
-}
-
-export default function ProfilePage() {
-  const { user, switchMode, products, favourites, userListings, setPage, signOut } = useApp();
-  const favProducts = products.filter(p => favourites.includes(p.id));
-  const [settingsOpen, setSettingsOpen] = useState(false);
-  const [karmaOpen, setKarmaOpen] = useState(false);
-
-  function handleSignOut() {
-    signOut(); // signOut already navigates to home and resets state
-  }
-
-  return (
-    <div className="page-content" style={{ padding: '52px 16px 80px' }}>
-      {/* Profile header */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 16, marginBottom: 24, background: 'var(--zm-card)', border: '1px solid var(--zm-border)', borderRadius: 16, padding: 16 }}>
-        <div style={{ width: 64, height: 64, borderRadius: '50%', background: 'var(--zm-accent-soft)', border: '2px solid var(--zm-accent)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 700, fontSize: 24, color: 'var(--zm-accent)', flexShrink: 0 }}>
-          {user.initials}
-        </div>
-        <div style={{ flex: 1 }}>
-          <div style={{ fontSize: 18, fontWeight: 700, fontFamily: 'Sora, sans-serif', marginBottom: 2 }}>{user.name}</div>
-          <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 6 }}>
-            <span className="karma-badge"><Star size={10} fill="currentColor" /> {user.karma} karma</span>
-            <span className={`badge ${user.isBuyer ? 'badge-green' : 'badge-purple'}`}>{user.isBuyer ? 'Buyer ✓' : 'Seller'}</span>
+          <div className="mt-4 rounded-2xl bg-white/70 px-3 py-2">
+            <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-400">Mobile</p>
+            <p className="mt-1 text-sm text-violet-800">+91 ******{String(user.mobile || '').slice(-4)}</p>
           </div>
         </div>
-      </div>
 
-      {/* Mode switcher */}
-      <div style={{ background: 'var(--zm-card)', border: '1px solid var(--zm-border)', borderRadius: 16, padding: 16, marginBottom: 16 }}>
-        <div style={{ fontSize: 13, color: 'var(--zm-text-muted)', marginBottom: 10 }}>Current mode</div>
-        <div style={{ display: 'flex', gap: 10 }}>
-          <button
-            onClick={() => switchMode('seller')}
-            style={{ flex: 1, padding: '10px 0', borderRadius: 10, border: `1px solid ${user.mode === 'seller' ? 'var(--zm-accent)' : 'var(--zm-border)'}`, background: user.mode === 'seller' ? 'var(--zm-accent-soft)' : 'transparent', color: user.mode === 'seller' ? 'var(--zm-accent)' : 'var(--zm-text-muted)', fontWeight: 500, fontSize: 13, cursor: 'pointer', fontFamily: 'Inter, sans-serif' }}
-          >
-            🏷️ Seller
-          </button>
-          <button
-            onClick={() => switchMode('buyer')}
-            style={{ flex: 1, padding: '10px 0', borderRadius: 10, border: `1px solid ${user.mode === 'buyer' ? 'var(--zm-green)' : 'var(--zm-border)'}`, background: user.mode === 'buyer' ? 'var(--zm-green-soft)' : 'transparent', color: user.mode === 'buyer' ? 'var(--zm-green)' : 'var(--zm-text-muted)', fontWeight: 500, fontSize: 13, cursor: 'pointer', fontFamily: 'Inter, sans-serif' }}
-          >
-            🛍️ Buyer {!user.isBuyer && '— ₹29'}
+        <div className="mt-4 flex flex-wrap items-center gap-2">
+          <div className="rounded-full border border-amber-200 bg-white px-3 py-2 text-sm font-semibold text-violet-700">
+            {user.isBuyer ? 'Lifetime buying access active' : 'Buying unlocks when you request an item'}
+          </div>
+          <button onClick={onLogout} className="ml-auto inline-flex items-center gap-2 rounded-full border border-rose-200 bg-rose-50 px-3 py-2 text-sm font-semibold text-rose-700">
+            <LogOut size={14} /> Logout
           </button>
         </div>
-        {!user.isBuyer && (
-          <div style={{ marginTop: 10, fontSize: 12, color: 'var(--zm-text-dim)', textAlign: 'center' }}>
-            Pay ₹29 once to unlock buyer access forever
-          </div>
-        )}
-      </div>
 
-      {/* Wallet */}
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 16 }}>
-        <div style={{ background: 'var(--zm-card)', border: '1px solid var(--zm-border)', borderRadius: 14, padding: 14 }}>
-          <Zap size={16} color="var(--zm-green)" style={{ marginBottom: 8 }} />
-          <div style={{ fontSize: 22, fontWeight: 700, color: 'var(--zm-green)', marginBottom: 2 }}>{user.credits}</div>
-          <div style={{ fontSize: 12, color: 'var(--zm-text-muted)' }}>Delivery credits</div>
-        </div>
-        <div style={{ background: 'var(--zm-card)', border: '1px solid var(--zm-border)', borderRadius: 14, padding: 14 }}>
-          <Gift size={16} color="var(--zm-accent)" style={{ marginBottom: 8 }} />
-          <div style={{ fontSize: 22, fontWeight: 700, color: 'var(--zm-accent)', marginBottom: 2 }}>{user.vouchers}</div>
-          <div style={{ fontSize: 12, color: 'var(--zm-text-muted)' }}>Vouchers ready</div>
-        </div>
-      </div>
-
-      {/* Saved items preview */}
-      {favProducts.length > 0 && (
-        <div style={{ marginBottom: 16 }}>
-          <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 10 }}>Saved items</div>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-            {favProducts.map(p => (
-              <div key={p.id} className="card" style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-                <span style={{ fontSize: 28 }}>{p.emoji}</span>
-                <div style={{ flex: 1 }}>
-                  <div style={{ fontSize: 13, fontWeight: 500 }}>{p.title}</div>
-                  <div style={{ fontSize: 11, color: 'var(--zm-text-dim)' }}>{p.distance} km away • {p.seller.name}</div>
-                </div>
-                <span className="product-price" style={{ fontSize: 13 }}>FREE</span>
+        <div className="mt-4 rounded-[1.25rem] border border-emerald-100 bg-emerald-50/70 p-4">
+          <div className="flex items-start gap-3">
+            <div className="rounded-xl bg-white p-2.5 text-emerald-700 shadow-sm"><MapPin size={18} /></div>
+            <div className="min-w-0 flex-1">
+              <p className="text-sm font-bold text-slate-900">Current Location</p>
+              <div className="mt-2 space-y-0.5">
+                {currentLocationLines.length ? currentLocationLines.map((line) => (
+                  <p key={line} className="text-sm font-semibold leading-5 text-emerald-800">{line}</p>
+                )) : <p className="text-sm font-semibold text-emerald-800">{locationEngine.label}</p>}
               </div>
+              {locationEngine.location?.postalCode && <p className="mt-2 text-xs font-bold text-slate-500">Postal code {locationEngine.location.postalCode}</p>}
+              {locationEngine.location?.plusCode && <p className="mt-1 text-xs font-semibold text-slate-400">Plus Code {locationEngine.location.plusCode}</p>}
+            </div>
+          </div>
+          <div className="mt-3 grid gap-2 sm:grid-cols-2">
+            <button onClick={() => locationEngine.openPicker({
+              title: 'Update current home location',
+              requireAddressDetails: false,
+              requiredDetails: [],
+              addressTypeDefault: 'Home',
+            })} className="inline-flex items-center justify-center gap-2 rounded-xl bg-emerald-700 px-3 py-2.5 text-sm font-bold text-white">
+              <LocateFixed size={16} /> Update Current Location
+            </button>
+            <button onClick={() => locationEngine.openPicker({
+              title: 'Update home location',
+              requireAddressDetails: false,
+              requiredDetails: [],
+              addressTypeDefault: 'Home',
+            })} className="rounded-xl border border-emerald-200 bg-white px-3 py-2.5 text-sm font-bold text-emerald-800">Change Location</button>
+          </div>
+          {locationEngine.location && (
+            <div className="mt-3">
+              <LocationMap latitude={locationEngine.location.latitude} longitude={locationEngine.location.longitude} title={locationEngine.label} height={170} />
+            </div>
+          )}
+        </div>
+      </section>
+
+      {activeCollectionOrders.length > 0 && (
+        <section className="rounded-[2rem] border border-emerald-100 bg-white p-5 shadow-sm">
+          <p className="text-sm font-semibold text-emerald-700">Ready for collection</p>
+          <h2 className="mt-1 text-xl font-semibold text-slate-900">Your active collection passes</h2>
+          <p className="mt-1 text-sm text-slate-500">Keep this QR or collection ID ready until the item is collected.</p>
+          <div className="mt-4 space-y-3">
+            {activeCollectionOrders.map((order) => (
+              <CollectionPass key={order.id} order={order} onTrack={() => setSelectedOrder(order)} />
             ))}
           </div>
-        </div>
+        </section>
       )}
 
-      {/* Menu */}
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-        {[
-          { icon: <Package size={16} />, label: 'My listings', count: userListings.length, onClick: () => setPage('sell') },
-          { icon: <Heart size={16} />, label: 'Saved items', count: favProducts.length, onClick: () => setPage('home') },
-          { icon: <Star size={16} />, label: 'Karma history', onClick: () => setKarmaOpen(true) },
-          { icon: <Settings size={16} />, label: 'Settings', onClick: () => setSettingsOpen(true) },
-        ].map((item, i) => (
-          <div
-            key={i}
-            onClick={item.onClick}
-            style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '14px 16px', borderRadius: 12, cursor: 'pointer', transition: 'background 0.15s' }}
-            onMouseEnter={e => e.currentTarget.style.background = 'var(--zm-card)'}
-            onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
-          >
-            <span style={{ color: 'var(--zm-text-muted)' }}>{item.icon}</span>
-            <span style={{ flex: 1, fontSize: 14 }}>{item.label}</span>
-            {item.count !== undefined && <span className="badge badge-purple" style={{ fontSize: 11 }}>{item.count}</span>}
-            <ChevronRight size={14} color="var(--zm-text-dim)" />
+      {receivedOrders.length > 0 && (
+        <section className="rounded-[2rem] border border-emerald-100 bg-white p-5 shadow-sm">
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <p className="text-sm font-semibold text-emerald-700">Seller history</p>
+              <h2 className="mt-1 text-xl font-semibold text-slate-900">Orders received</h2>
+              <p className="mt-1 text-sm text-slate-500">Buyer requests remain here after collection is completed.</p>
+            </div>
+            <div className="rounded-full bg-emerald-50 p-3 text-emerald-700">
+              <PackageCheck size={18} />
+            </div>
           </div>
-        ))}
+          <div className="mt-4 space-y-3">
+            {receivedOrders.map((order) => {
+              const status = order.status === 'completed'
+                ? 'Collected'
+                : order.status === 'accepted'
+                  ? 'Awaiting collection'
+                  : order.status === 'declined'
+                    ? 'Declined'
+                    : 'Awaiting decision';
+              const statusStyle = order.status === 'completed'
+                ? 'bg-emerald-100 text-emerald-800'
+                : order.status === 'accepted'
+                  ? 'bg-sky-100 text-sky-800'
+                  : order.status === 'declined'
+                    ? 'bg-rose-100 text-rose-700'
+                    : 'bg-amber-100 text-amber-800';
+              return (
+                <article key={order.requestId} className="rounded-[1.35rem] border border-slate-100 bg-slate-50 p-4">
+                  <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                    <div className="min-w-0">
+                      <h3 className="font-bold text-slate-900">{order.productName}</h3>
+                      <p className="mt-1 text-sm text-slate-600">Buyer: <strong>{order.buyerName}</strong></p>
+                      <p className="mt-1 text-xs font-semibold text-slate-500">Quantity {order.quantity || 1} · Request ID {order.requestId}</p>
+                    </div>
+                    <span className={`inline-flex w-fit shrink-0 rounded-full px-3 py-1 text-xs font-bold ${statusStyle}`}>{status}</span>
+                  </div>
+                  {(order.collectionDate || order.collectionTime || order.pickupAddress) && (
+                    <div className="mt-3 rounded-xl bg-white p-3 text-sm text-slate-600">
+                      {(order.collectionDate || order.collectionTime) && <p>{[order.collectionDate, order.collectionTime].filter(Boolean).join(' · ')}</p>}
+                      {order.pickupAddress && <p className="mt-1 flex items-start gap-2"><MapPin size={14} className="mt-0.5 shrink-0 text-emerald-700" />{order.pickupAddress}</p>}
+                    </div>
+                  )}
+                </article>
+              );
+            })}
+          </div>
+        </section>
+      )}
 
-        <div
-          onClick={handleSignOut}
-          style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '14px 16px', borderRadius: 12, cursor: 'pointer', color: 'var(--zm-red)', transition: 'background 0.15s' }}
-          onMouseEnter={e => e.currentTarget.style.background = 'var(--zm-red-soft, rgba(239,68,68,0.08))'}
-          onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
-        >
-          <LogOut size={16} />
-          <span style={{ fontSize: 14 }}>Sign out</span>
+      <section className="rounded-[2rem] border border-amber-100 bg-white p-5 shadow-sm">
+        <div>
+          <p className="text-sm font-semibold text-violet-600">Profile activity</p>
+          <h2 className="mt-1 text-xl font-semibold text-slate-900">Your ZeroMart summary</h2>
         </div>
-      </div>
+        <div className="mt-4 grid gap-3 sm:grid-cols-2">
+          {statCards.map((stat) => (
+            <button
+              key={stat.label}
+              onClick={() => setSelectedStat(stat.label)}
+              className={`rounded-[1.5rem] border p-4 text-left shadow-sm transition hover:-translate-y-0.5 ${
+                selectedStat === stat.label
+                  ? 'border-violet-200 bg-violet-50'
+                  : 'border-amber-100 bg-white'
+              }`}
+            >
+              <p className="text-sm text-slate-500">{stat.label}</p>
+              <p className="mt-2 text-2xl font-semibold text-slate-900">{stat.value}</p>
+            </button>
+          ))}
+        </div>
+        <div className="mt-4 rounded-[1.5rem] border border-amber-100 bg-gradient-to-r from-amber-50 to-violet-50 p-4">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <p className="text-sm font-semibold text-violet-700">{activeStat.label}</p>
+              <p className="mt-1 text-sm text-slate-600">{activeStat.detail}</p>
+            </div>
+            <span className="rounded-full bg-white px-4 py-2 text-lg font-bold text-violet-700">{activeStat.value}</span>
+          </div>
+          <div className="mt-4 space-y-2">
+            {activeStat.rows.length === 0 ? (
+              <div className="rounded-2xl border border-dashed border-amber-200 bg-white/70 p-4 text-sm text-slate-500">
+                Nothing to show here yet.
+              </div>
+            ) : (
+              activeStat.rows.map((row) => (
+                <button
+                  type="button"
+                  key={row.id}
+                  disabled={!row.item}
+                  onClick={() => row.item && onSelectItem?.(row.item)}
+                  className="flex w-full items-center gap-3 rounded-2xl bg-white/85 p-3 text-left shadow-sm transition enabled:hover:-translate-y-0.5 enabled:hover:ring-2 enabled:hover:ring-violet-100 disabled:cursor-default"
+                >
+                  {row.image ? (
+                    <img src={row.image} alt={row.title} className="h-12 w-12 shrink-0 rounded-xl object-cover" />
+                  ) : (
+                    <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-violet-50 text-violet-600">
+                      <PackageCheck size={18} />
+                    </div>
+                  )}
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-sm font-semibold text-slate-900">{row.title}</p>
+                    <p className="truncate text-xs text-slate-500">{row.meta}</p>
+                  </div>
+                  <span className="shrink-0 rounded-full bg-amber-50 px-3 py-1 text-xs font-semibold text-amber-800">{row.status}</span>
+                </button>
+              ))
+            )}
+            {hiddenRowCount > 0 && (
+              <div className="rounded-2xl bg-white/60 px-3 py-2 text-center text-xs font-semibold text-slate-500">
+                +{hiddenRowCount} more {activeStat.label.toLowerCase()}
+              </div>
+            )}
+          </div>
+        </div>
+      </section>
 
-      {settingsOpen && <SettingsSheet onClose={() => setSettingsOpen(false)} />}
-      {karmaOpen    && <KarmaHistorySheet onClose={() => setKarmaOpen(false)} />}
+      <section className="rounded-[2rem] border border-amber-100 bg-white p-5 shadow-sm">
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <p className="text-sm font-semibold text-violet-600">Order history</p>
+            <h2 className="mt-1 text-xl font-semibold text-slate-900">Your requests and collections</h2>
+          </div>
+          <div className="rounded-full bg-violet-50 p-3 text-violet-600">
+            <PackageCheck size={18} />
+          </div>
+        </div>
+
+        {orders.length === 0 ? (
+          <div className="mt-4 rounded-[1.5rem] border border-dashed border-amber-200 bg-amber-50/50 p-5 text-sm text-slate-500">
+            No requests yet. When you request an item for collection, it will appear here.
+          </div>
+        ) : (
+          <div className="mt-4 space-y-3">
+            {orders.map((order) => {
+              const isDelivery = order.type === 'delivery';
+              const passState = getCollectionPassState(order);
+              return (
+                <button type="button" key={order.id} onClick={() => setSelectedOrder(order)} className="block w-full rounded-[1.5rem] border border-amber-100 bg-gradient-to-r from-amber-50/70 to-violet-50/70 p-3 text-left transition hover:-translate-y-0.5 hover:shadow-md focus:outline-none focus:ring-2 focus:ring-violet-300">
+                  <div className="flex gap-3">
+                    {order.image ? (
+                      <img src={order.image} alt={order.title} className="h-16 w-16 shrink-0 rounded-2xl object-cover" />
+                    ) : (
+                      <div className="flex h-16 w-16 shrink-0 items-center justify-center rounded-2xl bg-white text-violet-600">
+                        <PackageCheck size={22} />
+                      </div>
+                    )}
+                    <div className="min-w-0 flex-1">
+                      <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                        <div className="min-w-0">
+                          <h3 className="truncate font-semibold text-slate-900">{order.title}</h3>
+                          <p className="mt-1 text-sm text-slate-500">Seller: {order.sellerName}</p>
+                          <p className="mt-1 truncate text-xs font-bold text-violet-700">Order ID: {order.orderId || order.id}</p>
+                        </div>
+                        <span className={`inline-flex w-fit shrink-0 items-center gap-1 rounded-full px-3 py-1 text-xs font-semibold ${passState.expired ? 'bg-slate-200 text-slate-600' : isDelivery ? 'bg-violet-100 text-violet-700' : 'bg-amber-100 text-amber-800'}`}>
+                          {isDelivery ? <Truck size={13} /> : <PackageCheck size={13} />}
+                          {order.collectionCode ? passState.label : isDelivery ? 'Delivery' : 'In-person collection'}
+                        </span>
+                      </div>
+                      <div className="mt-3 rounded-2xl bg-white/80 px-3 py-2 text-sm text-slate-600">
+                        <p className="font-semibold text-slate-800">{isDelivery ? 'Delivery status' : 'Collection status'}</p>
+                        <p className="mt-1">{passState.expired ? 'Reservation expired' : order.status}</p>
+                        {isDelivery && order.buyerAddress && (
+                          <p className="mt-2 text-xs text-slate-500">Deliver to: {order.buyerAddress}</p>
+                        )}
+                      </div>
+                      <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-slate-500">
+                        <span className="inline-flex items-center gap-1"><MapPin size={12} /> {order.location}{order.distance ? ` · ${order.distance}` : ''}</span>
+                        <span>{order.createdAt}</span>
+                      </div>
+                      <span className="mt-3 inline-flex text-xs font-bold text-violet-700">View tracking details</span>
+                    </div>
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+        )}
+      </section>
+      <OrderTrackingModal order={selectedOrder} onClose={() => setSelectedOrder(null)} />
     </div>
   );
 }

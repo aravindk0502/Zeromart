@@ -104,7 +104,7 @@ export default function SellerProfileSheet() {
                       <div style={{ fontSize: 11, color: 'var(--zm-text-dim)', marginTop: 2 }}>{p.distance} km away · {p.condition}</div>
                     </div>
                     <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 4 }}>
-                      <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--zm-green)' }}>FREE</span>
+                      <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--zm-green)' }}>₹0</span>
                       <button
                         style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}
                         onClick={e => { e.stopPropagation(); toggleFavourite(p.id); }}

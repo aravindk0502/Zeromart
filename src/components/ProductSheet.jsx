@@ -55,7 +55,7 @@ export default function ProductSheet() {
           <div>
             <div style={{ fontSize: 20, fontWeight: 700, fontFamily: 'Sora, sans-serif', marginBottom: 4 }}>{p.title}</div>
             <div style={{ display: 'flex', gap: 8 }}>
-              <span className="badge badge-green" style={{ fontSize: 11 }}>FREE</span>
+              <span className="badge badge-green" style={{ fontSize: 11 }}>₹0</span>
               <span className="badge badge-purple" style={{ fontSize: 11 }}>{p.condition}</span>
               <span className="badge" style={{ fontSize: 11, background: 'var(--zm-surface2)', color: 'var(--zm-text-muted)' }}>{p.category}</span>
             </div>

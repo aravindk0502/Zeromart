@@ -1,259 +1,2555 @@
-import React from 'react';
-import './index.css';
-import { AppProvider, useApp } from './context/AppContext';
-import HomePage from './pages/HomePage';
-import SellerPage from './pages/SellerPage';
-import ProfilePage from './pages/ProfilePage';
+import { useEffect, useMemo, useState } from 'react';
+import { Award, Bell, Bot, Building2, Flame, Gem, Heart, Home, LocateFixed, MapPin, Medal, Plus, Search, ShieldCheck, SlidersHorizontal, Sparkles, Trophy, User } from 'lucide-react';
+import HomePage, { ProductRail } from './pages/HomePage';
+import SectionPage from './pages/SectionPage';
 import NotificationsPage from './pages/NotificationsPage';
-import OrdersPage from './pages/OrdersPage';
-import ProductSheet from './components/ProductSheet';
-import KarmaPopup from './components/KarmaPopup';
-import TempChat from './components/TempChat';
-import BotAssistant from './components/BotAssistant';
+import ProfilePage from './pages/ProfilePage';
+import ItemDetailsModal from './components/ItemDetailsModal';
+import OtpModal from './components/OtpModal';
+import OnboardingTour from './components/OnboardingTour';
 import ListingSheet from './components/ListingSheet';
 import BuyerPaySheet from './components/BuyerPaySheet';
-import CollectRequestHandler from './components/CollectRequestHandler';
-import OtpSheet from './components/OtpSheet';
-import OnboardingTour from './components/OnboardingTour';
-import SellerProfileSheet from './components/SellerProfileSheet';
-import { Home, Tag, User, ShoppingBag, Plus, Bot, Star, Zap, Gift, Package } from 'lucide-react';
+import OrderSuccessModal from './components/OrderSuccessModal';
+import QuantityRequestModal from './components/QuantityRequestModal';
+import KarmaPopup from './components/KarmaPopup';
+import BotAssistant from './components/BotAssistant';
+import BusinessAuthModal from './components/BusinessAuthModal';
+import DemoFlowPanel from './components/DemoFlowPanel';
+import { initialItems } from './data/dummyData';
+import {
+  clearBusinessSession, createBusinessOrder, getBusinessAccounts, getBusinessMarketplaceItems,
+  getBusinessOrders, getBusinessProducts, getBusinessPurchases, getBusinessSession,
+  saveBusinessAccounts, saveBusinessOrders, saveBusinessProducts, saveBusinessPurchases,
+  saveBusinessSession,
+} from './lib/businessStore';
+import { useLocationEngine } from './hooks/useLocationEngine';
+import {
+  formatDistance, formatShortAddress, getLocationScopes, getLocationScopeValue, haversineKm,
+} from './services/locationService';
+import {
+  applyProductExpiry, createCollectionCode, getCollectionSettings, getExpiryTimestamp,
+  getProductRequestState, getPurchaseHistory, getQuantityAllowance, isMarketplaceVisible, normalizeProductStock, recordPurchaseAttempt,
+  savePurchaseHistory, saveRequests, getRequests, saveReservations, getReservations, createWhatsAppLink,
+  updatePurchaseHistoryStatus, confirmHandoff, getTransactionProducts, saveTransactionProducts,
+} from './services/transactionService';
 
-function DesktopSidebarLeft() {
-  return (
-    <aside className="desktop-sidebar-left">
-      <div style={{ marginBottom: 32 }}>
-        <div className="sidebar-logo">
-          Zero<span style={{ color: 'var(--zm-accent)' }}>Mart</span>
-        </div>
-        <div className="sidebar-tagline">
-          Give what you don't need.<br />
-          Receive good karma in return.<br />
-          <span style={{ color: 'var(--zm-amber)', fontStyle: 'italic', fontSize: 13 }}>
-            Do good. Get good.
-          </span>
-        </div>
-      </div>
+const navItems = [
+  { key: 'home', label: 'Home', icon: Home },
+  { key: 'profile', label: 'Profile', icon: User },
+  { key: 'favorites', label: 'Favorites', icon: Heart },
+  { key: 'notifications', label: 'Alerts', icon: Bell },
+];
 
-      <div className="sidebar-feature">
-        <div className="sidebar-feature-icon" style={{ background: 'var(--zm-accent-soft)' }}>🏷️</div>
-        <div className="sidebar-feature-text">
-          <h4>Free to give</h4>
-          <p>List anything you don't need — books, clothes, gadgets, furniture. Always ₹0 for sellers.</p>
-        </div>
-      </div>
+const bottomNavItems = [
+  navItems[0],
+  navItems[1],
+  null,
+  navItems[2],
+  navItems[3],
+];
 
-      <div className="sidebar-feature">
-        <div className="sidebar-feature-icon" style={{ background: 'var(--zm-green-soft)' }}>🛍️</div>
-        <div className="sidebar-feature-text">
-          <h4>₹29 to receive — forever</h4>
-          <p>One-time fee. No subscription. Browse and request anything near you, always.</p>
-        </div>
-      </div>
+const DISCOVERY_STAGES = [
+  { key: '1km', label: 'Within 1 km', radiusKm: 1 },
+  { key: '3km', label: 'Within 3 km', radiusKm: 3 },
+  { key: '5km', label: 'Within 5 km', radiusKm: 5 },
+  { key: '10km', label: 'Within 10 km', radiusKm: 10 },
+  { key: '25km', label: 'Within 25 km', radiusKm: 25 },
+  { key: 'city', label: 'Across the city', radiusKm: 80 },
+  { key: 'state', label: 'Across Tamil Nadu', radiusKm: 500 },
+  { key: 'india', label: 'Across India', radiusKm: Number.POSITIVE_INFINITY },
+];
 
-      <div className="sidebar-feature">
-        <div className="sidebar-feature-icon" style={{ background: 'var(--zm-amber-soft)' }}>✨</div>
-        <div className="sidebar-feature-text">
-          <h4>Karma is real</h4>
-          <p>Every item you give earns karma. Redeem for Swiggy, BookMyShow & more vouchers.</p>
-        </div>
-      </div>
+const areaCoordinates = {
+  Koramangala: { latitude: 12.9352, longitude: 77.6245 },
+  Indiranagar: { latitude: 12.9784, longitude: 77.6408 },
+  Jayanagar: { latitude: 12.9250, longitude: 77.5938 },
+  'HSR Layout': { latitude: 12.9116, longitude: 77.6474 },
+  Whitefield: { latitude: 12.9698, longitude: 77.7500 },
+};
 
-      <div className="sidebar-feature">
-        <div className="sidebar-feature-icon" style={{ background: 'rgba(45,212,160,0.1)' }}>📍</div>
-        <div className="sidebar-feature-text">
-          <h4>Meet your neighbour</h4>
-          <p>Items within 1 km? Skip the courier. Meet in person, zero waste, real community.</p>
-        </div>
-      </div>
+const DEMO_BUYER = {
+  userId: 'demo_buyer',
+  name: 'Demo Buyer',
+  mobile: '9999999999',
+  role: 'buyer',
+  karma: 8,
+  listed: 0,
+  collected: 0,
+  activeListings: 0,
+  givenAway: 0,
+  isBuyer: true,
+  isDemo: true,
+  profileImage: '',
+};
 
-      <div className="sidebar-divider" />
+const DEMO_SELLER = {
+  userId: 'demo_seller',
+  name: 'Demo Community Seller',
+  mobile: '8888888888',
+  role: 'seller',
+  karma: 24,
+  listed: 1,
+  collected: 0,
+  activeListings: 1,
+  givenAway: 3,
+  isBuyer: true,
+  isDemo: true,
+  profileImage: '',
+};
 
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
-        <div className="sidebar-stat">
-          <div className="sidebar-stat-num">2.4k</div>
-          <div className="sidebar-stat-label">Givers</div>
-        </div>
-        <div className="sidebar-stat">
-          <div className="sidebar-stat-num">8.1k</div>
-          <div className="sidebar-stat-label">Items given</div>
-        </div>
-        <div className="sidebar-stat">
-          <div className="sidebar-stat-num">47</div>
-          <div className="sidebar-stat-label">Cities</div>
-        </div>
-        <div className="sidebar-stat">
-          <div className="sidebar-stat-num">4.9★</div>
-          <div className="sidebar-stat-label">Avg karma</div>
-        </div>
-      </div>
+const DEMO_BUSINESS = {
+  id: 'demo_business',
+  businessId: 'demo_business',
+  userId: 'demo_business',
+  role: 'business',
+  ownerName: 'Demo Store Owner',
+  mobile: '7777777777',
+  businessName: 'Demo Fresh Store',
+  businessType: 'Bakery',
+  storeLocation: 'Velachery',
+  address: 'Demo Market Road, Velachery, Chennai',
+  karma: 18,
+  isBuyer: true,
+  isDemo: true,
+};
 
-      <div className="sidebar-divider" />
+const DEMO_COMMUNITY_ITEM_ID = 'demo-community-fresh-bread';
+const DEMO_BUSINESS_PRODUCT_ID = 'demo-business-fruit-box';
 
-      <div style={{ fontSize: 11, color: 'var(--zm-text-dim)', lineHeight: 1.6 }}>
-        ZeroMart is built on one simple truth — the more you give, the more flows back to you.
-        Every item listed at ₹0. Every giver rewarded.
-      </div>
-    </aside>
-  );
-}
+const localBusinessSearchItems = initialItems.filter((item) => item.isBusinessProduct);
 
-function DesktopSidebarRight() {
-  return (
-    <aside className="desktop-sidebar-right">
-      <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 16, color: 'var(--zm-text-muted)' }}>
-        Get the app
-      </div>
+const platformSearchKeywords = 'zeromart zero mart karma good karma free 0 rs ₹0 rupees local business b2b marketplace listing list item seller buyer pickup delivery in person collect product item movie movies ticket tickets food electronics books cosmetics home furniture';
 
-      <a className="sidebar-app-btn" href="#" onClick={e => e.preventDefault()}>
-        <span style={{ fontSize: 28, lineHeight: 1 }}>🍎</span>
-        <div>
-          <div className="sidebar-app-btn-label">Download on the</div>
-          <div className="sidebar-app-btn-name">App Store</div>
-        </div>
-      </a>
+const getItemCoordinates = (item) => item.coordinates
+  || (item.locationData ? { latitude: item.locationData.latitude, longitude: item.locationData.longitude } : null)
+  || areaCoordinates[item.location]
+  || null;
 
-      <a className="sidebar-app-btn" href="#" onClick={e => e.preventDefault()}>
-        <span style={{ fontSize: 28, lineHeight: 1 }}>▶️</span>
-        <div>
-          <div className="sidebar-app-btn-label">Get it on</div>
-          <div className="sidebar-app-btn-name">Google Play</div>
-        </div>
-      </a>
+const getHeaderLocationLabel = (location, fallback = 'Choose location') => {
+  if (!location) return fallback;
+  const area = location.area || location.subLocality || location.locality || location.street;
+  const city = location.city || location.district;
+  return [...new Set([area, city].filter(Boolean))].join(', ') || formatShortAddress(location) || fallback;
+};
 
-      <div className="sidebar-divider" />
+const mergeListingsById = (...catalogs) => {
+  const listings = new Map();
+  catalogs.flat().filter(Boolean).forEach((item) => listings.set(String(item.id), item));
+  return [...listings.values()];
+};
 
-      <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 12, color: 'var(--zm-text-muted)' }}>
-        Why ZeroMart?
-      </div>
-
-      {[
-        { icon: <Package size={13} />, text: 'Give away clutter for free' },
-        { icon: <Star size={13} />,   text: 'Earn karma with every gift' },
-        { icon: <Zap size={13} />,    text: 'Delivery credits you can use' },
-        { icon: <Gift size={13} />,   text: 'Brand vouchers at milestones' },
-      ].map((item, i) => (
-        <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 0', borderBottom: '1px solid var(--zm-border)' }}>
-          <span style={{ color: 'var(--zm-accent)' }}>{item.icon}</span>
-          <span style={{ fontSize: 12, color: 'var(--zm-text-muted)' }}>{item.text}</span>
-        </div>
-      ))}
-
-      <div className="sidebar-divider" />
-
-      <div style={{ background: 'var(--zm-card)', border: '1px solid var(--zm-border)', borderRadius: 12, padding: 14 }}>
-        <div style={{ fontSize: 12, color: 'var(--zm-text-dim)', marginBottom: 8, fontStyle: 'italic' }}>
-          "I gave away 14 items last month and earned enough credits to offset my delivery for an air fryer. ZeroMart actually works."
-        </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          <div style={{ width: 28, height: 28, borderRadius: '50%', background: 'var(--zm-accent-soft)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 11, fontWeight: 700, color: 'var(--zm-accent)' }}>MV</div>
-          <div>
-            <div style={{ fontSize: 12, fontWeight: 600 }}>Meera V</div>
-            <div style={{ fontSize: 10, color: 'var(--zm-text-dim)' }}>⭐ 115 karma</div>
-          </div>
-        </div>
-      </div>
-    </aside>
-  );
-}
-
-function Shell() {
-  const {
-    page, setPage,
-    user,
-    authGate,
-    viewingSeller,
-    selectedProduct,
-    karmaPopup,
-    chatOpen,
-    botOpen, setBotOpen,
-    listingSheet, setListingSheet,
-    buyerPaySheet,
-    collectRequest,
-    orders,
-  } = useApp();
-
-  const activeOrders = orders.filter(o => o.status !== 'delivered').length;
-
-  const navItems = [
-    { key: 'home',    icon: <Home size={20} />,        label: 'Home' },
-    { key: 'orders',  icon: <ShoppingBag size={20} />, label: 'Orders', badge: activeOrders },
-    { key: 'list',    icon: <Plus size={22} />,         label: 'List',  special: true },
-    { key: 'sell',    icon: <Tag size={20} />,          label: 'Sell' },
-    { key: 'profile', icon: <User size={20} />,         label: 'Profile' },
-  ];
-
-  function handleNav(key) {
-    if (key === 'list') { setListingSheet(true); return; }
-    setPage(key);
+const loadOrderHistory = () => {
+  try {
+    return JSON.parse(localStorage.getItem('zeromart-order-history')) || [];
+  } catch {
+    return [];
   }
+};
+
+const getKarmaLedger = () => {
+  try {
+    return JSON.parse(localStorage.getItem('zeromart-community-karma')) || {};
+  } catch {
+    return {};
+  }
+};
+
+const accountKey = (value) => String(value || '').replace(/\D/g, '') || String(value || '');
+
+const createOrderId = () => {
+  const date = new Date().toISOString().slice(0, 10).replaceAll('-', '');
+  const suffix = Math.random().toString(36).slice(2, 8).toUpperCase();
+  return `ZM-${date}-${suffix}`;
+};
+
+const DEFAULT_NOTIFICATIONS = [
+  { id: 1, title: 'New nearby listing', body: 'Meera just listed movie tickets near you.', time: '5m ago', read: false, type: 'product', itemId: 4 },
+  { id: 2, title: 'Karma update', body: 'You earned a new karma point from a recent handoff.', time: '1h ago', read: false, type: 'info', infoTitle: 'Good karma received', infoBody: 'Your karma increased after a successful handoff. Keep listing useful items for ₹0 to earn more good karma.' },
+  { id: 3, title: 'ZeroMart update', body: 'Listing remains free. Buying unlocks once for ₹29 lifetime access.', time: 'Today', read: true, type: 'info', infoTitle: 'Platform information', infoBody: 'You can list any item for ₹0 without paying. The one-time ₹29 lifetime fee appears only when you try to buy or request an item.' },
+];
+
+const loadNotifications = () => {
+  try {
+    return JSON.parse(localStorage.getItem('zeromart-notifications')) || DEFAULT_NOTIFICATIONS;
+  } catch {
+    return DEFAULT_NOTIFICATIONS;
+  }
+};
+
+export default function App({ path = '/', navigate = (nextPath) => { window.location.href = nextPath; } }) {
+  const locationEngine = useLocationEngine();
+  const [activeView, setActiveView] = useState('home');
+  const [sectionView, setSectionView] = useState('explore');
+  const [user, setUser] = useState(null);
+  const [businessSession, setBusinessSession] = useState(getBusinessSession);
+  const [items, setItems] = useState(() => {
+    const storedCommunityProducts = getTransactionProducts();
+    return applyProductExpiry(mergeListingsById(
+      initialItems,
+      storedCommunityProducts,
+      getBusinessMarketplaceItems(),
+    ).map(normalizeProductStock));
+  });
+  const [selectedItem, setSelectedItem] = useState(null);
+  const [selectedPublicProfile, setSelectedPublicProfile] = useState(null);
+  const [homeSection, setHomeSection] = useState('b2b');
+  const [locationLabel, setLocationLabel] = useState(() => (
+    locationEngine.status === 'locating'
+      ? 'Detecting location…'
+      : getHeaderLocationLabel(locationEngine.location, locationEngine.label)
+  ));
+  const [searchInput, setSearchInput] = useState('');
+  const [searchQuery, setSearchQuery] = useState('');
+  const [categoryFilter, setCategoryFilter] = useState('All');
+  const [conditionFilter, setConditionFilter] = useState('All');
+  const [radiusKm, setRadiusKm] = useState('all');
+  const [discoveryStageIndex, setDiscoveryStageIndex] = useState(0);
+  const [leaderboardScope, setLeaderboardScope] = useState('area');
+  const [currentCoordinates, setCurrentCoordinates] = useState(locationEngine.location);
+  const [showOtpModal, setShowOtpModal] = useState(false);
+  const [notice, setNotice] = useState('');
+  const [favorites, setFavorites] = useState([]);
+  const [orderHistory, setOrderHistory] = useState(loadOrderHistory);
+  const [orderSuccess, setOrderSuccess] = useState(null);
+  const [quantityItem, setQuantityItem] = useState(null);
+  const [showListingSheet, setShowListingSheet] = useState(false);
+  const [editingItem, setEditingItem] = useState(null);
+  const [showBuyerPaySheet, setShowBuyerPaySheet] = useState(false);
+  const [showKarmaPopup, setShowKarmaPopup] = useState(false);
+  const [showBotAssistant, setShowBotAssistant] = useState(false);
+  const [showBusinessAuth, setShowBusinessAuth] = useState(false);
+  const [showDemoPanel, setShowDemoPanel] = useState(false);
+  const [karmaTarget, setKarmaTarget] = useState(null);
+  const [selectedNotification, setSelectedNotification] = useState(null);
+  const [notifications, setNotifications] = useState(loadNotifications);
+  const [requestClock, setRequestClock] = useState(Date.now());
+  const [hasSeenTour, setHasSeenTour] = useState(() => {
+    if (typeof window === 'undefined') return false;
+    const savedValue = localStorage.getItem('zeromart-has-seen-tour');
+    return savedValue === 'true';
+  });
+  const activeBuyer = user || (businessSession ? {
+    userId: businessSession.userId || businessSession.id,
+    name: businessSession.businessName,
+    mobile: businessSession.mobile,
+    isBuyer: Boolean(businessSession.isBuyer),
+    location: businessSession.locationData,
+    businessId: businessSession.id,
+    isBusinessAccount: true,
+  } : null);
+  const activeAccountId = activeBuyer?.userId || activeBuyer?.businessId || activeBuyer?.mobile || activeBuyer?.name || '';
+  const commitNotifications = (updater) => {
+    setNotifications((current) => {
+      const next = typeof updater === 'function' ? updater(current) : updater;
+      localStorage.setItem('zeromart-notifications', JSON.stringify(next));
+      return next;
+    });
+  };
+  const isOwnedByActiveAccount = (item) => Boolean(
+    (user && (
+      item?.isOwn
+      || (user.userId && item?.sellerId === user.userId)
+      || item?.ownerMobile === user.mobile
+      || item?.sellerName === user.name
+      || item?.sellerName === 'You'
+    ))
+    || (businessSession && item?.businessId === businessSession.id)
+  );
+
+  useEffect(() => {
+    const timer = window.setInterval(() => setRequestClock(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  useEffect(() => {
+    const savedUser = localStorage.getItem('zeromart-user');
+    if (savedUser && !getBusinessSession()) {
+      setUser(JSON.parse(savedUser));
+    }
+  }, []);
+
+  useEffect(() => {
+    const checkExpiry = () => setItems((current) => {
+      const next = applyProductExpiry(current);
+      const alerts = [];
+      next.forEach((product) => {
+        const previous = current.find((entry) => entry.id === product.id);
+        if (product.status === 'expired' && previous?.status !== 'expired') {
+          alerts.push({
+            id: `expired-${product.id}-${Date.now()}`,
+            type: 'product_expired',
+            recipientId: product.businessId || product.ownerMobile || product.sellerName,
+            itemId: product.id,
+            title: 'Product expired',
+            body: `${product.title} was removed from the public marketplace and remains in your inventory history.`,
+            time: 'Just now',
+            read: false,
+          });
+        }
+        if (product.availableQuantity > 0 && product.availableQuantity <= 2 && previous?.availableQuantity > 2) {
+          alerts.push({
+            id: `stock-${product.id}-${Date.now()}`,
+            type: 'stock_low',
+            recipientId: product.businessId || product.ownerMobile || product.sellerName,
+            itemId: product.id,
+            title: 'Stock running low',
+            body: `${product.title} has only ${product.availableQuantity} left.`,
+            time: 'Just now',
+            read: false,
+          });
+        }
+      });
+      if (alerts.length) setNotifications((existing) => [...alerts, ...existing]);
+      return next;
+    });
+    checkExpiry();
+    const timer = window.setInterval(checkExpiry, 5 * 60 * 1000);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  useEffect(() => {
+    const showPendingBuyerKarma = () => {
+      if (!activeAccountId) return;
+      try {
+        const pendingCommunity = JSON.parse(localStorage.getItem('zeromart-pending-community-karma'));
+        if (pendingCommunity && accountKey(pendingCommunity.buyerId) === accountKey(activeAccountId)) {
+          setKarmaTarget({ ...pendingCommunity, type: 'user', mandatory: true });
+          setShowKarmaPopup(true);
+          return;
+        }
+        const pendingBusiness = JSON.parse(localStorage.getItem('zeromart-pending-business-karma'));
+        const relatedOrder = pendingBusiness
+          ? getBusinessOrders().find((order) => order.id === pendingBusiness.orderId || order.orderId === pendingBusiness.orderId)
+          : null;
+        const buyerId = pendingBusiness?.buyerId || relatedOrder?.buyerId || relatedOrder?.buyerMobile;
+        if (pendingBusiness && buyerId && accountKey(buyerId) === accountKey(activeAccountId)) {
+          setKarmaTarget({
+            ...pendingBusiness,
+            buyerId,
+            type: 'business',
+            mandatory: true,
+            initials: pendingBusiness.name?.split(' ').map((part) => part[0]).join('').slice(0, 2).toUpperCase(),
+          });
+          setShowKarmaPopup(true);
+        }
+      } catch {
+        // Invalid pending records should not block the buyer journey.
+      }
+    };
+    showPendingBuyerKarma();
+    window.addEventListener('storage', showPendingBuyerKarma);
+    window.addEventListener('zeromart-karma-pending', showPendingBuyerKarma);
+    return () => {
+      window.removeEventListener('storage', showPendingBuyerKarma);
+      window.removeEventListener('zeromart-karma-pending', showPendingBuyerKarma);
+    };
+  }, [activeAccountId]);
+
+  useEffect(() => {
+    const syncBusinessItems = () => {
+      setBusinessSession(getBusinessSession());
+      setItems((prev) => applyProductExpiry(mergeListingsById(
+        initialItems.filter((item) => item.isBusinessProduct),
+        getBusinessMarketplaceItems().map(normalizeProductStock),
+        prev.filter((item) => !item.isBusinessProduct),
+      )));
+    };
+    const syncOrderHistory = () => setOrderHistory(loadOrderHistory());
+    const syncNotifications = () => setNotifications(loadNotifications());
+    window.addEventListener('storage', syncBusinessItems);
+    window.addEventListener('storage', syncOrderHistory);
+    window.addEventListener('storage', syncNotifications);
+    window.addEventListener('zeromart-business-change', syncBusinessItems);
+    window.addEventListener('zeromart-business-change', syncOrderHistory);
+    return () => {
+      window.removeEventListener('storage', syncBusinessItems);
+      window.removeEventListener('storage', syncOrderHistory);
+      window.removeEventListener('storage', syncNotifications);
+      window.removeEventListener('zeromart-business-change', syncBusinessItems);
+      window.removeEventListener('zeromart-business-change', syncOrderHistory);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (user) {
+      localStorage.setItem('zeromart-user', JSON.stringify(user));
+    } else {
+      localStorage.removeItem('zeromart-user');
+    }
+  }, [user]);
+
+  useEffect(() => {
+    localStorage.setItem('zeromart-order-history', JSON.stringify(orderHistory));
+  }, [orderHistory]);
+
+  useEffect(() => {
+    saveTransactionProducts(items.filter((item) => !item.isBusinessProduct));
+  }, [items]);
+
+  useEffect(() => {
+    localStorage.setItem('zeromart-notifications', JSON.stringify(notifications));
+  }, [notifications]);
+
+  useEffect(() => {
+    if (!user) return;
+    setNotice((currentNotice) => (
+      /you are logged out/i.test(currentNotice) ? '' : currentNotice
+    ));
+  }, [user]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+
+    if (localStorage.getItem('zeromart-has-seen-tour') === null) {
+      localStorage.setItem('zeromart-has-seen-tour', 'false');
+    }
+
+    if (hasSeenTour) {
+      localStorage.setItem('zeromart-has-seen-tour', 'true');
+    }
+  }, [hasSeenTour]);
+
+  useEffect(() => {
+    setLocationLabel(
+      locationEngine.status === 'locating' && !locationEngine.location
+        ? 'Detecting location…'
+        : getHeaderLocationLabel(locationEngine.location, locationEngine.label)
+    );
+    setCurrentCoordinates(locationEngine.location);
+  }, [locationEngine.label, locationEngine.location, locationEngine.status]);
+
+  useEffect(() => {
+    setDiscoveryStageIndex(0);
+  }, [categoryFilter, conditionFilter, currentCoordinates?.latitude, currentCoordinates?.longitude, radiusKm, searchQuery]);
+
+  useEffect(() => {
+    if (!locationEngine.location) return;
+    const scopes = getLocationScopes(locationEngine.location);
+    setLeaderboardScope(scopes.some((entry) => entry.scope === 'area') ? 'area' : (scopes[0]?.scope || 'city'));
+  }, [locationEngine.location?.latitude, locationEngine.location?.longitude]);
+
+  useEffect(() => {
+    const match = path.match(/^\/request\/([^/]+)/);
+    if (!match) return;
+    const requestId = decodeURIComponent(match[1]);
+    const request = getRequests().find((entry) => entry.requestId === requestId);
+    if (!request) {
+      setNotice('This collection request could not be found or is no longer available.');
+      return;
+    }
+    if (!activeBuyer) {
+      localStorage.setItem('zeromart-pending-request-route', requestId);
+      setNotice('Log in as the seller to review this collection request.');
+      setShowOtpModal(true);
+      return;
+    }
+    if (String(request.sellerId) !== String(activeAccountId)) {
+      setNotice('This request link belongs to the seller. Log in with the seller account to continue.');
+      return;
+    }
+    const requestNotification = notifications.find((entry) => entry.requestId === requestId && entry.type === 'request');
+    if (requestNotification) {
+      localStorage.removeItem('zeromart-pending-request-route');
+      setActiveView('notifications');
+      setSelectedNotification(requestNotification);
+    }
+  }, [path, activeAccountId]);
+
+  useEffect(() => {
+    if (!activeAccountId) return;
+    const acceptedRequests = getRequests().filter((request) => (
+      ['accepted', 'completed'].includes(request.status)
+      && (
+        accountKey(request.buyerId) === accountKey(activeAccountId)
+        || accountKey(request.sellerId) === accountKey(activeAccountId)
+      )
+    ));
+    if (!acceptedRequests.length) return;
+
+    commitNotifications((current) => {
+      let changed = false;
+      let next = [...current];
+      acceptedRequests.forEach((request) => {
+        const isBuyer = accountKey(request.buyerId) === accountKey(activeAccountId);
+        const status = request.status === 'completed' ? 'completed' : 'accepted';
+        if (isBuyer) {
+          const acceptedId = `accepted-${request.requestId}`;
+          const existing = next.find((entry) => entry.id === acceptedId);
+          if (!existing) {
+            const collectionSummary = [request.collectionDate, request.collectionTime].filter(Boolean).join(' at ');
+            next.unshift({
+              id: acceptedId,
+              type: 'requestAccepted',
+              requestId: request.requestId,
+              itemId: request.productId,
+              recipientId: request.buyerId,
+              sellerName: request.sellerName,
+              buyerName: request.buyerName,
+              productName: request.productName,
+              sellerPhone: request.sellerPhone,
+              title: `${request.sellerName} accepted your request`,
+              body: status === 'completed'
+                ? `${request.productName} was collected successfully.`
+                : `Accepted. Collect ${request.productName}${collectionSummary ? ` on ${collectionSummary}` : ''}.`,
+              requestStatus: status,
+              collectionDate: request.collectionDate || '',
+              collectionTime: request.collectionTime || '',
+              pickupAddress: request.pickupAddress || '',
+              optionalMessage: request.optionalMessage || '',
+              mapsLink: `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(request.pickupAddress || '')}`,
+              whatsappLink: createWhatsAppLink(request.sellerPhone, `Hello, I am ${request.buyerName}. I am coordinating collection for ${request.productName}.`),
+              time: 'Just now',
+              read: false,
+            });
+            changed = true;
+          }
+        } else {
+          next = next.map((entry) => {
+            if (entry.requestId !== request.requestId || entry.type !== 'request' || entry.requestStatus === status) return entry;
+            changed = true;
+            return {
+              ...entry,
+              requestStatus: status,
+              body: status === 'completed'
+                ? `${request.buyerName} collected ${request.productName}.`
+                : `Awaiting collection from ${request.buyerName}. Collection details were sent to the buyer.`,
+            };
+          });
+        }
+      });
+      return changed ? next : current;
+    });
+  }, [activeAccountId]);
+
+  const requireLogin = (action) => {
+    setNotice(action === 'profile' ? 'Log in to view your full profile.' : 'Log in to continue the flow.');
+    setShowOtpModal(true);
+  };
+
+  const handleLogin = (mobile) => {
+    const savedKarma = getKarmaLedger()[accountKey(mobile)];
+    setUser({
+      name: 'Asha Rao',
+      mobile,
+      karma: Number(savedKarma ?? 42),
+      listed: 3,
+      collected: 2,
+      activeListings: 2,
+      givenAway: 1,
+      isBuyer: false,
+      profileImage: '',
+      location: locationEngine.location,
+    });
+    setShowOtpModal(false);
+    setNotice('Welcome! You can list for free and buy anything for ₹0 with a one-time ₹29 platform fee for lifetime unlimited buying access.');
+  };
+
+  const handleNav = (view) => {
+    setActiveView(view);
+    setSelectedNotification(null);
+    setNotice('');
+  };
+
+  const handleLogout = () => {
+    setUser(null);
+    setActiveView('home');
+    setNotice('You are logged out. Sign up / Login to request items, list items, and keep your karma.');
+  };
+
+  const handleBack = () => {
+    setActiveView('home');
+    setSelectedItem(null);
+    setNotice('');
+  };
+
+  const handleTourFinish = () => {
+    setHasSeenTour(true);
+  };
+
+  const handleRequest = (itemId, requestDetails = null) => {
+    const requestedItem = normalizeProductStock(items.find((item) => item.id === itemId) ?? selectedItem);
+    const isOwnListing = isOwnedByActiveAccount(requestedItem);
+    if (isOwnListing) {
+      setNotice('This is your listing. You can edit or delete it, but you cannot purchase it.');
+      return;
+    }
+    if (!activeBuyer) {
+      setSelectedItem(items.find((item) => item.id === itemId) ?? null);
+      requireLogin('request');
+      return;
+    }
+    if (!activeBuyer.isBuyer) {
+      setShowBuyerPaySheet(true);
+      return;
+    }
+    if (!requestDetails?.quantity) {
+      setQuantityItem(requestedItem);
+      return;
+    }
+    const allowance = getQuantityAllowance(requestedItem, activeAccountId, requestDetails.quantity);
+    if (allowance.allowedQuantity < 1) {
+      setQuantityItem(requestedItem);
+      return;
+    }
+    const quantity = allowance.allowedQuantity;
+    const orderId = createOrderId();
+    const requestUrl = `${window.location.origin}/request/${encodeURIComponent(orderId)}`;
+    const createdAtIso = new Date().toISOString();
+    const createdAt = new Date().toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' });
+    const historyEntry = {
+      id: orderId,
+      orderId,
+      buyerId: activeAccountId,
+      sellerId: requestedItem?.sellerId || requestedItem?.ownerMobile || requestedItem?.sellerName,
+      itemId,
+      title: requestedItem?.title || 'Requested item',
+      image: requestedItem?.image,
+      sellerName: requestedItem?.sellerName || requestedItem?.brand || 'Seller',
+      location: requestedItem?.location || 'Nearby',
+      distance: requestedItem?.distance || '',
+      type: 'in-person',
+      status: 'Pending seller approval',
+      quantity,
+      deliveryStatus: '',
+      buyerName: requestDetails?.buyerName || activeBuyer.name,
+      buyerPhone: requestDetails?.buyerPhone || activeBuyer.mobile,
+      buyerAddress: requestDetails?.buyerAddress,
+      buyerLocationData: requestDetails?.buyerLocationData || activeBuyer.location || locationEngine.location,
+      createdAt,
+    };
+    const requestRecord = {
+      requestId: orderId,
+      buyerId: activeAccountId,
+      sellerId: requestedItem?.sellerId || requestedItem?.businessId || requestedItem?.ownerMobile || requestedItem?.sellerName,
+      productId: itemId,
+      quantity,
+      buyerName: historyEntry.buyerName,
+      buyerPhone: historyEntry.buyerPhone,
+      buyerLocation: formatShortAddress(historyEntry.buyerLocationData) || 'Location not shared',
+      buyerLocationData: historyEntry.buyerLocationData,
+      sellerName: historyEntry.sellerName,
+      sellerPhone: requestedItem?.ownerMobile || requestedItem?.sellerPhone || '',
+      productName: historyEntry.title,
+      requestUrl,
+      isDemo: Boolean(requestedItem?.isDemo),
+      status: 'pending',
+      createdAt: createdAtIso,
+      expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
+      buyerCollected: false,
+      sellerGave: false,
+    };
+    const requestNotification = {
+      id: `request-${orderId}`,
+      type: 'request',
+      requestId: orderId,
+      itemId,
+      title: '📦 New Collection Request',
+      body: `${historyEntry.buyerName} from ${requestRecord.buyerLocation} wants to collect ${historyEntry.title} × ${quantity}.`,
+      productName: historyEntry.title,
+      quantity,
+      buyerName: historyEntry.buyerName,
+      buyerPhone: historyEntry.buyerPhone,
+      buyerLocation: formatShortAddress(historyEntry.buyerLocationData) || 'Location not shared',
+      sellerName: historyEntry.sellerName,
+      sellerPhone: requestRecord.sellerPhone,
+      sellerPickupAddress: requestedItem?.locationData?.fullAddress || requestedItem?.location || '',
+      sellerLocationData: requestedItem?.locationData || null,
+      requestUrl,
+      isDemo: Boolean(requestedItem?.isDemo),
+      recipientId: requestedItem?.sellerId || requestedItem?.businessId || requestedItem?.ownerMobile || requestedItem?.sellerName,
+      buyerId: activeAccountId,
+      requestStatus: 'pending',
+      time: 'Just now',
+      read: false,
+    };
+    saveRequests([requestRecord, ...getRequests()]);
+    recordPurchaseAttempt({ requestId: orderId, productId: itemId, buyerId: activeAccountId, quantity, status: 'pending', createdAt: createdAtIso });
+    setItems((prev) => prev.map((item) => (
+      item.id === itemId
+        ? { ...normalizeProductStock(item), reservedQuantity: normalizeProductStock(item).reservedQuantity + quantity, status: 'requested' }
+        : item
+    )));
+    setOrderHistory((prev) => [historyEntry, ...prev]);
+    setNotifications((prev) => [requestNotification, ...prev]);
+    setOrderSuccess(historyEntry);
+    setQuantityItem(null);
+    setSelectedItem(null);
+    setNotice('Request sent. Chat and contact sharing will unlock only after the seller accepts.');
+    if (requestRecord.sellerPhone && !requestRecord.isDemo) {
+      const sellerMessage = [
+        'Hello,',
+        '',
+        `${historyEntry.buyerName} from ${requestRecord.buyerLocation} requested to collect your product:`,
+        '',
+        historyEntry.title,
+        '',
+        `Quantity: ${quantity}`,
+        '',
+        'Please confirm here:',
+        requestUrl,
+      ].join('\n');
+      window.open(createWhatsAppLink(requestRecord.sellerPhone, sellerMessage), '_blank', 'noopener,noreferrer');
+    }
+  };
+
+  const handleQuantityConfirm = ({ quantity, collectionWindow }) => {
+    const requestedItem = normalizeProductStock(quantityItem);
+    if (!requestedItem?.isBusinessProduct) {
+      handleRequest(requestedItem.id, { quantity });
+      return;
+    }
+    const allowance = getQuantityAllowance(requestedItem, activeAccountId, quantity);
+    if (allowance.allowedQuantity < 1) return;
+    const reservedQuantity = allowance.allowedQuantity;
+    const orderId = createOrderId();
+    const collectionCode = createCollectionCode();
+    const reservedAt = new Date().toISOString();
+    const reservationExpiresAt = new Date(Date.now() + 2 * 60 * 60 * 1000).toISOString();
+    const pickupCoordinates = requestedItem.coordinates || (requestedItem.locationData ? {
+      latitude: requestedItem.locationData.latitude,
+      longitude: requestedItem.locationData.longitude,
+    } : null);
+    const pickupAddress = requestedItem.locationData?.fullAddress || requestedItem.location || 'Store pickup';
+    const directionsDestination = Number.isFinite(Number(pickupCoordinates?.latitude)) && Number.isFinite(Number(pickupCoordinates?.longitude))
+      ? `${pickupCoordinates.latitude},${pickupCoordinates.longitude}`
+      : pickupAddress;
+    const reservation = {
+      id: orderId,
+      orderId,
+      collectionCode,
+      qrCodeValue: requestedItem.businessId === DEMO_BUSINESS.id ? collectionCode : `${orderId}|${collectionCode}`,
+      buyerId: activeAccountId,
+      buyerName: activeBuyer.name,
+      buyerPhone: activeBuyer.mobile,
+      buyerBusinessId: businessSession?.id || null,
+      businessId: requestedItem.businessId,
+      productId: requestedItem.id,
+      businessProductId: requestedItem.businessProductId,
+      title: requestedItem.title,
+      image: requestedItem.image,
+      sellerName: requestedItem.sellerName,
+      quantity: reservedQuantity,
+      status: 'reserved',
+      reservedAt,
+      reservationExpiresAt,
+      collectionWindow,
+      businessPickupAddress: pickupAddress,
+      businessPickupLocationData: requestedItem.locationData || null,
+      businessPickupCoordinates: pickupCoordinates,
+      directionsLink: `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(directionsDestination)}`,
+      storePhone: getBusinessAccounts().find((account) => account.id === requestedItem.businessId)?.mobile || '',
+      type: 'business-reservation',
+      createdAt: new Date().toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' }),
+    };
+    reservation.whatsappLink = createWhatsAppLink(activeBuyer.mobile, `Your ZeroMart order ${collectionCode} is reserved at ${requestedItem.sellerName}. Show this collection ID or QR at the store to collect ${requestedItem.title} × ${reservedQuantity}.`);
+    saveReservations([reservation, ...getReservations()]);
+    saveBusinessProducts(getBusinessProducts().map((product) => {
+      if (product.id !== requestedItem.businessProductId) return product;
+      const availableQuantity = Number(product.availableQuantity ?? product.quantity ?? 1);
+      return {
+        ...product,
+        availableQuantity: Math.max(0, availableQuantity - reservedQuantity),
+        reservedQuantity: Number(product.reservedQuantity || 0) + reservedQuantity,
+      };
+    }));
+    recordPurchaseAttempt({ requestId: orderId, productId: requestedItem.id, buyerId: activeAccountId, quantity: reservedQuantity, status: 'reserved', createdAt: reservedAt });
+    setItems((prev) => prev.map((item) => {
+      if (item.id !== requestedItem.id) return item;
+      const stock = normalizeProductStock(item);
+      return {
+        ...stock,
+        availableQuantity: Math.max(0, stock.availableQuantity - reservedQuantity),
+        reservedQuantity: stock.reservedQuantity + reservedQuantity,
+        status: stock.availableQuantity - reservedQuantity <= 0 ? 'reserved' : 'active',
+      };
+    }));
+    const sellerOrder = createBusinessOrder(requestedItem, activeBuyer, {
+      buyerId: activeAccountId,
+      buyerBusinessId: businessSession?.id || null,
+      orderId,
+      whatsappLink: reservation.whatsappLink,
+      quantity: reservedQuantity,
+      status: 'Reserved',
+      collectionCode,
+      collectionWindow,
+    });
+    const purchase = { ...reservation, sellerOrderId: sellerOrder?.id || null };
+    if (businessSession) saveBusinessPurchases([purchase, ...getBusinessPurchases()]);
+    setOrderHistory((prev) => [reservation, ...prev]);
+    commitNotifications((prev) => [{
+      id: `reserved-${orderId}`,
+      type: 'businessOrderUpdate',
+      recipientId: activeAccountId,
+      title: 'Your item is reserved',
+      body: `${requestedItem.title} × ${reservedQuantity} is reserved at ${requestedItem.sellerName}.`,
+      itemId: requestedItem.id,
+      orderId,
+      orderStatus: 'Reserved',
+      productName: requestedItem.title,
+      businessName: requestedItem.sellerName,
+      sellerName: requestedItem.sellerName,
+      sellerPhone: reservation.storePhone,
+      quantity: reservedQuantity,
+      collectionCode,
+      collectionTime: collectionWindow,
+      pickupAddress: reservation.businessPickupAddress,
+      mapsLink: `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(reservation.businessPickupAddress || '')}`,
+      whatsappLink: createWhatsAppLink(reservation.storePhone, `Hello, I reserved ${requestedItem.title} on ZeroMart. Collection ID: ${collectionCode}.`),
+      time: 'Just now',
+      read: false,
+    }, {
+      id: `business-order-${orderId}`,
+      type: 'businessOrderReceived',
+      recipientId: requestedItem.businessId,
+      title: 'New business collection order',
+      body: `${activeBuyer.name} reserved ${requestedItem.title} × ${reservedQuantity}.`,
+      itemId: requestedItem.id,
+      orderId,
+      orderStatus: 'Reserved',
+      productName: requestedItem.title,
+      buyerName: activeBuyer.name,
+      buyerPhone: activeBuyer.mobile,
+      quantity: reservedQuantity,
+      collectionCode,
+      collectionTime: collectionWindow,
+      time: 'Just now',
+      read: false,
+    }, ...prev]);
+    setOrderSuccess(purchase);
+    setQuantityItem(null);
+    setSelectedItem(null);
+    setNotice(`Reserved successfully. Show collection ID ${collectionCode} at the store.`);
+  };
+
+  const handleBuyNow = (item) => {
+    const isOwnListing = isOwnedByActiveAccount(item);
+    if (isOwnListing) {
+      setSelectedItem(item);
+      setNotice('This is your listing. Use Edit listing or Delete listing to manage it.');
+      return;
+    }
+    if (!activeBuyer) {
+      setSelectedItem(item);
+      requireLogin('request');
+      return;
+    }
+    if (!activeBuyer.isBuyer) {
+      setSelectedItem(item);
+      setShowBuyerPaySheet(true);
+      return;
+    }
+    setSelectedItem(item);
+  };
+
+  const handleRequestDecision = (notification, decision, confirmation = {}) => {
+    const accepted = decision === 'accepted';
+    const nextStatus = accepted ? 'Seller confirmed' : 'Request declined';
+    const currentRequest = getRequests().find((request) => request.requestId === notification.requestId);
+    saveRequests(getRequests().map((request) => (
+      request.requestId === notification.requestId
+        ? {
+            ...request,
+            status: decision,
+            collectionDate: confirmation.collectionDate || '',
+            collectionTime: confirmation.collectionTime || '',
+            pickupAddress: confirmation.pickupAddress || '',
+            sellerPhone: accepted ? (confirmation.sellerPhone || notification.sellerPhone || '') : '',
+            optionalMessage: confirmation.optionalMessage || '',
+            sellerGave: accepted && !request.isDemo ? true : request.sellerGave,
+          }
+        : request
+    )));
+    updatePurchaseHistoryStatus(notification.requestId, decision);
+    if (accepted) {
+      const productName = notification.productName || notification.title.replace('Request for ', '');
+      const sellerPhone = confirmation.sellerPhone || notification.sellerPhone || '';
+      const collectionSummary = `${confirmation.collectionDate} at ${confirmation.collectionTime}`;
+      const buyerWhatsappLink = createWhatsAppLink(notification.buyerPhone, `Your ZeroMart request for ${productName} is confirmed by ${notification.sellerName}. Collect on ${collectionSummary} from ${confirmation.pickupAddress}. Seller phone: ${sellerPhone}.${confirmation.optionalMessage ? ` Message: ${confirmation.optionalMessage}` : ''}`);
+      const sellerWhatsappLink = createWhatsAppLink(sellerPhone, `Hello, I am ${notification.buyerName}. My ZeroMart collection for ${productName} is confirmed for ${collectionSummary}.`);
+      const emailSubject = encodeURIComponent('ZeroMart Collection Confirmation');
+      const emailBody = encodeURIComponent(`Product: ${productName}\nCollection time: ${collectionSummary}\nPickup address: ${confirmation.pickupAddress}\nSeller phone: ${sellerPhone}`);
+      const emailLink = `mailto:seller@email.com?subject=${emailSubject}&body=${emailBody}`;
+      const acceptedNotification = {
+        id: `accepted-${notification.requestId}`,
+        type: 'requestAccepted',
+        requestId: notification.requestId,
+        itemId: notification.itemId,
+        recipientId: notification.buyerId,
+        sellerName: notification.sellerName,
+        buyerName: notification.buyerName,
+        productName,
+        sellerPhone,
+        title: `${notification.sellerName} accepted your request`,
+        body: `Accepted. Collect ${productName} on ${collectionSummary}. Phone, pickup address, and seller note are available here.`,
+        requestStatus: 'accepted',
+        chatEnabled: false,
+        collectionDate: confirmation.collectionDate || '',
+        collectionTime: confirmation.collectionTime || '',
+        pickupAddress: confirmation.pickupAddress || '',
+        optionalMessage: confirmation.optionalMessage || '',
+        isDemo: Boolean(notification.isDemo),
+        mapsLink: `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(confirmation.pickupAddress || '')}`,
+        whatsappLink: sellerWhatsappLink,
+        buyerWhatsappLink,
+        emailLink,
+        time: 'Just now',
+        read: false,
+      };
+      commitNotifications((prev) => {
+        const sellerUpdate = prev.map((entry) => (
+          entry.id === notification.id
+            ? {
+                ...entry,
+                read: true,
+                requestStatus: 'accepted',
+                chatEnabled: false,
+                body: `Awaiting collection from ${notification.buyerName}. Collection details were sent to the buyer.`,
+              }
+            : entry
+        ));
+        return [acceptedNotification, ...sellerUpdate.filter((entry) => entry.id !== acceptedNotification.id)];
+      });
+      if (notification.buyerPhone && !notification.isDemo) window.open(buyerWhatsappLink, '_blank', 'noopener,noreferrer');
+    } else {
+      const declinedNotification = {
+        id: `declined-${notification.requestId}`,
+        type: 'requestDeclined',
+        requestId: notification.requestId,
+        itemId: notification.itemId,
+        recipientId: notification.buyerId,
+        title: 'Collection request declined',
+        body: `${notification.sellerName} could not confirm your request for ${notification.productName || 'this item'}.`,
+        requestStatus: 'declined',
+        time: 'Just now',
+        read: false,
+      };
+      commitNotifications((prev) => {
+        const sellerUpdate = prev.map((entry) => (
+          entry.id === notification.id
+            ? { ...entry, read: true, requestStatus: 'declined', chatEnabled: false, body: 'Request declined by the seller.' }
+            : entry
+        ));
+        return [declinedNotification, ...sellerUpdate.filter((entry) => entry.id !== declinedNotification.id)];
+      });
+    }
+    setSelectedNotification((current) => (
+      current?.id === notification.id
+        ? {
+            ...current,
+            read: true,
+            requestStatus: decision,
+            chatEnabled: false,
+            body: accepted
+              ? `Awaiting collection from ${notification.buyerName}. Collection details were sent to the buyer.`
+              : 'Request declined by the seller.',
+          }
+        : current
+    ));
+    setOrderHistory((prev) => prev.map((order) => (
+      order.orderId === notification.requestId ? { ...order, status: nextStatus } : order
+    )));
+    setItems((prev) => prev.map((item) => {
+      if (item.id !== notification.itemId) return item;
+      const stock = normalizeProductStock(item);
+      return accepted
+        ? { ...stock, status: 'reserved' }
+        : {
+            ...stock,
+            reservedQuantity: Math.max(0, stock.reservedQuantity - Number(currentRequest?.quantity || 1)),
+            status: 'active',
+          };
+    }));
+    if (accepted) {
+      setNotice('Request accepted. The buyer received your phone number, pickup address, time, and message.');
+    } else {
+      localStorage.removeItem(`zeromart-chat-${notification.requestId}`);
+      setNotice('The request was declined. Reserved stock was released.');
+    }
+  };
+
+  const handleOpenListing = () => {
+    if (businessSession) {
+      navigate('/business/inventory');
+      return;
+    }
+    if (!user) {
+      setNotice('Sign up / Login to list your item. Listing remains completely free.');
+      requireLogin('listing');
+      return;
+    }
+    setEditingItem(null);
+    setShowListingSheet(true);
+  };
+
+  const toggleFavorite = (item) => {
+    setFavorites((prev) => {
+      const exists = prev.some((entry) => entry.id === item.id);
+      if (exists) return prev.filter((entry) => entry.id !== item.id);
+      return [...prev, item];
+    });
+  };
+
+  const handleListingSubmit = (formData) => {
+    if (editingItem) {
+      const updatedItem = {
+        ...editingItem,
+        title: formData.title,
+        category: formData.category,
+        condition: formData.condition,
+        description: formData.description,
+        location: formData.pickupArea,
+        image: formData.image,
+        validTill: formData.validTill,
+        expiryDate: formData.expiryDate,
+        expiryTime: formData.expiryTime,
+        totalQuantity: formData.totalQuantity,
+        availableQuantity: formData.availableQuantity,
+        reservedQuantity: formData.reservedQuantity,
+        soldQuantity: formData.soldQuantity,
+        listingType: 'community',
+        maxQuantityPerUserPer24h: 2,
+        deliveryMode: 'pickup',
+        allowInPersonCollection: true,
+        requiresDelivery: false,
+        coordinates: formData.coordinates,
+        locationData: formData.locationData,
+      };
+      setItems((prev) => prev.map((item) => (item.id === editingItem.id ? updatedItem : item)));
+      setFavorites((prev) => prev.map((item) => (item.id === editingItem.id ? updatedItem : item)));
+      setSelectedItem(updatedItem);
+      setEditingItem(null);
+      setShowListingSheet(false);
+      setNotice('Your listing has been updated.');
+      return;
+    }
+    const newItem = {
+      id: Date.now(),
+      title: formData.title,
+      category: formData.category,
+      condition: formData.condition,
+      description: formData.description,
+      location: formData.pickupArea,
+      distance: '0.4 km',
+      sellerName: user?.name || 'You',
+      sellerId: user?.userId || user?.mobile || 'guest-owner',
+      sellerKarma: user?.karma || 0,
+      ownerMobile: user?.mobile || 'guest-owner',
+      isOwn: true,
+      image: formData.image || 'https://images.unsplash.com/photo-1512436991641-6745cdb1723f?auto=format&fit=crop&w=900&q=80',
+      status: 'Available',
+      validTill: formData.validTill,
+      expiryDate: formData.expiryDate,
+      expiryTime: formData.expiryTime,
+      totalQuantity: formData.totalQuantity,
+      availableQuantity: formData.totalQuantity,
+      reservedQuantity: 0,
+      soldQuantity: 0,
+      listingType: 'community',
+      maxQuantityPerUserPer24h: 2,
+      deliveryMode: 'pickup',
+      allowInPersonCollection: true,
+      requiresDelivery: false,
+      coordinates: formData.coordinates,
+      locationData: formData.locationData,
+      createdAt: new Date().toISOString(),
+      isDemo: Boolean(user?.isDemo),
+    };
+    setItems((prev) => [newItem, ...prev]);
+    setUser((prev) => (prev ? {
+      ...prev,
+      listed: (Number(prev.listed) || 0) + 1,
+      activeListings: (Number(prev.activeListings) || 0) + 1,
+    } : prev));
+    setShowListingSheet(false);
+    setSelectedItem(null);
+    setActiveView('home');
+    setNotice('Your item is live. You can manage it from its card or your profile.');
+  };
+
+  const handleEditListing = (item) => {
+    setSelectedItem(null);
+    setEditingItem(item);
+    setShowListingSheet(true);
+  };
+
+  const handleDeleteListing = (item) => {
+    if (!window.confirm(`Delete "${item.title}"? This cannot be undone.`)) return;
+    setItems((prev) => prev.filter((entry) => entry.id !== item.id));
+    setFavorites((prev) => prev.filter((entry) => entry.id !== item.id));
+    setUser((prev) => (prev ? {
+      ...prev,
+      listed: Math.max(0, (Number(prev.listed) || 0) - 1),
+      activeListings: Math.max(0, (Number(prev.activeListings) || 0) - ((item.status || 'Available') === 'Completed' ? 0 : 1)),
+    } : prev));
+    setSelectedItem(null);
+    setEditingItem(null);
+    setNotice('Your listing has been deleted.');
+  };
+
+  const handleBuyerUnlockComplete = () => {
+    if (businessSession) {
+      const nextBusinessSession = { ...businessSession, isBuyer: true };
+      setBusinessSession(nextBusinessSession);
+      saveBusinessSession(nextBusinessSession);
+      saveBusinessAccounts([
+        nextBusinessSession,
+        ...getBusinessAccounts().filter((account) => account.id !== nextBusinessSession.id),
+      ]);
+    } else {
+      setUser((prev) => (prev ? { ...prev, isBuyer: true } : prev));
+    }
+    setShowBuyerPaySheet(false);
+    setNotice('Lifetime buying access unlocked. You can request ₹0 items now.');
+  };
+
+  const handleKarmaSubmit = () => {
+    if (karmaTarget?.type === 'business') {
+      const accounts = getBusinessAccounts();
+      const business = accounts.find((account) => account.id === karmaTarget.businessId);
+      if (business) {
+        const nextBusiness = { ...business, karma: Number(business.karma || 0) + 1 };
+        saveBusinessAccounts([nextBusiness, ...accounts.filter((account) => account.id !== business.id)]);
+        setItems((current) => current.map((item) => (
+          item.businessId === business.id || item.sellerName === business.businessName
+            ? { ...item, sellerKarma: Number(item.sellerKarma || business.karma || 0) + 1 }
+            : item
+        )));
+      }
+      saveBusinessOrders(getBusinessOrders().map((order) => (
+        order.id === karmaTarget.orderId || order.orderId === karmaTarget.orderId
+          ? { ...order, karmaGiven: true }
+          : order
+      )));
+      localStorage.removeItem('zeromart-pending-business-karma');
+      setShowKarmaPopup(false);
+      setKarmaTarget(null);
+      setNotice('Good karma sent to the store.');
+      window.dispatchEvent(new Event('storage'));
+      return;
+    }
+    if (karmaTarget?.sellerId) {
+      const ledger = getKarmaLedger();
+      const key = accountKey(karmaTarget.sellerId);
+      const currentValue = Number(ledger[key] ?? karmaTarget.currentKarma ?? 0);
+      localStorage.setItem('zeromart-community-karma', JSON.stringify({ ...ledger, [key]: currentValue + 1 }));
+      saveRequests(getRequests().map((request) => (
+        request.requestId === karmaTarget.requestId ? { ...request, karmaGiven: true } : request
+      )));
+    }
+    setItems((prev) => prev.map((item) => (
+      item.sellerName === karmaTarget?.name
+        ? { ...item, sellerKarma: Number(item.sellerKarma || 0) + 1 }
+        : item
+    )));
+    localStorage.removeItem('zeromart-pending-community-karma');
+    setShowKarmaPopup(false);
+    setKarmaTarget(null);
+    setNotice(`Good karma sent to ${karmaTarget?.name || 'the seller'}.`);
+  };
+
+  const finishCompletedHandoff = (result, target) => {
+    const quantity = Number(result.request?.quantity || 1);
+    localStorage.removeItem(`zeromart-chat-${target.requestId}`);
+    const pendingKarma = {
+      ...(target.karmaRecipient || target),
+      buyerId: result.request?.buyerId,
+      sellerId: result.request?.sellerId,
+      requestId: target.requestId,
+      mandatory: true,
+    };
+    localStorage.setItem('zeromart-pending-community-karma', JSON.stringify(pendingKarma));
+    if (accountKey(result.request?.buyerId) === accountKey(activeAccountId)) {
+      setKarmaTarget(pendingKarma);
+      setShowKarmaPopup(true);
+    }
+    setOrderHistory((prev) => prev.map((order) => (
+      order.orderId === target.requestId ? { ...order, status: 'Collected personally' } : order
+    )));
+    commitNotifications((prev) => prev.map((entry) => (
+      entry.requestId === target.requestId
+        ? {
+            ...entry,
+            requestStatus: 'completed',
+            body: entry.type === 'request'
+              ? `${result.request?.buyerName || 'The buyer'} collected ${result.request?.productName || 'the item'}. Status: Collected.`
+              : `You collected ${result.request?.productName || 'the item'}. Good Karma is ready to send.`,
+          }
+        : entry
+    )));
+    setItems((prev) => prev.map((item) => {
+      if (item.id !== target.itemId) return item;
+      const stock = normalizeProductStock(item);
+      const availableQuantity = Math.max(0, stock.availableQuantity - quantity);
+      return {
+        ...stock,
+        availableQuantity,
+        reservedQuantity: Math.max(0, stock.reservedQuantity - quantity),
+        soldQuantity: stock.soldQuantity + quantity,
+        status: availableQuantity === 0 ? 'completed' : 'active',
+      };
+    }));
+    setNotice(
+      accountKey(result.request?.buyerId) === accountKey(activeAccountId)
+        ? 'Exchange complete. Send mandatory good karma to the seller.'
+        : 'Handover complete. The buyer will be asked to send good karma.'
+    );
+    window.dispatchEvent(new CustomEvent('zeromart-karma-pending'));
+  };
+
+  const handleMarkCollected = (notification) => {
+    const pendingRequest = getRequests().find((request) => request.requestId === notification.requestId);
+    if (pendingRequest && !pendingRequest.isDemo) {
+      saveRequests(getRequests().map((request) => (
+        request.requestId === notification.requestId && request.status === 'accepted'
+          ? { ...request, sellerGave: true }
+          : request
+      )));
+    }
+    const result = confirmHandoff(notification.requestId, 'buyer');
+    if (result.alreadyCompleted) {
+      setNotice('This collection is already completed.');
+      return;
+    }
+    if (!result.completed) {
+      setOrderHistory((prev) => prev.map((order) => (
+        order.orderId === notification.requestId ? { ...order, status: 'Collected confirmed · waiting for seller' } : order
+      )));
+      setNotice('Your collection is confirmed. Waiting for the seller to mark the item as handed over.');
+      setSelectedNotification(null);
+      return;
+    }
+    const item = items.find((entry) => entry.id === notification.itemId);
+    finishCompletedHandoff(result, {
+      requestId: notification.requestId,
+      itemId: notification.itemId,
+      karmaRecipient: {
+        name: item?.sellerName || notification.sellerName,
+        initials: (item?.sellerName || notification.sellerName || 'Seller').split(' ').map((word) => word[0]).join('').slice(0, 2).toUpperCase(),
+        type: item?.isBusinessProduct ? 'business' : 'user',
+        currentKarma: Number(item?.sellerKarma || 0),
+      },
+    });
+    setSelectedNotification(null);
+  };
+
+  const handleSellerHandover = (notification) => {
+    const result = confirmHandoff(notification.requestId, 'seller');
+    if (!result.request) {
+      setNotice('This demo request could not be found.');
+      return;
+    }
+    if (result.alreadyCompleted) {
+      setNotice('This handover is already completed.');
+      setSelectedNotification(null);
+      return;
+    }
+    commitNotifications((current) => current.map((entry) => (
+      entry.requestId === notification.requestId
+        ? {
+            ...entry,
+            sellerGave: true,
+            requestStatus: result.completed ? 'completed' : 'accepted',
+            body: result.completed
+              ? `${result.request.buyerName} collected ${result.request.productName}. Status: Completed.`
+              : entry.type === 'request'
+                ? `You handed over ${result.request.productName}. Waiting for ${result.request.buyerName} to confirm collection.`
+                : `${result.request.sellerName} marked ${result.request.productName} as handed over. Confirm after you collect it.`,
+          }
+        : entry
+    )));
+    if (!result.completed) {
+      setNotice('Handover confirmed. Waiting for the buyer to mark the item as collected.');
+      setSelectedNotification(null);
+      return;
+    }
+    const item = items.find((entry) => entry.id === notification.itemId);
+    finishCompletedHandoff(result, {
+      requestId: notification.requestId,
+      itemId: notification.itemId,
+      karmaRecipient: {
+        name: item?.sellerName || notification.sellerName,
+        initials: (item?.sellerName || notification.sellerName || 'Seller').split(' ').map((word) => word[0]).join('').slice(0, 2).toUpperCase(),
+        type: 'user',
+        currentKarma: Number(item?.sellerKarma || 0),
+      },
+    });
+    setSelectedNotification(null);
+  };
+
+  const handleNotificationOpen = (notification) => {
+    setNotifications((prev) => prev.map((entry) => (entry.id === notification.id ? { ...entry, read: true } : entry)));
+    if (notification.type === 'product' && notification.itemId) {
+      const targetItem = items.find((item) => item.id === notification.itemId);
+      if (targetItem) {
+        setSelectedItem(targetItem);
+        setSelectedNotification(null);
+        return;
+      }
+    }
+    if (notification.type === 'seller' && notification.sellerName) {
+      const targetItem = items.find((item) => item.sellerName === notification.sellerName);
+      if (targetItem) {
+        setSelectedItem(targetItem);
+        setSelectedNotification(null);
+        return;
+      }
+    }
+    if (notification.type === 'favorite' && notification.itemId) {
+      const targetFavorite = favorites.find((item) => item.id === notification.itemId);
+      if (targetFavorite) {
+        setSelectedItem(targetFavorite);
+        setSelectedNotification(null);
+        return;
+      }
+    }
+    setSelectedNotification(notification);
+  };
+
+  const selectedItemData = useMemo(() => {
+    const item = items.find((entry) => entry.id === selectedItem?.id) ?? selectedItem;
+    if (!item) return null;
+    const coordinates = getItemCoordinates(item);
+    const distanceKm = coordinates && currentCoordinates ? haversineKm(currentCoordinates, coordinates) : item.distanceKm ?? null;
+    return {
+      ...item,
+      distanceKm,
+      distance: distanceKm === null ? item.distance : formatDistance(distanceKm),
+      requestState: getProductRequestState(item, activeAccountId, requestClock),
+    };
+  }, [activeAccountId, currentCoordinates, items, requestClock, selectedItem]);
+  const visibleNotifications = useMemo(() => {
+    const requestsById = new Map(getRequests().map((request) => [request.requestId, request]));
+    const isDemoRole = Boolean(user?.isDemo || businessSession?.isDemo);
+    return notifications.filter((notification) => (
+      isDemoRole
+        ? Boolean(notification.recipientId) && accountKey(notification.recipientId) === accountKey(activeAccountId)
+        : !notification.recipientId || accountKey(notification.recipientId) === accountKey(activeAccountId)
+    )).map((notification) => {
+      if (notification.type !== 'request' || !notification.requestId) return notification;
+      const request = requestsById.get(notification.requestId);
+      if (!request || request.status === notification.requestStatus) return notification;
+      if (request.status === 'accepted') {
+        return {
+          ...notification,
+          requestStatus: 'accepted',
+          sellerGave: Boolean(request.sellerGave),
+          buyerCollected: Boolean(request.buyerCollected),
+          body: request.sellerGave
+            ? `You handed over ${request.productName}. Waiting for ${request.buyerName} to confirm collection.`
+            : `Awaiting collection from ${request.buyerName}. Collection details were sent to the buyer.`,
+        };
+      }
+      if (request.status === 'completed') {
+        return {
+          ...notification,
+          requestStatus: 'completed',
+          body: `${request.buyerName} collected ${request.productName}. Status: Collected.`,
+        };
+      }
+      return { ...notification, requestStatus: request.status };
+    });
+  }, [activeAccountId, businessSession?.isDemo, notifications, user?.isDemo]);
+  const visibleOrderHistory = useMemo(() => (
+    user?.isDemo
+      ? orderHistory.filter((order) => accountKey(order.buyerId) === accountKey(activeAccountId))
+      : orderHistory
+  ), [activeAccountId, orderHistory, user?.isDemo]);
+  const receivedOrders = useMemo(() => (
+    getRequests()
+      .filter((request) => accountKey(request.sellerId) === accountKey(activeAccountId))
+      .sort((first, second) => new Date(second.createdAt || 0) - new Date(first.createdAt || 0))
+  ), [activeAccountId, notifications]);
+  const filterOptions = useMemo(() => {
+    const searchableCatalog = mergeListingsById(items, localBusinessSearchItems);
+    const categories = ['All', ...new Set(searchableCatalog.map((item) => item.category).filter(Boolean))];
+    const conditions = ['All', ...new Set(searchableCatalog.map((item) => item.condition).filter(Boolean))];
+    return { categories, conditions };
+  }, [items]);
+  const hasActiveSearch = Boolean(searchQuery || categoryFilter !== 'All' || conditionFilter !== 'All');
+  const rankedItems = useMemo(() => {
+    const query = searchQuery.trim().toLowerCase();
+    const activeLocation = currentCoordinates;
+    if (!activeLocation) return [];
+    const catalogItems = hasActiveSearch
+      ? mergeListingsById(items, localBusinessSearchItems)
+      : items;
+    return catalogItems.map(normalizeProductStock).filter(isMarketplaceVisible).map((item) => {
+      const itemCoordinates = getItemCoordinates(item);
+      const distanceFromActive = activeLocation && itemCoordinates ? haversineKm(activeLocation, itemCoordinates) : null;
+      return {
+        ...item,
+        distanceKm: distanceFromActive,
+        distance: distanceFromActive === null ? item.distance : formatDistance(distanceFromActive),
+        requestState: getProductRequestState(item, activeAccountId, requestClock),
+      };
+    }).filter((item) => {
+      const searchableText = [
+        platformSearchKeywords,
+        item.brand,
+        item.title,
+        item.category,
+        item.condition,
+        item.description,
+        item.location,
+        item.sellerName,
+        item.status,
+        item.locationData?.country,
+        item.locationData?.state,
+        item.locationData?.district,
+        item.locationData?.city,
+        item.locationData?.area,
+        item.locationData?.street,
+        item.locationData?.postalCode,
+      ].filter(Boolean).join(' ').toLowerCase();
+      const matchesQuery = !query || searchableText.includes(query);
+      const matchesCategory = categoryFilter === 'All' || item.category === categoryFilter;
+      const matchesCondition = conditionFilter === 'All' || item.condition === conditionFilter;
+      return matchesQuery && matchesCategory && matchesCondition;
+    }).sort((first, second) => {
+      const firstDistance = first.distanceKm ?? Number.POSITIVE_INFINITY;
+      const secondDistance = second.distanceKm ?? Number.POSITIVE_INFINITY;
+      if (firstDistance !== secondDistance) return firstDistance - secondDistance;
+      if ((second.sellerKarma || 0) !== (first.sellerKarma || 0)) return (second.sellerKarma || 0) - (first.sellerKarma || 0);
+      const firstAvailable = Number(first.requestState?.requestableStock ?? first.availableQuantity ?? 0);
+      const secondAvailable = Number(second.requestState?.requestableStock ?? second.availableQuantity ?? 0);
+      if (secondAvailable !== firstAvailable) return secondAvailable - firstAvailable;
+      return new Date(second.createdAt || 0).getTime() - new Date(first.createdAt || 0).getTime();
+    });
+  }, [activeAccountId, categoryFilter, conditionFilter, currentCoordinates, hasActiveSearch, items, radiusKm, requestClock, searchQuery]);
+
+  const rescueItems = useMemo(() => rankedItems
+    .map((item) => {
+      const expiryTimestamp = getExpiryTimestamp(item);
+      const hoursRemaining = expiryTimestamp === null
+        ? Number.POSITIVE_INFINITY
+        : Math.max(0, (expiryTimestamp - requestClock) / (60 * 60 * 1000));
+      const rescueWindowDays = Number(item.expiryWindowDays ?? item.listBeforeExpiryDays ?? 5);
+      const rescueEligible = expiryTimestamp !== null
+        && hoursRemaining <= rescueWindowDays * 24
+        && Number(item.requestState?.requestableStock ?? item.availableQuantity ?? 0) > 0;
+      if (!rescueEligible) return null;
+      const rescueLabel = hoursRemaining <= 12
+        ? `Expires in ${Math.max(1, Math.ceil(hoursRemaining))} hours`
+        : hoursRemaining <= 24
+          ? 'Expires Today'
+          : hoursRemaining <= 48
+            ? 'Expires Tomorrow'
+            : `${Math.ceil(hoursRemaining / 24)} Days Left`;
+      return { ...item, hoursRemaining, rescueLabel };
+    })
+    .filter(Boolean)
+    .sort((first, second) => (
+      first.hoursRemaining - second.hoursRemaining
+      || (first.distanceKm ?? Infinity) - (second.distanceKm ?? Infinity)
+      || (second.sellerKarma || 0) - (first.sellerKarma || 0)
+    ))
+    .slice(0, 10), [rankedItems, requestClock]);
+  const rescueIds = useMemo(() => new Set(rescueItems.map((item) => String(item.id))), [rescueItems]);
+  const communityRankedItems = useMemo(
+    () => rankedItems.filter((item) => !item.isBusinessProduct && !rescueIds.has(String(item.id))),
+    [rankedItems, rescueIds]
+  );
+
+  useEffect(() => {
+    if (radiusKm !== 'all' || communityRankedItems.length === 0) return;
+    const activeRadius = DISCOVERY_STAGES[discoveryStageIndex]?.radiusKm ?? Number.POSITIVE_INFINITY;
+    if (communityRankedItems.some((item) => item.distanceKm === null || item.distanceKm <= activeRadius)) return;
+    const firstStageWithProducts = DISCOVERY_STAGES.findIndex((stage) => (
+      communityRankedItems.some((item) => item.distanceKm === null || item.distanceKm <= stage.radiusKm)
+    ));
+    if (firstStageWithProducts > discoveryStageIndex) setDiscoveryStageIndex(firstStageWithProducts);
+  }, [communityRankedItems, discoveryStageIndex, radiusKm]);
+
+  const activeDiscoveryStage = DISCOVERY_STAGES[discoveryStageIndex] || DISCOVERY_STAGES.at(-1);
+  const activeFeedRadius = radiusKm === 'all' ? activeDiscoveryStage.radiusKm : Number(radiusKm);
+  const filteredItems = useMemo(() => rankedItems.filter((item) => (
+    !currentCoordinates || item.distanceKm === null || item.distanceKm <= activeFeedRadius
+  )), [activeFeedRadius, currentCoordinates, rankedItems]);
+  const communityFeedItems = useMemo(() => communityRankedItems.filter((item) => (
+    !currentCoordinates || item.distanceKm === null || item.distanceKm <= activeFeedRadius
+  )), [activeFeedRadius, communityRankedItems, currentCoordinates]);
+  const hasMoreDiscoveryItems = radiusKm === 'all'
+    && discoveryStageIndex < DISCOVERY_STAGES.length - 1
+    && communityFeedItems.length < communityRankedItems.length;
+  const businessDealsNearby = rankedItems
+    .filter((item) => (
+      item.isBusinessProduct
+      && !rescueIds.has(String(item.id))
+      && (item.distanceKm === null || item.distanceKm <= 25)
+    ))
+    .sort((first, second) => (
+      (first.distanceKm ?? Infinity) - (second.distanceKm ?? Infinity)
+      || (second.sellerKarma || 0) - (first.sellerKarma || 0)
+      || Number(second.requestState?.requestableStock ?? second.availableQuantity ?? 0)
+        - Number(first.requestState?.requestableStock ?? first.availableQuantity ?? 0)
+      || (getExpiryTimestamp(first) ?? Infinity) - (getExpiryTimestamp(second) ?? Infinity)
+    ))
+    .slice(0, 10);
+  const leaderboardScopes = useMemo(() => {
+    const geographicScopes = getLocationScopes(locationEngine.location)
+      .filter((entry) => ['city'].includes(entry.scope));
+    return [
+      { scope: 'near1', label: 'Within 1 km' },
+      { scope: 'near5', label: 'Within 5 km' },
+      ...geographicScopes,
+    ];
+  }, [locationEngine.location?.updatedAt]);
+  useEffect(() => {
+    if (leaderboardScopes.length && !leaderboardScopes.some((entry) => entry.scope === leaderboardScope)) {
+      setLeaderboardScope(leaderboardScopes[0].scope);
+    }
+  }, [leaderboardScope, leaderboardScopes]);
+  const leaderboardLocation = leaderboardScope === 'near1'
+    ? '1 km'
+    : leaderboardScope === 'near5'
+      ? '5 km'
+      : getLocationScopeValue(locationEngine.location, leaderboardScope) || locationLabel;
+  const leaderboardTitle = leaderboardScope.startsWith('near')
+    ? `Top Good Karma within ${leaderboardLocation}`
+    : `Top Good Karma in ${leaderboardLocation}`;
+  const karmaLeaderboard = useMemo(() => {
+    const localCoordinates = currentCoordinates;
+    const activeScopeValue = leaderboardScope.startsWith('near')
+      ? ''
+      : getLocationScopeValue(locationEngine.location, leaderboardScope).toLowerCase();
+    const fallbackRadius = {
+      near1: 1,
+      near5: 5,
+      area: radiusKm === 'all' ? 25 : Number(radiusKm),
+      city: 35,
+      district: 100,
+      state: 500,
+      country: Number.POSITIVE_INFINITY,
+    }[leaderboardScope];
+    const leaderboardItems = mergeListingsById(items, localBusinessSearchItems).filter((item) => {
+      if (leaderboardScope === 'near1' || leaderboardScope === 'near5') {
+        if (!localCoordinates) return false;
+        const itemCoordinates = getItemCoordinates(item);
+        const distanceKm = itemCoordinates ? haversineKm(localCoordinates, itemCoordinates) : null;
+        return distanceKm !== null && distanceKm <= fallbackRadius;
+      }
+      if (!activeScopeValue) return true;
+      const itemScopeValue = getLocationScopeValue(item.locationData, leaderboardScope).toLowerCase();
+      if (itemScopeValue) return itemScopeValue === activeScopeValue;
+      if (leaderboardScope === 'area' && String(item.location || '').toLowerCase() === activeScopeValue) return true;
+      if (!localCoordinates) return false;
+      const itemCoordinates = getItemCoordinates(item);
+      const distanceKm = itemCoordinates ? haversineKm(localCoordinates, itemCoordinates) : null;
+      return distanceKm !== null && distanceKm <= fallbackRadius;
+    });
+    const profileMap = new Map();
+    leaderboardItems.forEach((item) => {
+      const name = item.sellerName || item.brand || 'ZeroMart giver';
+      const itemCoordinates = getItemCoordinates(item);
+      const itemDistanceKm = localCoordinates && itemCoordinates
+        ? haversineKm(localCoordinates, itemCoordinates)
+        : Number.POSITIVE_INFINITY;
+      const existing = profileMap.get(name) || {
+        name,
+        karma: 0,
+        listings: 0,
+        completed: 0,
+        distanceKm: Number.POSITIVE_INFINITY,
+        location: item.location,
+        image: user?.name === name ? user.profileImage : '',
+      };
+      profileMap.set(name, {
+        ...existing,
+        karma: Math.max(existing.karma, item.sellerKarma || 0),
+        listings: existing.listings + 1,
+        completed: existing.completed + Number(item.completedCount || item.soldQuantity || 0),
+        distanceKm: Math.min(existing.distanceKm, itemDistanceKm ?? Number.POSITIVE_INFINITY),
+        location: existing.location || item.location,
+        image: existing.image || (user?.name === name ? user.profileImage : ''),
+      });
+    });
+    if (user) {
+      const userScopeValue = getLocationScopeValue(user.location, leaderboardScope).toLowerCase();
+      const userCoordinates = user.location
+        ? { latitude: user.location.latitude, longitude: user.location.longitude }
+        : null;
+      const userDistanceKm = localCoordinates && userCoordinates
+        ? haversineKm(localCoordinates, userCoordinates)
+        : null;
+      const userIsLocal = leaderboardScope.startsWith('near')
+        ? userDistanceKm !== null && userDistanceKm <= fallbackRadius
+        : !activeScopeValue
+          || (userScopeValue && userScopeValue === activeScopeValue)
+          || (userDistanceKm !== null && userDistanceKm <= fallbackRadius);
+      if (!userIsLocal) {
+        return [...profileMap.values()].sort((a, b) => (
+          a.distanceKm - b.distanceKm
+          || b.karma - a.karma
+          || b.completed - a.completed
+        )).slice(0, 5);
+      }
+      const existing = profileMap.get(user.name) || {
+        name: user.name, karma: 0, listings: 0, completed: 0,
+        distanceKm: userDistanceKm ?? Number.POSITIVE_INFINITY,
+        location: locationLabel, image: user.profileImage,
+      };
+      profileMap.set(user.name, {
+        ...existing,
+        karma: Math.max(existing.karma, user.karma || 0),
+        location: existing.location || locationLabel,
+        image: user.profileImage || existing.image,
+      });
+    }
+    return [...profileMap.values()].sort((a, b) => (
+      a.distanceKm - b.distanceKm
+      || b.karma - a.karma
+      || b.completed - a.completed
+    )).slice(0, 5);
+  }, [currentCoordinates, items, leaderboardScope, locationEngine.location, locationLabel, radiusKm, user]);
+  const selectedPublicProfileItems = useMemo(() => {
+    if (!selectedPublicProfile) return [];
+    return mergeListingsById(items, localBusinessSearchItems).filter((item) => (item.sellerName || item.brand) === selectedPublicProfile.name);
+  }, [items, selectedPublicProfile]);
+  const hasActiveSession = Boolean(user || businessSession);
+  const visibleNotice = hasActiveSession && /you are logged out/i.test(notice) ? '' : notice;
+  const latestDemoRequest = getRequests()
+    .filter((request) => (
+      request.productId === DEMO_COMMUNITY_ITEM_ID
+      || request.sellerId === DEMO_SELLER.userId
+      || request.sellerId === DEMO_SELLER.mobile
+      || request.sellerId === DEMO_SELLER.name
+    ))
+    .sort((first, second) => new Date(second.createdAt || 0) - new Date(first.createdAt || 0))[0] || null;
+  const latestDemoBusinessOrder = getBusinessOrders()
+    .filter((order) => order.businessId === DEMO_BUSINESS.id)
+    .sort((first, second) => new Date(second.createdAt || 0) - new Date(first.createdAt || 0))[0] || null;
+  const demoRole = businessSession?.id === DEMO_BUSINESS.id
+    ? 'business'
+    : user?.mobile === DEMO_BUYER.mobile
+      ? 'buyer'
+      : user?.mobile === DEMO_SELLER.mobile
+        ? 'seller'
+        : '';
+
+  const ensureDemoData = () => {
+    const coordinates = currentCoordinates || areaCoordinates['HSR Layout'];
+    const locationData = {
+      latitude: coordinates.latitude,
+      longitude: coordinates.longitude,
+      area: 'Velachery',
+      locality: 'Velachery',
+      subLocality: 'Velachery',
+      city: 'Chennai',
+      district: 'Chennai',
+      state: 'Tamil Nadu',
+      country: 'India',
+      countryCode: 'in',
+      street: 'Demo Market Road',
+      doorNo: '12',
+      buildingName: 'Demo Community House',
+      landmark: 'Near Velachery Market',
+      postalCode: '600042',
+      addressType: 'Other',
+      fullAddress: '12, Demo Community House, Demo Market Road, Velachery, Chennai, Tamil Nadu 600042, India',
+      formattedAddress: '12, Demo Community House, Demo Market Road, Velachery, Chennai, Tamil Nadu 600042, India',
+    };
+    const expiry = new Date(Date.now() + 3 * 86400000).toISOString().slice(0, 10);
+    const demoKarmaKey = accountKey(DEMO_SELLER.userId);
+    const karmaLedger = getKarmaLedger();
+    const demoSellerKarma = Number(karmaLedger[demoKarmaKey] ?? DEMO_SELLER.karma);
+    if (karmaLedger[demoKarmaKey] === undefined) {
+      localStorage.setItem('zeromart-community-karma', JSON.stringify({ ...karmaLedger, [demoKarmaKey]: demoSellerKarma }));
+    }
+    const demoItem = normalizeProductStock({
+      id: DEMO_COMMUNITY_ITEM_ID,
+      title: 'Demo Fresh Bread',
+      category: 'Food',
+      condition: 'Fresh',
+      description: 'A demo community listing for testing the complete buyer, seller, chat, handover, and Good Karma flow.',
+      location: 'Velachery',
+      locationData,
+      coordinates,
+      distance: 'Nearby',
+      sellerName: DEMO_SELLER.name,
+      sellerId: DEMO_SELLER.userId,
+      sellerKarma: demoSellerKarma,
+      ownerMobile: DEMO_SELLER.mobile,
+      image: 'https://images.unsplash.com/photo-1509440159596-0249088772ff?auto=format&fit=crop&w=900&q=80',
+      status: 'active',
+      listingType: 'community',
+      totalQuantity: 4,
+      availableQuantity: 4,
+      reservedQuantity: 0,
+      soldQuantity: 0,
+      maxQuantityPerUserPer24h: 2,
+      expiryDate: expiry,
+      price: 0,
+      isDemo: true,
+      createdAt: new Date().toISOString(),
+    });
+    setItems((current) => (
+      current.some((item) => item.id === DEMO_COMMUNITY_ITEM_ID)
+        ? current
+        : [demoItem, ...current]
+    ));
+
+    const businessAccount = { ...DEMO_BUSINESS, locationData };
+    saveBusinessAccounts([businessAccount, ...getBusinessAccounts().filter((account) => account.id !== businessAccount.id)]);
+    const demoBusinessProduct = {
+      id: DEMO_BUSINESS_PRODUCT_ID,
+      businessId: businessAccount.id,
+      storeName: businessAccount.businessName,
+      name: 'Demo Fruit Rescue Box',
+      category: 'Food',
+      description: 'A demo business reservation listing for testing QR collection and business orders.',
+      image: 'https://images.unsplash.com/photo-1610832958506-aa56368176cf?auto=format&fit=crop&w=900&q=80',
+      quantity: 5,
+      totalQuantity: 5,
+      availableQuantity: 5,
+      reservedQuantity: 0,
+      soldQuantity: 0,
+      expiryDate: expiry,
+      expiryTime: '20:00',
+      pickupLocation: businessAccount.storeLocation,
+      locationData,
+      coordinates,
+      autoList: true,
+      nearExpiry: true,
+      status: 'Listed',
+      listingType: 'business',
+      maxQuantityPerUserPer24h: 2,
+      mrp: 0,
+      sellingPrice: 0,
+      isDemo: true,
+      createdAt: new Date().toISOString(),
+    };
+    const existingBusinessProducts = getBusinessProducts();
+    saveBusinessProducts(existingBusinessProducts.some((product) => product.id === DEMO_BUSINESS_PRODUCT_ID)
+      ? existingBusinessProducts
+      : [demoBusinessProduct, ...existingBusinessProducts]);
+    const demoBusinessItem = getBusinessMarketplaceItems()
+      .find((item) => item.businessProductId === DEMO_BUSINESS_PRODUCT_ID) || null;
+    return { businessAccount, locationData, demoItem, demoBusinessItem };
+  };
+
+  const activateDemoBuyer = (destination = 'home') => {
+    const { locationData, demoItem, demoBusinessItem } = ensureDemoData();
+    const latestSellerListing = [...items]
+      .filter((item) => (
+        (item.sellerId === DEMO_SELLER.userId || item.ownerMobile === DEMO_SELLER.mobile)
+        && item.id !== DEMO_COMMUNITY_ITEM_ID
+      ))
+      .sort((first, second) => new Date(second.createdAt || 0) - new Date(first.createdAt || 0))[0];
+    const communityDemoTarget = latestSellerListing || items.find((item) => item.id === DEMO_COMMUNITY_ITEM_ID) || demoItem;
+    const businessDemoTarget = getBusinessMarketplaceItems()
+      .filter((item) => item.businessId === DEMO_BUSINESS.id)
+      .sort((first, second) => new Date(second.createdAt || 0) - new Date(first.createdAt || 0))[0]
+      || demoBusinessItem;
+    clearBusinessSession();
+    setBusinessSession(null);
+    setUser({ ...DEMO_BUYER, location: locationData });
+    setItems((current) => current.map((item) => (
+      item.sellerId === DEMO_SELLER.userId || item.ownerMobile === DEMO_SELLER.mobile
+        ? { ...item, isOwn: false }
+        : item
+    )));
+    try {
+      const pendingBusinessKarma = JSON.parse(localStorage.getItem('zeromart-pending-business-karma'));
+      if (
+        pendingBusinessKarma?.businessId === DEMO_BUSINESS.id
+        && accountKey(pendingBusinessKarma.buyerId || DEMO_BUYER.userId) === accountKey(DEMO_BUYER.userId)
+      ) {
+        setKarmaTarget({ ...pendingBusinessKarma, type: 'business', mandatory: true, initials: 'DF' });
+        setShowKarmaPopup(true);
+      }
+    } catch {
+      localStorage.removeItem('zeromart-pending-business-karma');
+    }
+    setActiveView(destination === 'alerts' ? 'notifications' : destination === 'profile' ? 'profile' : 'home');
+    setSelectedItem(
+      destination === 'community-product'
+        ? { ...communityDemoTarget, isOwn: false }
+        : destination === 'business-product'
+          ? businessDemoTarget
+          : null
+    );
+    setShowDemoPanel(false);
+    setNotice(destination === 'community-product'
+      ? `Demo Buyer is active. Choose a quantity and request ${communityDemoTarget.title}.`
+      : destination === 'business-product'
+        ? 'Demo Buyer is active. Reserve the store product to generate a collection ID and QR.'
+        : destination === 'alerts'
+          ? 'Demo Buyer is active. Open the latest update to view collection details.'
+          : destination === 'profile'
+            ? 'Demo Buyer profile is open. Active QR passes and past orders appear here.'
+            : 'Demo Buyer is active. Browse and test the marketplace as a buyer.');
+    navigate('/');
+  };
+
+  const activateDemoSeller = (destination = 'alerts') => {
+    const { locationData } = ensureDemoData();
+    clearBusinessSession();
+    setBusinessSession(null);
+    const sellerKarma = Number(getKarmaLedger()[accountKey(DEMO_SELLER.userId)] ?? DEMO_SELLER.karma);
+    setUser({ ...DEMO_SELLER, karma: sellerKarma, location: locationData });
+    setItems((current) => current.map((item) => (
+      item.sellerId === DEMO_SELLER.userId || item.ownerMobile === DEMO_SELLER.mobile
+        ? { ...item, isOwn: true }
+        : item
+    )));
+    setActiveView(destination === 'profile' ? 'profile' : destination === 'list' ? 'home' : latestDemoRequest ? 'notifications' : 'home');
+    setSelectedItem(null);
+    setEditingItem(null);
+    setShowListingSheet(destination === 'list');
+    setShowDemoPanel(false);
+    setNotice(destination === 'list'
+      ? 'Demo Community Seller is active. Add a listing, then switch to Demo Buyer to request it.'
+      : destination === 'profile'
+        ? 'Seller profile is open. Completed collections appear under Orders received.'
+        : latestDemoRequest
+          ? 'Demo Community Seller is active. Open the pending request in Alerts.'
+          : 'Demo Community Seller is active. First create a request as Demo Buyer.');
+    navigate('/');
+  };
+
+  const activateDemoBusiness = (destination = 'dashboard') => {
+    const { businessAccount } = ensureDemoData();
+    localStorage.removeItem('zeromart-user');
+    setUser(null);
+    saveBusinessSession(businessAccount);
+    setBusinessSession(businessAccount);
+    setShowDemoPanel(false);
+    navigate(`/business/${destination}`);
+  };
+
+  const resetDemoData = () => {
+    const demoRequests = getRequests().filter((request) => (
+      request.productId === DEMO_COMMUNITY_ITEM_ID
+      || request.sellerId === DEMO_SELLER.userId
+      || request.sellerId === DEMO_SELLER.mobile
+      || request.sellerId === DEMO_SELLER.name
+    ));
+    const demoRequestIds = new Set(demoRequests.map((request) => request.requestId));
+    const demoCommunityProductIds = new Set([
+      DEMO_COMMUNITY_ITEM_ID,
+      ...items.filter((item) => item.sellerId === DEMO_SELLER.userId || item.ownerMobile === DEMO_SELLER.mobile).map((item) => item.id),
+    ]);
+    const demoBusinessProducts = getBusinessProducts().filter((product) => product.businessId === DEMO_BUSINESS.id);
+    const demoBusinessProductIds = new Set(demoBusinessProducts.map((product) => product.id));
+    const demoBusinessMarketplaceIds = new Set(demoBusinessProducts.map((product) => `business-product-${product.id}`));
+    const demoBusinessOrders = getBusinessOrders().filter((order) => order.businessId === DEMO_BUSINESS.id);
+    const demoBusinessOrderIds = new Set(demoBusinessOrders.map((order) => order.id));
+    demoRequests.forEach((request) => localStorage.removeItem(`zeromart-chat-${request.requestId}`));
+    const karmaLedger = getKarmaLedger();
+    delete karmaLedger[accountKey(DEMO_SELLER.userId)];
+    localStorage.setItem('zeromart-community-karma', JSON.stringify(karmaLedger));
+    localStorage.removeItem('zeromart-pending-business-karma');
+    localStorage.removeItem('zeromart-pending-community-karma');
+    setShowKarmaPopup(false);
+    setKarmaTarget(null);
+    saveRequests(getRequests().filter((request) => !demoRequestIds.has(request.requestId)));
+    savePurchaseHistory(getPurchaseHistory().filter((entry) => (
+      !demoCommunityProductIds.has(entry.productId)
+      && !demoRequestIds.has(entry.requestId)
+      && !demoBusinessMarketplaceIds.has(entry.productId)
+      && !demoBusinessOrderIds.has(entry.requestId)
+    )));
+    saveReservations(getReservations().filter((reservation) => (
+      reservation.businessId !== DEMO_BUSINESS.id
+      && !demoBusinessProductIds.has(reservation.businessProductId)
+    )));
+    saveBusinessOrders(getBusinessOrders().filter((order) => order.businessId !== DEMO_BUSINESS.id));
+    saveBusinessPurchases(getBusinessPurchases().filter((purchase) => purchase.businessId !== DEMO_BUSINESS.id));
+    saveBusinessProducts(getBusinessProducts().filter((product) => product.businessId !== DEMO_BUSINESS.id));
+    saveBusinessAccounts(getBusinessAccounts().filter((account) => account.id !== DEMO_BUSINESS.id));
+    setItems((current) => current.filter((item) => (
+      !demoCommunityProductIds.has(item.id)
+      && item.businessId !== DEMO_BUSINESS.id
+    )));
+    setNotifications((current) => current.filter((notification) => (
+      notification.itemId !== DEMO_COMMUNITY_ITEM_ID
+      && !demoRequests.some((request) => request.requestId === notification.requestId)
+      && !demoBusinessOrderIds.has(notification.orderId || notification.requestId)
+      && notification.recipientId !== DEMO_BUSINESS.id
+      && notification.recipientId !== DEMO_BUYER.userId
+    )));
+    setOrderHistory((current) => current.filter((order) => (
+      order.itemId !== DEMO_COMMUNITY_ITEM_ID
+      && order.businessId !== DEMO_BUSINESS.id
+      && !demoBusinessOrderIds.has(order.orderId || order.id)
+    )));
+    if (user?.isDemo) setUser(null);
+    if (businessSession?.isDemo) {
+      clearBusinessSession();
+      setBusinessSession(null);
+    }
+    setActiveView('home');
+    setShowDemoPanel(false);
+    setNotice('Demo data was removed. You can start a fresh demo anytime.');
+    navigate('/');
+  };
 
   return (
-    <div className="desktop-root">
-      <DesktopSidebarLeft />
+    <div className="min-h-screen overflow-x-hidden bg-[radial-gradient(circle_at_top_left,_rgba(245,158,11,0.18),_transparent_30%),radial-gradient(circle_at_top_right,_rgba(124,58,237,0.14),_transparent_28%),linear-gradient(135deg,_#fffaf2_0%,_#f7f4ff_48%,_#f8fafc_100%)] text-slate-800">
+      <div className="mx-auto flex min-h-screen max-w-6xl flex-col lg:flex-row">
+        <aside className="hidden w-80 flex-col justify-between rounded-r-[2rem] border border-amber-100/80 bg-white/75 p-8 shadow-[0_20px_65px_rgba(15,23,42,0.08)] backdrop-blur lg:flex">
+          <div>
+            <div className="flex items-center gap-3">
+              <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-gradient-to-br from-amber-500 to-violet-600 text-xl text-white shadow-lg shadow-violet-500/20">✨</div>
+              <div>
+                <p className="text-2xl font-semibold text-slate-900">ZeroMart</p>
+                <p className="text-sm text-slate-500">₹0 goods, real kindness</p>
+              </div>
+            </div>
+            <nav className="mt-8 space-y-2">
+              <div>
+                <button
+                  onClick={() => handleNav('home')}
+                  className={`flex w-full min-w-0 items-center gap-3 rounded-2xl px-4 py-3 text-left text-sm font-semibold transition ${
+                    activeView === 'home'
+                      ? 'bg-gradient-to-r from-amber-500 to-violet-600 text-white shadow-lg shadow-violet-500/20'
+                      : 'border border-amber-100 bg-white/70 text-slate-600 hover:-translate-y-0.5 hover:bg-amber-50'
+                  }`}
+                >
+                  <Home size={18} />
+                  <span>Home</span>
+                </button>
+              </div>
+              {(businessSession ? [
+                { key: 'profile', label: 'Profile', icon: User, action: () => navigate('/business/profile') },
+                { key: 'business-dashboard', label: 'Dashboard', icon: Building2, action: () => navigate('/business/dashboard') },
+                { key: 'favorites', label: 'Favorites', icon: Heart, action: () => handleNav('favorites') },
+                { key: 'notifications', label: 'Alerts', icon: Bell, action: () => handleNav('notifications') },
+              ] : [
+                { key: 'profile', label: 'Profile', icon: User, action: () => (user ? handleNav('profile') : requireLogin('profile')) },
+                { key: 'sell', label: 'List item', icon: Plus, action: handleOpenListing },
+                { key: 'favorites', label: 'Favorites', icon: Heart, action: () => handleNav('favorites') },
+                { key: 'notifications', label: 'Alerts', icon: Bell, action: () => handleNav('notifications') },
+              ]).map((item) => {
+                const Icon = item.icon;
+                const isActive = activeView === item.key || (item.key === 'sell' && showListingSheet);
+                return (
+                  <button
+                    key={item.key}
+                    onClick={item.action}
+                    className={`flex w-full items-center gap-3 rounded-2xl px-4 py-3 text-left text-sm font-semibold transition ${
+                      isActive
+                        ? 'bg-gradient-to-r from-amber-500 to-violet-600 text-white shadow-lg shadow-violet-500/20'
+                        : 'border border-amber-100 bg-white/70 text-slate-600 hover:-translate-y-0.5 hover:bg-amber-50'
+                    }`}
+                  >
+                    <Icon size={18} />
+                    <span>{item.label}</span>
+                  </button>
+                );
+              })}
+            </nav>
+            <div className="mt-8 rounded-[1.5rem] border border-amber-100 bg-gradient-to-r from-amber-50 to-violet-50 p-5">
+              <p className="text-sm font-semibold text-amber-800">Give what you do not need.</p>
+              <p className="mt-2 text-sm text-slate-600">Browse public listings, then log in only when you want to request, list, or chat.</p>
+            </div>
+          </div>
+          <div className="rounded-[1.5rem] border border-amber-100 bg-gradient-to-br from-amber-500 to-violet-600 p-5 text-white shadow-lg shadow-violet-500/20">
+            <p className="text-sm font-semibold">Today’s mood</p>
+            <p className="mt-2 text-sm text-white/85">“Someone nearby may be waiting for that extra chair, book, or lamp.”</p>
+          </div>
+        </aside>
 
-      <div className="desktop-center">
-        <div className="app-shell">
-          {page === 'home'          && <HomePage />}
-          {page === 'orders'        && <OrdersPage />}
-          {page === 'sell'          && <SellerPage />}
-          {page === 'profile'       && <ProfilePage />}
-          {page === 'notifications' && <NotificationsPage />}
+        <main className="min-w-0 flex-1 px-4 pb-28 pt-4 sm:px-6 lg:px-8 lg:py-8">
+          <div className="mx-auto max-w-4xl">
+            <header className="community-hero relative z-50 mb-4 flex min-h-[330px] flex-col justify-between gap-5 overflow-visible rounded-[1.5rem] border border-white/70 px-4 py-5 shadow-[0_20px_55px_rgba(15,23,42,0.18)] sm:min-h-[300px] lg:min-h-[340px] lg:px-6 lg:py-6">
+              <div className="pointer-events-none absolute inset-0 overflow-hidden rounded-[1.45rem]">
+                <img src="/assets/zeromart-community-handoff-hero.jpg" alt="" className="community-hero-image h-full w-full object-cover object-[57%_center] sm:object-[54%_center] lg:object-center" />
+                <div className="absolute inset-0 bg-[linear-gradient(90deg,rgba(5,30,22,0.9)_0%,rgba(5,30,22,0.72)_52%,rgba(5,30,22,0.48)_100%)] sm:bg-[linear-gradient(90deg,rgba(5,30,22,0.9)_0%,rgba(5,30,22,0.68)_42%,rgba(5,30,22,0.18)_76%,rgba(5,30,22,0.24)_100%)]" />
+                <div className="absolute inset-x-0 bottom-0 h-36 bg-gradient-to-t from-emerald-950/45 to-transparent" />
+                <div className="community-hero-glow absolute -left-10 bottom-0 h-32 w-72 rounded-full bg-emerald-300/20 blur-3xl" />
+              </div>
+              <div className="hero-float pointer-events-none absolute right-[8%] top-5 hidden h-11 w-11 items-center justify-center rounded-2xl border border-white/40 bg-white/20 text-xl text-white shadow-lg backdrop-blur-md sm:flex">✨</div>
 
-          <nav className="bottom-nav">
-            {navItems.map(item => (
-              <button
-                key={item.key}
-                className={`nav-item ${page === item.key && item.key !== 'list' ? 'active' : ''}`}
-                onClick={() => handleNav(item.key)}
-                style={item.special ? {
-                  background: 'var(--zm-accent)',
-                  color: 'white',
-                  width: 48,
-                  height: 48,
-                  borderRadius: '50%',
-                  padding: 0,
-                  boxShadow: '0 4px 16px rgba(124,92,252,0.4)',
-                } : {}}
-              >
-                <div style={{ position: 'relative' }}>
-                  {item.icon}
-                  {item.badge > 0 && (
-                    <div style={{ position: 'absolute', top: -4, right: -6, minWidth: 16, height: 16, borderRadius: 999, background: 'var(--zm-accent)', border: '1.5px solid var(--zm-bg)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 9, fontWeight: 700, color: 'white', padding: '0 3px' }}>
-                      {item.badge}
+              <div className="relative z-10 max-w-sm min-w-0 pt-1 lg:min-w-[230px]">
+                <div className="mb-3 inline-flex items-center gap-2 rounded-full border border-white/30 bg-white/15 px-3 py-1.5 text-[11px] font-bold uppercase tracking-[0.16em] text-white backdrop-blur-md">
+                  <Sparkles size={13} />
+                  Community marketplace
+                </div>
+                <p className="text-3xl font-extrabold text-white drop-shadow-sm sm:text-4xl">ZeroMart</p>
+                <p className="mt-2 max-w-xs text-sm font-medium leading-6 text-white/90">Pass useful things forward. Find nearby items and earn good karma.</p>
+                <div className="mt-4 flex flex-wrap gap-2">
+                  <span className="rounded-full border border-white/25 bg-white/15 px-3 py-1.5 text-xs font-semibold text-white backdrop-blur-md">₹0 community finds</span>
+                  <span className="rounded-full border border-white/25 bg-white/15 px-3 py-1.5 text-xs font-semibold text-white backdrop-blur-md">Local good karma</span>
+                </div>
+              </div>
+
+              <div className={`relative z-20 flex w-full flex-wrap items-center gap-2 rounded-2xl border border-white/25 bg-slate-950/20 p-2 shadow-lg backdrop-blur-xl ${hasActiveSession ? 'justify-start' : 'justify-end'}`}>
+                <button onClick={locationEngine.openPicker} className="flex min-w-[210px] flex-1 items-center gap-2 rounded-xl border border-white/80 bg-white/95 px-3 py-2.5 text-left text-sm font-semibold text-emerald-900 shadow-sm transition-all duration-200 hover:-translate-y-0.5 hover:bg-white">
+                  <MapPin size={14} className="shrink-0" />
+                  <span className="min-w-0 flex-1">
+                    <span className="block text-[10px] font-extrabold uppercase tracking-[0.1em] text-emerald-600">
+                      {['gps', 'live-gps'].includes(locationEngine.location?.source) ? 'Current location' : 'Selected location'}
+                    </span>
+                    <span className="block truncate">{locationLabel}</span>
+                  </span>
+                  <span className="shrink-0 text-[10px] font-extrabold uppercase tracking-[0.1em] text-emerald-600">Change</span>
+                </button>
+                {!['gps', 'live-gps'].includes(locationEngine.location?.source) && (
+                  <button
+                    type="button"
+                    onClick={() => locationEngine.detectCurrentLocation().catch(() => locationEngine.openPicker())}
+                    className="inline-flex shrink-0 items-center gap-2 rounded-xl border border-white/80 bg-white/95 px-3 py-3 text-xs font-extrabold text-emerald-800 shadow-sm transition hover:-translate-y-0.5"
+                  >
+                    <LocateFixed size={15} />
+                    <span className="hidden sm:inline">Use my current location</span>
+                  </button>
+                )}
+                {businessSession && (
+                  <button
+                    type="button"
+                    onClick={() => navigate('/business/dashboard')}
+                    className="inline-flex min-w-0 shrink-0 items-center gap-2 rounded-xl border border-emerald-200 bg-white/95 px-3 py-2.5 text-left text-emerald-800 shadow-sm transition hover:-translate-y-0.5 hover:bg-white"
+                    aria-label={`Open ${businessSession.businessName} business dashboard`}
+                  >
+                    <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-emerald-700 text-white">
+                      <ShieldCheck size={16} />
+                    </span>
+                    <span className="min-w-0">
+                      <span className="block text-[9px] font-extrabold uppercase tracking-[0.12em] text-emerald-600">Business verified</span>
+                      <span className="block max-w-32 truncate text-xs font-extrabold sm:max-w-44">{businessSession.businessName}</span>
+                    </span>
+                  </button>
+                )}
+                {user && (
+                  <button className="hidden shrink-0 items-center gap-2 rounded-xl bg-emerald-600 px-4 py-2.5 text-sm font-semibold text-white shadow-lg shadow-emerald-950/20 transition-all duration-200 hover:-translate-y-0.5 hover:bg-emerald-700 lg:flex" onClick={handleOpenListing}>
+                    <Plus size={14} />
+                    <span>List item</span>
+                  </button>
+                )}
+                {user && (
+                  <button className="ml-auto flex h-[58px] w-[62px] shrink-0 flex-col items-center justify-center gap-1 rounded-xl border border-white/80 bg-white/95 px-1.5 py-1 text-[10px] font-bold leading-none text-violet-700 shadow-sm transition-all duration-200 hover:-translate-y-0.5 hover:bg-white lg:ml-0 lg:h-[42px] lg:w-[58px] lg:flex-row lg:rounded-xl" onClick={() => handleNav('profile')} aria-label="Open profile">
+                    <span className="flex h-8 w-8 shrink-0 items-center justify-center overflow-hidden rounded-full bg-violet-50 lg:h-7 lg:w-7">
+                      {user.profileImage ? (
+                        <img src={user.profileImage} alt={user.name} className="h-full w-full object-cover" />
+                      ) : (
+                        user.name?.split(' ').map((part) => part[0]).join('').slice(0, 2).toUpperCase() || <User size={18} />
+                      )}
+                    </span>
+                    <span className="max-w-[58px] truncate lg:hidden">{user.name?.split(' ')[0] || 'Profile'}</span>
+                  </button>
+                )}
+                {!user && !businessSession && (
+                  <button className="flex min-w-[145px] flex-1 items-center justify-center rounded-xl bg-white px-3 py-2.5 text-center text-xs font-bold leading-5 text-violet-700 shadow-sm transition-all duration-200 hover:-translate-y-0.5 sm:min-w-[175px] sm:px-4 sm:text-sm" onClick={() => requireLogin('profile')}>
+                    User Sign up / Login
+                  </button>
+                )}
+                {!user && !businessSession && <span className="hidden shrink-0 text-xs font-extrabold uppercase tracking-[0.12em] text-white/80 sm:inline">or</span>}
+                {!user && !businessSession && (
+                  <button
+                    className="inline-flex min-w-[165px] flex-1 items-center justify-center gap-2 rounded-xl border border-white/80 bg-white/95 px-3 py-2.5 text-center text-xs font-bold leading-5 text-emerald-800 shadow-sm transition hover:-translate-y-0.5 hover:bg-white sm:min-w-[210px] sm:text-sm"
+                    onClick={() => setShowBusinessAuth(true)}
+                  >
+                    <Building2 size={15} />
+                    <span>Business Sign up / Login</span>
+                  </button>
+                )}
+              </div>
+            </header>
+
+            {activeView === 'home' && rescueItems.length > 0 && (
+              <div className="mb-4">
+                <ProductRail
+                  title="Rescue Near-Expiry Items"
+                  eyebrow="Help reduce waste before these expire"
+                  icon={Flame}
+                  items={rescueItems}
+                  onSelectItem={setSelectedItem}
+                  onBuyItem={handleBuyNow}
+                  onToggleFavorite={toggleFavorite}
+                  favorites={favorites}
+                  rescue
+                />
+              </div>
+            )}
+
+            {activeView === 'home' && (
+              <section className="mb-4 rounded-[1.5rem] border border-amber-100/80 bg-white/85 p-3 shadow-[0_14px_45px_rgba(15,23,42,0.08)] backdrop-blur sm:p-4">
+                <div className="space-y-3">
+                  <div className="relative overflow-hidden rounded-[1.25rem] border border-amber-200/80 bg-[linear-gradient(120deg,#fffbeb_0%,#ffffff_48%,#f5f3ff_100%)] p-3 shadow-[0_12px_34px_rgba(124,58,237,0.08)] sm:p-4">
+                    <div className="pointer-events-none absolute -right-8 -top-10 h-32 w-32 rounded-full bg-violet-200/35 blur-3xl" />
+                    <div className="pointer-events-none absolute -left-10 bottom-0 h-24 w-40 rounded-full bg-amber-200/35 blur-3xl" />
+                    <div className="relative flex flex-col items-start gap-3 sm:flex-row sm:items-center sm:justify-between">
+                      <div className="flex min-w-0 items-center gap-3">
+                        <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-gradient-to-br from-amber-400 to-amber-600 text-white shadow-lg shadow-amber-500/25">
+                          <Trophy size={21} fill="currentColor" />
+                        </div>
+                        <div className="min-w-0">
+                          <p className="text-base font-extrabold text-slate-900">Top Good Karma Near You</p>
+                          <p className="truncate text-xs text-slate-500">{leaderboardTitle} · ranked by distance, karma and completed shares</p>
+                        </div>
+                      </div>
+                      <label className="inline-flex max-w-full shrink-0 items-center gap-1.5 rounded-full border border-emerald-100 bg-white/90 px-3 py-1.5 text-xs font-bold text-emerald-700 shadow-sm sm:max-w-56">
+                        <MapPin size={13} />
+                        <span className="sr-only">Leaderboard location level</span>
+                        <select value={leaderboardScope} onChange={(event) => setLeaderboardScope(event.target.value)} className="min-w-0 max-w-44 bg-transparent font-bold text-emerald-700 outline-none">
+                          {leaderboardScopes.map((entry) => (
+                            <option key={entry.scope} value={entry.scope}>{entry.scope[0].toUpperCase() + entry.scope.slice(1)} · {entry.label}</option>
+                          ))}
+                        </select>
+                      </label>
                     </div>
+                    {karmaLeaderboard.length === 0 ? (
+                      <div className="relative mt-4 rounded-2xl border border-dashed border-amber-200 bg-white/75 p-5 text-center">
+                        <p className="font-bold text-slate-800">No local karma leaders yet</p>
+                        <p className="mt-1 text-xs text-slate-500">Be the first to list and save an item around {leaderboardLocation}.</p>
+                      </div>
+                    ) : (
+                    <div className="relative mt-4 flex snap-x gap-3 overflow-x-auto pb-2">
+                      {karmaLeaderboard.map((profile, index) => {
+                        const initials = profile.name.split(' ').map((part) => part[0]).join('').slice(0, 2).toUpperCase();
+                        const rankStyle = index === 0
+                          ? 'leader-winner min-w-[210px] border-cyan-300 bg-[linear-gradient(145deg,#ecfeff_0%,#ffffff_55%,#f5f3ff_100%)] shadow-[0_14px_32px_rgba(8,145,178,0.18)]'
+                          : index === 1
+                            ? 'min-w-[190px] border-amber-300 bg-[linear-gradient(145deg,#fff7d6,#ffffff_72%)]'
+                            : index === 2
+                              ? 'min-w-[190px] border-slate-300 bg-[linear-gradient(145deg,#f1f5f9,#ffffff_72%)]'
+                              : 'min-w-[180px] border-orange-200 bg-[linear-gradient(145deg,#fff7ed,#ffffff_72%)]';
+                        const rankBadge = index === 0
+                          ? 'bg-gradient-to-br from-cyan-400 to-violet-600 text-white'
+                          : index === 1
+                            ? 'bg-gradient-to-br from-amber-300 to-amber-600 text-white'
+                            : index === 2
+                              ? 'bg-gradient-to-br from-slate-300 to-slate-500 text-white'
+                              : 'bg-gradient-to-br from-orange-300 to-orange-700 text-white';
+                        const RankIcon = index === 0 ? Gem : index < 3 ? Medal : Award;
+                        const rankLabel = index === 0 ? 'Diamond' : index === 1 ? 'Gold' : index === 2 ? 'Silver' : 'Bronze';
+                        return (
+                          <button key={profile.name} onClick={() => setSelectedPublicProfile(profile)} className={`relative snap-start overflow-hidden rounded-2xl border p-3.5 text-left transition duration-200 hover:-translate-y-1 hover:shadow-lg ${rankStyle}`}>
+                            <div className="mb-3 flex items-center justify-between gap-2">
+                              <span className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[10px] font-extrabold uppercase tracking-[0.1em] shadow-sm ${rankBadge}`}>
+                                <RankIcon size={12} fill="currentColor" /> {rankLabel}
+                              </span>
+                              <span className="text-xs font-extrabold text-slate-400">#{index + 1}</span>
+                            </div>
+                            <div className="flex items-start gap-3">
+                              <div className="relative flex h-12 w-12 shrink-0 items-center justify-center overflow-hidden rounded-full border-2 border-white bg-gradient-to-br from-amber-100 to-violet-100 text-sm font-extrabold text-violet-700 shadow-md">
+                                {profile.image ? <img src={profile.image} alt={profile.name} className="h-full w-full object-cover" /> : initials}
+                              </div>
+                              <div className="min-w-0 flex-1">
+                                <p className="truncate text-sm font-extrabold text-slate-900">{profile.name}</p>
+                                <p className="mt-1 flex items-center gap-1 truncate text-xs text-slate-500"><MapPin size={11} /> {profile.location}</p>
+                              </div>
+                            </div>
+                            <div className="mt-3 flex items-end justify-between gap-3">
+                              <div>
+                                <p className="text-[10px] font-bold uppercase tracking-[0.13em] text-slate-400">Good Karma</p>
+                                <p className="mt-0.5 text-lg font-extrabold text-amber-600">✨ {profile.karma}</p>
+                              </div>
+                              <span className="rounded-full bg-violet-50 px-2.5 py-1 text-[11px] font-bold text-violet-700">{profile.listings} listed</span>
+                            </div>
+                            <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-slate-100">
+                              <div className="h-full rounded-full bg-gradient-to-r from-amber-400 to-violet-500" style={{ width: `${Math.max(18, (profile.karma / Math.max(karmaLeaderboard[0]?.karma || 1, 1)) * 100)}%` }} />
+                            </div>
+                          </button>
+                        );
+                      })}
+                    </div>
+                    )}
+                  </div>
+                  <form
+                    className="grid min-w-0 grid-cols-1 gap-2 sm:grid-cols-[minmax(0,1fr)_auto]"
+                    onSubmit={(event) => {
+                      event.preventDefault();
+                      setSearchQuery(searchInput.trim());
+                    }}
+                  >
+                    <label className="relative min-w-0 flex-1">
+                      <Search size={18} className="pointer-events-none absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" />
+                      <input
+                        value={searchInput}
+                        onChange={(event) => {
+                          setSearchInput(event.target.value);
+                          setSearchQuery(event.target.value.trim());
+                        }}
+                        placeholder="Search anything on ZeroMart"
+                        className="w-full rounded-[1rem] border-2 border-violet-200 bg-white py-3 pl-11 pr-4 text-sm font-semibold text-slate-800 shadow-[0_8px_24px_rgba(124,58,237,0.08)] outline-none transition placeholder:text-slate-400 focus:border-violet-500 focus:bg-white focus:ring-4 focus:ring-violet-100"
+                      />
+                    </label>
+                    <button
+                      type="submit"
+                      onClick={() => setSearchQuery(searchInput.trim())}
+                      className="relative z-10 w-full rounded-[1rem] bg-gradient-to-r from-amber-500 to-violet-600 px-4 py-3 text-sm font-bold text-white shadow-lg shadow-violet-500/15 transition hover:brightness-105 active:scale-95 sm:w-auto"
+                    >
+                      Search
+                    </button>
+                  </form>
+                  <div className="grid grid-cols-1 gap-2 sm:grid-cols-4">
+                    <div className="flex items-center gap-2 rounded-[1rem] border border-amber-100 bg-amber-50/50 px-3 py-2 text-amber-800">
+                      <SlidersHorizontal size={16} />
+                      <span className="text-xs font-semibold">Filters</span>
+                    </div>
+                    <select value={categoryFilter} onChange={(event) => setCategoryFilter(event.target.value)} className="min-w-0 rounded-[1rem] border-2 border-amber-100 bg-white px-3 py-2 text-sm font-semibold text-slate-700 outline-none focus:border-violet-400">
+                      {filterOptions.categories.map((category) => (
+                        <option key={category} value={category}>{category === 'All' ? 'All products' : category}</option>
+                      ))}
+                    </select>
+                    <select value={conditionFilter} onChange={(event) => setConditionFilter(event.target.value)} className="min-w-0 rounded-[1rem] border-2 border-amber-100 bg-white px-3 py-2 text-sm font-semibold text-slate-700 outline-none focus:border-violet-400">
+                      {filterOptions.conditions.map((condition) => (
+                        <option key={condition} value={condition}>{condition === 'All' ? 'Any condition' : condition}</option>
+                      ))}
+                    </select>
+                    <select value={radiusKm} onChange={(event) => setRadiusKm(event.target.value === 'all' ? 'all' : Number(event.target.value))} className="min-w-0 rounded-[1rem] border-2 border-amber-100 bg-white px-3 py-2 text-sm font-semibold text-slate-700 outline-none focus:border-violet-400" aria-label="Search radius">
+                      <option value="all">All distances · nearest first</option>
+                      {[1, 3, 5, 10, 25, 50].map((radius) => (
+                        <option key={radius} value={radius}>Within {radius} km</option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+                <div className="mt-3 flex flex-wrap items-center justify-between gap-2 text-xs text-slate-500">
+                  <span>
+                    {filteredItems.length} item{filteredItems.length === 1 ? '' : 's'} near {locationLabel}
+                    {radiusKm === 'all' ? ` · ${activeDiscoveryStage.label.toLowerCase()} · nearest first` : ` · within ${radiusKm} km`}
+                  </span>
+                  {hasActiveSearch && (
+                    <button
+                      onClick={() => {
+                        setSearchQuery('');
+                        setSearchInput('');
+                        setCategoryFilter('All');
+                        setConditionFilter('All');
+                      }}
+                      className="rounded-full bg-violet-50 px-3 py-1 font-semibold text-violet-700"
+                    >
+                      Clear filters
+                    </button>
                   )}
                 </div>
-                {!item.special && <span>{item.label}</span>}
-              </button>
-            ))}
-          </nav>
+                {hasActiveSearch && (
+                  <div className="mt-4 rounded-[1.25rem] border border-violet-100 bg-gradient-to-r from-violet-50/80 to-amber-50/80 p-3">
+                    <div className="mb-3 flex items-center justify-between gap-2">
+                      <p className="text-sm font-bold text-slate-900">Search results</p>
+                      <p className="text-xs font-semibold text-violet-700">{filteredItems.length} match{filteredItems.length === 1 ? '' : 'es'}</p>
+                    </div>
+                    {filteredItems.length === 0 ? (
+                      <div className="rounded-2xl border border-dashed border-amber-200 bg-white/80 p-4 text-center text-sm text-slate-500">
+                        No products matched this search. Try clearing one filter or increasing the radius.
+                      </div>
+                    ) : (
+                      <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+                        {filteredItems.slice(0, 3).map((item) => (
+                          <button
+                            key={item.id}
+                            onClick={() => setSelectedItem(item)}
+                            className="flex min-w-0 items-center gap-3 rounded-2xl border border-white/80 bg-white p-2 text-left shadow-sm transition hover:-translate-y-0.5 hover:shadow-md"
+                          >
+                            <img src={item.image} alt={item.title} className="h-14 w-14 shrink-0 rounded-xl object-cover" />
+                            <div className="min-w-0">
+                              <p className="truncate text-sm font-bold text-slate-900">{item.title}</p>
+                              <p className="truncate text-xs text-slate-500">{item.category} · {item.location} · {item.distance}</p>
+                              <p className="mt-1 text-xs font-bold text-amber-700">₹0</p>
+                            </div>
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </section>
+            )}
 
-          <button className="bot-btn" onClick={() => setBotOpen(true)} title="Ask ZeroBot">
-            <Bot size={22} color="white" />
-          </button>
+            {visibleNotice && (
+              <div className="mb-4 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+                {visibleNotice}
+              </div>
+            )}
 
-          {selectedProduct && <ProductSheet />}
-          {karmaPopup      && <KarmaPopup />}
-          {chatOpen        && <TempChat />}
-          {botOpen         && <BotAssistant />}
-          {listingSheet    && <ListingSheet />}
-          {buyerPaySheet   && <BuyerPaySheet />}
-          {collectRequest  && <CollectRequestHandler />}
-          {authGate        && <OtpSheet />}
-          {viewingSeller   && <SellerProfileSheet />}
-          <OnboardingTour />
-        </div>
+            {activeView === 'home' && (
+              <HomePage
+                user={user}
+                businessSession={businessSession}
+                items={communityFeedItems}
+                businessItems={businessDealsNearby}
+                homeSection={homeSection}
+                onSelectItem={setSelectedItem}
+                onBuyItem={handleBuyNow}
+                onRequest={handleRequest}
+                onBack={handleBack}
+                onLogin={() => requireLogin('profile')}
+                onSelectSection={setHomeSection}
+                onOpenSectionView={() => {
+                  setSectionView(homeSection);
+                  setActiveView('section');
+                }}
+                locationLabel={locationLabel}
+                onToggleFavorite={toggleFavorite}
+                favorites={favorites}
+                onEditItem={handleEditListing}
+                hasMoreItems={hasMoreDiscoveryItems}
+                loadMoreLabel={DISCOVERY_STAGES[discoveryStageIndex + 1]?.label || ''}
+                onLoadMore={() => setDiscoveryStageIndex((index) => Math.min(DISCOVERY_STAGES.length - 1, index + 1))}
+              />
+            )}
+            {activeView === 'section' && (
+              <SectionPage
+                section={sectionView}
+                businessItems={filteredItems.filter((item) => item.isBusinessProduct)}
+                onBack={handleBack}
+                locationLabel={locationLabel}
+                radiusKm={radiusKm}
+                onSelectItem={setSelectedItem}
+                onBuyItem={handleBuyNow}
+                onToggleFavorite={toggleFavorite}
+                favorites={favorites}
+              />
+            )}
+            {activeView === 'favorites' && (
+              <div className="space-y-3">
+                <div className="rounded-[2rem] border border-amber-100 bg-white p-5 shadow-sm">
+                  <p className="text-sm font-semibold text-violet-600">Saved favorites</p>
+                  <h2 className="mt-1 text-xl font-semibold text-slate-900">Your favorite listings</h2>
+                  <p className="mt-2 text-sm text-slate-500">Items you save with the heart icon appear here with their photos.</p>
+                </div>
+                {favorites.length === 0 ? (
+                  <div className="rounded-[2rem] border border-dashed border-slate-200 bg-white/70 p-6 text-center text-sm text-slate-500">No favorites yet. Tap the heart on a listing to save it.</div>
+                ) : (
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    {favorites.map((item) => (
+                      <article key={item.id} className="overflow-hidden rounded-[1.5rem] border border-amber-100 bg-white shadow-sm">
+                        <img src={item.image} alt={item.title} className="h-36 w-full object-cover" />
+                        <div className="p-4">
+                          <div className="flex items-start justify-between gap-2">
+                            <div>
+                              <h3 className="text-lg font-semibold text-slate-900">{item.title}</h3>
+                              <p className="mt-1 text-sm text-slate-500">{item.condition} · {item.distance}</p>
+                            </div>
+                            <button onClick={() => toggleFavorite(item)} className="rounded-full border border-rose-100 bg-rose-50 p-2 text-rose-500" aria-label="Remove from favorites">
+                              <Heart size={15} fill="currentColor" />
+                            </button>
+                          </div>
+                          <p className="mt-3 line-clamp-2 text-sm text-slate-500">{item.description || 'No description added.'}</p>
+                          <button onClick={() => setSelectedItem(item)} className="mt-4 rounded-full bg-violet-600 px-4 py-2 text-sm font-semibold text-white">
+                            View item
+                          </button>
+                        </div>
+                      </article>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+            {activeView === 'notifications' && (
+              <NotificationsPage
+                notifications={visibleNotifications}
+                selectedNotification={selectedNotification}
+                onOpenNotification={handleNotificationOpen}
+                onCloseNotification={() => setSelectedNotification(null)}
+                onRequestDecision={handleRequestDecision}
+                onSellerHandover={handleSellerHandover}
+                onMarkCollected={handleMarkCollected}
+                onBack={handleBack}
+              />
+            )}
+            {activeView === 'profile' && <ProfilePage user={user} items={items} orders={visibleOrderHistory} receivedOrders={receivedOrders} onLogin={() => requireLogin('profile')} onBack={handleBack} onLogout={handleLogout} onSelectItem={setSelectedItem} onUpdateUser={(updates) => setUser((prev) => (prev ? { ...prev, ...updates } : prev))} />}
+          </div>
+        </main>
       </div>
 
-      <DesktopSidebarRight />
-    </div>
-  );
-}
+      <nav className={`${showListingSheet ? 'hidden' : 'fixed'} inset-x-0 bottom-0 z-40 border-t border-amber-100 bg-white/90 px-3 pb-[calc(0.75rem+env(safe-area-inset-bottom))] pt-4 backdrop-blur lg:hidden`}>
+        <div className="relative mx-auto grid h-[72px] max-w-[390px] grid-cols-[1fr_1fr_72px_1fr_1fr] items-center rounded-full bg-gradient-to-r from-amber-50 to-violet-50 px-2 py-1 shadow-[0_12px_38px_rgba(15,23,42,0.1)]">
+          {(businessSession ? [
+            navItems[0],
+            navItems[1],
+            null,
+            navItems[2],
+            { key: 'business-dashboard', label: 'Dashboard', icon: Building2 },
+          ] : bottomNavItems).map((item) => {
+            if (!item) return <div key="create-spacer" className="h-full min-w-0" aria-hidden="true" />;
+            const Icon = item.icon;
+            const isActive = activeView === item.key;
+            const handleBottomNav = () => {
+              if (item.key === 'business-dashboard') {
+                navigate('/business/dashboard');
+                return;
+              }
+              if (businessSession && item.key === 'profile') {
+                navigate('/business/profile');
+                return;
+              }
+              handleNav(item.key);
+            };
+            return (
+              <button key={item.key} onClick={handleBottomNav} className={`mx-auto flex h-[58px] w-full max-w-[74px] min-w-0 flex-col items-center justify-center rounded-full px-1 text-[10px] font-semibold leading-none sm:text-[11px] ${isActive ? 'bg-gradient-to-r from-amber-500 to-violet-600 text-white shadow' : 'text-slate-600'}`}>
+                <Icon size={19} strokeWidth={2.2} />
+                <span className="mt-1.5 max-w-full truncate">{item.label}</span>
+              </button>
+            );
+          })}
+          <button onClick={handleOpenListing} className="absolute left-1/2 top-0 z-50 flex h-16 w-16 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full bg-gradient-to-br from-amber-500 to-violet-600 text-white shadow-lg shadow-violet-600/25 ring-4 ring-white" aria-label="Create listing">
+            <Plus size={28} strokeWidth={2.2} />
+          </button>
+        </div>
+      </nav>
 
-export default function App() {
-  return (
-    <AppProvider>
-      <Shell />
-    </AppProvider>
+      {!showListingSheet && (
+        <button
+          type="button"
+          onClick={() => setShowDemoPanel(true)}
+          className="fixed bottom-24 left-4 z-50 inline-flex items-center gap-2 rounded-full border border-violet-200 bg-white px-4 py-3 text-sm font-extrabold text-violet-700 shadow-xl transition hover:-translate-y-0.5 hover:bg-violet-50 lg:bottom-6 lg:left-[21rem]"
+        >
+          <Sparkles size={17} /> Demo flow
+        </button>
+      )}
+
+      {!showListingSheet && (
+        <button onClick={() => setShowBotAssistant(true)} className="fixed bottom-24 right-4 z-50 flex h-14 w-14 items-center justify-center rounded-full bg-gradient-to-br from-amber-500 to-violet-600 text-white shadow-lg shadow-violet-600/25 lg:bottom-6 lg:right-6">
+          <Bot size={22} />
+        </button>
+      )}
+
+      {selectedItemData && (
+        <ItemDetailsModal
+          item={selectedItemData}
+          onClose={() => setSelectedItem(null)}
+          onRequest={handleRequest}
+          onRequireLogin={() => requireLogin('request')}
+          onRequireBuyerAccess={() => setShowBuyerPaySheet(true)}
+          onEdit={handleEditListing}
+          onDelete={handleDeleteListing}
+          user={activeBuyer}
+        />
+      )}
+
+      {selectedPublicProfile && (
+        <div className="fixed inset-0 z-[70] flex items-end bg-slate-950/40 p-0 sm:items-center sm:justify-center sm:p-4">
+          <div className="max-h-[88vh] w-full max-w-lg overflow-y-auto rounded-t-[2rem] bg-white p-5 shadow-2xl sm:rounded-[2rem]">
+            <div className="flex items-start justify-between gap-3">
+              <div className="flex items-center gap-3">
+                <div className="flex h-16 w-16 items-center justify-center overflow-hidden rounded-full bg-gradient-to-br from-amber-100 to-violet-100 text-lg font-bold text-violet-700">
+                  {selectedPublicProfile.image ? (
+                    <img src={selectedPublicProfile.image} alt={selectedPublicProfile.name} className="h-full w-full object-cover" />
+                  ) : (
+                    selectedPublicProfile.name.split(' ').map((part) => part[0]).join('').slice(0, 2).toUpperCase()
+                  )}
+                </div>
+                <div>
+                  <p className="text-sm font-semibold text-violet-600">Good karma profile</p>
+                  <h3 className="text-xl font-bold text-slate-900">{selectedPublicProfile.name}</h3>
+                  <p className="text-sm text-slate-500">{selectedPublicProfile.location}</p>
+                </div>
+              </div>
+              <button onClick={() => setSelectedPublicProfile(null)} className="rounded-full bg-slate-100 px-3 py-2 text-sm font-semibold text-slate-600">
+                Close
+              </button>
+            </div>
+            <div className="mt-5 grid grid-cols-3 gap-2">
+              <div className="rounded-2xl bg-amber-50 p-3 text-center">
+                <p className="text-xl font-bold text-amber-700">{selectedPublicProfile.karma}</p>
+                <p className="text-xs text-slate-500">Karma score</p>
+              </div>
+              <div className="rounded-2xl bg-violet-50 p-3 text-center">
+                <p className="text-xl font-bold text-violet-700">{selectedPublicProfile.listings}</p>
+                <p className="text-xs text-slate-500">Products listed</p>
+              </div>
+              <div className="rounded-2xl bg-slate-50 p-3 text-center">
+                <p className="text-xl font-bold text-slate-900">₹0</p>
+                <p className="text-xs text-slate-500">Giving price</p>
+              </div>
+            </div>
+            <div className="mt-5 rounded-[1.5rem] border border-amber-100 bg-gradient-to-r from-amber-50 to-violet-50 p-4">
+              <p className="font-semibold text-slate-900">About {selectedPublicProfile.name}</p>
+              <p className="mt-2 text-sm leading-6 text-slate-600">
+                {selectedPublicProfile.name} has shared {selectedPublicProfile.listings} product{selectedPublicProfile.listings === 1 ? '' : 's'} around {selectedPublicProfile.location} and earned {selectedPublicProfile.karma} good karma points.
+              </p>
+            </div>
+            <div className="mt-5">
+              <p className="mb-3 font-semibold text-slate-900">Listed products</p>
+              {selectedPublicProfileItems.length === 0 ? (
+                <div className="rounded-2xl border border-dashed border-amber-200 bg-amber-50/50 p-4 text-sm text-slate-500">
+                  No active products visible right now.
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  {selectedPublicProfileItems.map((item) => (
+                    <button
+                      key={item.id}
+                      onClick={() => {
+                        setSelectedPublicProfile(null);
+                        setSelectedItem(item);
+                      }}
+                      className="flex w-full items-center gap-3 rounded-2xl border border-slate-100 bg-slate-50 p-2 text-left transition hover:bg-violet-50"
+                    >
+                      <img src={item.image} alt={item.title} className="h-12 w-12 shrink-0 rounded-xl object-cover" />
+                      <div className="min-w-0 flex-1">
+                        <p className="truncate text-sm font-semibold text-slate-900">{item.title}</p>
+                        <p className="truncate text-xs text-slate-500">{item.category} · {item.condition} · {item.distance}</p>
+                      </div>
+                      <span className="rounded-full bg-amber-50 px-3 py-1 text-xs font-bold text-amber-800">₹0</span>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showOtpModal && <OtpModal onClose={() => setShowOtpModal(false)} onVerify={handleLogin} />}
+      <ListingSheet
+        open={showListingSheet}
+        initialItem={editingItem}
+        onClose={() => {
+          setShowListingSheet(false);
+          setEditingItem(null);
+        }}
+        onSubmit={handleListingSubmit}
+      />
+      <BuyerPaySheet open={showBuyerPaySheet} onClose={() => setShowBuyerPaySheet(false)} onComplete={handleBuyerUnlockComplete} />
+      {quantityItem && (
+        <QuantityRequestModal
+          item={quantityItem}
+          buyerId={activeAccountId}
+          collectionSettings={quantityItem.isBusinessProduct ? getCollectionSettings(quantityItem.businessId) : null}
+          onClose={() => setQuantityItem(null)}
+          onConfirm={handleQuantityConfirm}
+        />
+      )}
+      <OrderSuccessModal
+        order={orderSuccess}
+        onClose={() => setOrderSuccess(null)}
+        onTrack={() => {
+          setOrderSuccess(null);
+          if (businessSession) navigate('/business/profile');
+          else handleNav('profile');
+        }}
+      />
+      <KarmaPopup open={showKarmaPopup} seller={karmaTarget} onSubmit={handleKarmaSubmit} mandatory={Boolean(karmaTarget?.mandatory)} />
+      <BotAssistant
+        open={showBotAssistant}
+        onClose={() => setShowBotAssistant(false)}
+        items={mergeListingsById(items, localBusinessSearchItems)}
+        favorites={favorites}
+        orders={orderHistory}
+        notifications={visibleNotifications}
+        locationLabel={locationLabel}
+        user={user}
+        onSelectItem={setSelectedItem}
+      />
+
+      <BusinessAuthModal
+        open={showBusinessAuth}
+        onClose={() => setShowBusinessAuth(false)}
+        onSuccess={(account) => {
+          localStorage.removeItem('zeromart-user');
+          setUser(null);
+          setBusinessSession(account);
+          setShowBusinessAuth(false);
+          navigate('/business/dashboard');
+        }}
+      />
+      <DemoFlowPanel
+        open={showDemoPanel}
+        currentRole={demoRole}
+        latestRequest={latestDemoRequest}
+        latestBusinessOrder={latestDemoBusinessOrder}
+        onClose={() => setShowDemoPanel(false)}
+        onBuyer={activateDemoBuyer}
+        onSeller={activateDemoSeller}
+        onBusiness={activateDemoBusiness}
+        onReset={resetDemoData}
+      />
+      <OnboardingTour open={!hasSeenTour} onFinish={handleTourFinish} />
+    </div>
   );
 }

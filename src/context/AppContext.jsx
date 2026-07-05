@@ -32,7 +32,7 @@ const PLATFORM_ANSWERS = {
   'reward': 'Sellers earn delivery credits and unlock vouchers from brands like Swiggy and BookMyShow when they hit karma milestones.',
   'account': 'One account can switch between Seller and Buyer mode anytime. Buyer mode requires a one-time ₹29 fee.',
   '29': 'The ₹29 is a one-time lifetime fee to unlock buyer access. Pay once, browse and buy forever.',
-  'chat': 'A temporary chat opens between buyer and seller only for in-person collection. It disappears once the handoff is complete.',
+  'chat': 'After a request is accepted, the buyer receives the seller phone number, pickup address, time, and instructions for direct coordination.',
   'report': 'Tap the flag icon on any listing or profile to report. Three verified reports trigger a review.',
   'voucher': 'Hit karma milestones (5, 10, 25 items given) to unlock real vouchers from partner brands.',
   'credits': 'Delivery credits are earned every time you successfully give away an item.',

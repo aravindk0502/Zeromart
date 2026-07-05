@@ -1,106 +1,73 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { X, Camera, Check, MapPin, Loader } from 'lucide-react';
-import { useApp, CATEGORIES } from '../context/AppContext';
+import { X, Camera, Check, MapPin, Calendar, ImagePlus } from 'lucide-react';
+import LocationPicker from './LocationPicker';
+import LocationMap from './LocationMap';
+import { useLocationEngine } from '../hooks/useLocationEngine';
+import { locationLabel } from '../services/locationService';
+
+const CATEGORIES = ['Food', 'Electronics', 'Books', 'Cosmetics', 'Movie Tickets', 'Others'];
 
 const CONDITIONS = ['Like New', 'Very Good', 'Good', 'Fair'];
 
 const CATEGORY_EMOJIS = {
-  Electronics: '📱', Furniture: '🪑', 'Baby & Kids': '🍼',
-  Sports: '⚽', Books: '📚', Appliances: '🍳', Clothing: '👕',
+  Food: '🍱',
+  Electronics: '📱',
+  Books: '📚',
+  Cosmetics: '🧴',
+  'Movie Tickets': '🎟️',
+  Others: '✨',
 };
 
-async function reverseGeocode(lat, lon) {
-  try {
-    const ctrl = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), 5000);
-    const res = await fetch(
-      `https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lon}&format=json`,
-      { signal: ctrl.signal }
-    );
-    clearTimeout(timer);
-    const data = await res.json();
-    const addr = data.address || {};
-    return addr.suburb || addr.neighbourhood || addr.village || addr.town || addr.city_district || addr.city || '';
-  } catch { return ''; }
-}
-
-async function searchPlaces(query) {
-  if (!query || query.length < 2) return [];
-  try {
-    const ctrl = new AbortController();
-    const t = setTimeout(() => ctrl.abort(), 5000);
-    const res = await fetch(
-      `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(query)}&format=json&limit=5&countrycodes=in&addressdetails=1`,
-      { signal: ctrl.signal }
-    );
-    clearTimeout(t);
-    const data = await res.json();
-    return data.map(r => {
-      const a = r.address || {};
-      const label = a.suburb || a.neighbourhood || a.village || a.town || a.city_district || a.city || r.display_name.split(',')[0];
-      const city  = a.city || a.town || a.state_district || '';
-      return { label, city };
-    }).filter((r, i, arr) => arr.findIndex(x => x.label === r.label) === i);
-  } catch { return []; }
-}
-
-export default function ListingSheet() {
-  const { listingSheet, setListingSheet, addProduct, requireAuth, setPage } = useApp();
+export default function ListingSheet({ open, onClose, onSubmit, initialItem = null }) {
+  const locationEngine = useLocationEngine();
   const [photo, setPhoto]       = useState(null);
   const [title, setTitle]       = useState('');
   const [desc, setDesc]         = useState('');
   const [category, setCategory] = useState('');
+  const [customCategory, setCustomCategory] = useState('');
   const [condition, setCondition] = useState('Good');
+  const [expiry, setExpiry] = useState('');
+  const [expiryTime, setExpiryTime] = useState('');
+  const [totalQuantity, setTotalQuantity] = useState(1);
   const [area, setArea]           = useState('');
-  const [locStatus, setLocStatus] = useState('idle');
-  const [suggestions, setSuggestions] = useState([]);
-  const [suggesting, setSuggesting]   = useState(false);
+  const [coordinates, setCoordinates] = useState(null);
+  const [pickupLocation, setPickupLocation] = useState(null);
+  const [showLocationPicker, setShowLocationPicker] = useState(false);
   const [posted, setPosted]       = useState(false);
   const fileRef    = useRef(null);
-  const debounceRef = useRef(null);
+  const cameraRef = useRef(null);
 
   useEffect(() => {
-    if (!listingSheet) return;
-    // Auto-detect location when sheet opens
-    if (!navigator.geolocation) { setLocStatus('manual'); return; }
-    setLocStatus('detecting');
-    navigator.geolocation.getCurrentPosition(
-      async pos => {
-        const place = await reverseGeocode(pos.coords.latitude, pos.coords.longitude);
-        setArea(prev => prev || place); // don't overwrite if user already typed
-        setLocStatus(place ? 'found' : 'manual');
-      },
-      () => setLocStatus('denied'),
-      { timeout: 6000, maximumAge: 60000, enableHighAccuracy: false }
-    );
-  }, [listingSheet]);
+    if (!open) return;
+    if (initialItem) {
+      const isKnownCategory = CATEGORIES.includes(initialItem.category);
+      setPhoto(initialItem.image || null);
+      setTitle(initialItem.title || '');
+      setDesc(initialItem.description || '');
+      setCategory(isKnownCategory ? initialItem.category : 'Others');
+      setCustomCategory(isKnownCategory ? '' : initialItem.category || '');
+      setCondition(initialItem.condition || 'Good');
+      setExpiry(initialItem.validTill || '');
+      setExpiryTime(initialItem.expiryTime || '');
+      setTotalQuantity(Number(initialItem.totalQuantity || initialItem.quantity || 1));
+      setArea(initialItem.location || '');
+      setCoordinates(initialItem.coordinates || null);
+      setPickupLocation(initialItem.locationData || null);
+      return;
+    }
+    if (locationEngine.location) {
+      setPickupLocation(locationEngine.location);
+      setArea(locationLabel(locationEngine.location));
+      setCoordinates({ latitude: locationEngine.location.latitude, longitude: locationEngine.location.longitude });
+    }
+  }, [locationEngine.location, open, initialItem]);
 
-  if (!listingSheet) return null;
+  if (!open) return null;
 
   function reset() {
     setPhoto(null); setTitle(''); setDesc('');
-    setCategory(''); setCondition('Good');
-    setArea(''); setLocStatus('idle'); setSuggestions([]); setPosted(false);
-  }
-
-  function handleAreaInput(val) {
-    setArea(val);
-    setLocStatus('manual');
-    setSuggestions([]);
-    clearTimeout(debounceRef.current);
-    if (!val.trim() || val.length < 2) { setSuggesting(false); return; }
-    setSuggesting(true);
-    debounceRef.current = setTimeout(async () => {
-      const results = await searchPlaces(val);
-      setSuggestions(results);
-      setSuggesting(false);
-    }, 350);
-  }
-
-  function pickSuggestion(s) {
-    setArea(s.label);
-    setSuggestions([]);
-    setLocStatus('manual');
+    setCategory(''); setCustomCategory(''); setCondition('Good'); setExpiry(''); setExpiryTime(''); setTotalQuantity(1);
+    setArea(''); setCoordinates(null); setPickupLocation(null); setPosted(false);
   }
 
   function handlePhoto(e) {
@@ -108,27 +75,44 @@ export default function ListingSheet() {
     if (file) setPhoto(URL.createObjectURL(file));
   }
 
-  function canPost() { return photo && title.trim() && category; }
+  function canPost() {
+    return photo && title.trim() && category && pickupLocation
+      && (category !== 'Others' || customCategory.trim());
+  }
 
   function doPost() {
-    addProduct({
-      title: title.trim(), category,
-      emoji: CATEGORY_EMOJIS[category] || '📦',
-      condition, description: desc.trim(),
-      photo, area: area.trim(),
+    onSubmit({
+      title: title.trim(),
+      category: category === 'Others' ? customCategory.trim() : category,
+      condition,
+      description: desc.trim(),
+      pickupArea: area.trim(),
+      coordinates,
+      locationData: pickupLocation,
+      image: photo || '',
+      validTill: expiry,
+      expiryDate: expiry,
+      expiryTime,
+      totalQuantity,
+      availableQuantity: initialItem ? Number(initialItem.availableQuantity ?? totalQuantity) : totalQuantity,
+      reservedQuantity: Number(initialItem?.reservedQuantity || 0),
+      soldQuantity: Number(initialItem?.soldQuantity || 0),
+      maxQuantityPerUserPer24h: 2,
+      listingType: 'community',
+      deliveryMode: 'pickup',
+      allowInPersonCollection: true,
     });
     setPosted(true);
     setTimeout(() => {
-      setListingSheet(false);
       reset();
-      setPage('home'); // take user to home feed so they see their listing
-    }, 1800);
+      onClose();
+    }, 1400);
   }
 
-  function post() { if (!canPost()) return; requireAuth(doPost); }
-  function close() { setListingSheet(false); reset(); }
+  function post() { if (!canPost()) return; doPost(); }
+  function close() { reset(); onClose(); }
 
-  const cats = CATEGORIES.filter(c => c !== 'All');
+  const cats = CATEGORIES;
 
   return (
     <div className="overlay">
@@ -137,8 +121,8 @@ export default function ListingSheet() {
 
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 20 }}>
           <div>
-            <div style={{ fontSize: 18, fontWeight: 700, fontFamily: 'Sora, sans-serif' }}>List for free</div>
-            <div style={{ fontSize: 12, color: 'var(--zm-text-dim)' }}>Photo · details · live instantly</div>
+            <div style={{ fontSize: 18, fontWeight: 700, fontFamily: 'Sora, sans-serif' }}>{initialItem ? 'Edit listing' : 'List for free'}</div>
+            <div style={{ fontSize: 12, color: 'var(--zm-text-dim)' }}>{initialItem ? 'Update your product details' : 'Photo · details · live instantly'}</div>
           </div>
           <button onClick={close} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--zm-text-muted)' }}>
             <X size={20} />
@@ -158,27 +142,34 @@ export default function ListingSheet() {
         ) : (
           <>
             {/* Photo */}
-            <div
-              onClick={() => fileRef.current?.click()}
-              style={{ height: 140, borderRadius: 16, border: `2px dashed ${photo ? 'var(--zm-accent)' : 'var(--zm-border)'}`, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', marginBottom: 12, overflow: 'hidden', background: photo ? 'transparent' : 'var(--zm-surface2)' }}
-            >
+            <div onClick={() => fileRef.current?.click()} style={{ height: 140, borderRadius: 16, border: `2px dashed ${photo ? 'var(--zm-accent)' : 'var(--zm-border)'}`, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', marginBottom: 10, overflow: 'hidden', background: photo ? 'transparent' : 'var(--zm-surface2)', cursor: 'pointer' }}>
               {photo ? (
                 <img src={photo} alt="Product" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
               ) : (
                 <>
                   <Camera size={28} color="var(--zm-text-dim)" style={{ marginBottom: 6 }} />
-                  <span style={{ fontSize: 13, color: 'var(--zm-text-muted)' }}>Tap to add a photo</span>
-                  <span style={{ fontSize: 11, color: 'var(--zm-text-dim)', marginTop: 2 }}>Required</span>
+                  <span style={{ fontSize: 13, color: 'var(--zm-text-muted)' }}>Add product photo</span>
+                  <span className="hidden sm:inline" style={{ fontSize: 11, color: 'var(--zm-text-dim)', marginTop: 2 }}>Click to upload · Required</span>
+                  <span className="sm:hidden" style={{ fontSize: 11, color: 'var(--zm-text-dim)', marginTop: 2 }}>Use camera or gallery · Required</span>
                 </>
               )}
             </div>
+            <div className="grid grid-cols-2 gap-2 sm:hidden" style={{ marginBottom: 12 }}>
+              <button type="button" onClick={() => cameraRef.current?.click()} style={{ borderRadius: 12, border: '1px solid var(--zm-border)', background: 'var(--zm-card)', padding: '10px 12px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, fontSize: 13, fontWeight: 600, color: 'var(--zm-text-muted)' }}>
+                <Camera size={16} /> Camera
+              </button>
+              <button type="button" onClick={() => fileRef.current?.click()} style={{ borderRadius: 12, border: '1px solid var(--zm-border)', background: 'var(--zm-card)', padding: '10px 12px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, fontSize: 13, fontWeight: 600, color: 'var(--zm-text-muted)' }}>
+                <ImagePlus size={16} /> Gallery
+              </button>
+            </div>
+            <input ref={cameraRef} type="file" accept="image/*" capture="environment" style={{ display: 'none' }} onChange={handlePhoto} />
             <input ref={fileRef} type="file" accept="image/*" style={{ display: 'none' }} onChange={handlePhoto} />
 
             {/* Title */}
             <div style={{ marginBottom: 10 }}>
               <input
                 className="input"
-                placeholder="What are you giving away? (e.g. Sony Speaker)"
+                placeholder="Product name (e.g. rice bag, speaker, novel)"
                 value={title}
                 onChange={e => setTitle(e.target.value)}
                 maxLength={60}
@@ -204,6 +195,16 @@ export default function ListingSheet() {
                   </button>
                 ))}
               </div>
+              {category === 'Others' && (
+                <input
+                  className="input"
+                  placeholder="Enter category name"
+                  value={customCategory}
+                  onChange={e => setCustomCategory(e.target.value)}
+                  maxLength={32}
+                  style={{ marginTop: 8 }}
+                />
+              )}
             </div>
 
             {/* Condition */}
@@ -231,65 +232,66 @@ export default function ListingSheet() {
             <div style={{ marginBottom: 12 }}>
               <textarea
                 className="input textarea"
-                placeholder="Any extra details? (optional)"
+                placeholder="Description (optional)"
                 value={desc}
                 onChange={e => setDesc(e.target.value)}
-                style={{ fontSize: 13, minHeight: 56 }}
+                style={{ fontSize: 13, minHeight: 72 }}
               />
             </div>
 
-            {/* Location with autocomplete */}
+            <div style={{ marginBottom: 12 }}>
+              <div style={{ fontSize: 12, color: 'var(--zm-text-muted)', marginBottom: 6, display: 'flex', alignItems: 'center', gap: 4 }}>
+                <Calendar size={12} /> Valid till
+              </div>
+              <input
+                className="input"
+                type="date"
+                value={expiry}
+                onChange={e => setExpiry(e.target.value)}
+              />
+            </div>
+
+            <div className="mb-3 grid grid-cols-2 gap-2">
+              <label className="text-xs font-semibold text-slate-600">
+                Total quantity
+                <input className="input mt-1" type="number" min="1" value={totalQuantity} onChange={(event) => setTotalQuantity(Math.max(1, Number(event.target.value || 1)))} />
+              </label>
+              <label className="text-xs font-semibold text-slate-600">
+                Expiry time (optional)
+                <input className="input mt-1" type="time" value={expiryTime} onChange={(event) => setExpiryTime(event.target.value)} />
+              </label>
+            </div>
+
+            {/* Structured pickup location */}
             <div style={{ marginBottom: 14 }}>
               <div style={{ fontSize: 12, color: 'var(--zm-text-muted)', marginBottom: 6, display: 'flex', alignItems: 'center', gap: 4 }}>
                 <MapPin size={12} /> Pickup location
               </div>
-              <div style={{ position: 'relative' }}>
-                <input
-                  className="input"
-                  placeholder="Type area or city…"
-                  value={area}
-                  onChange={e => handleAreaInput(e.target.value)}
-                  style={{ paddingRight: 36 }}
-                  autoComplete="off"
-                />
-                <div style={{ position: 'absolute', right: 12, top: '50%', transform: 'translateY(-50%)' }}>
-                  {(locStatus === 'detecting' || suggesting) && <Loader size={14} color="var(--zm-accent)" style={{ animation: 'spin 1s linear infinite' }} />}
-                  {locStatus === 'found' && !suggesting && <MapPin size={14} color="var(--zm-green)" />}
+              <div className="rounded-xl border border-emerald-100 bg-emerald-50/60 p-3">
+                <div className="flex items-start gap-3">
+                  <span className="rounded-lg bg-white p-2 text-emerald-700 shadow-sm"><MapPin size={16} /></span>
+                  <div className="min-w-0 flex-1">
+                    <p className="text-sm font-bold text-slate-800">{area || 'Choose a pickup location'}</p>
+                    {pickupLocation?.fullAddress && <p className="mt-1 line-clamp-2 text-xs leading-5 text-slate-500">{pickupLocation.fullAddress}</p>}
+                  </div>
+                  <button type="button" onClick={() => setShowLocationPicker(true)} className="rounded-lg bg-white px-3 py-2 text-xs font-bold text-emerald-700 shadow-sm">Change</button>
                 </div>
-
-                {/* Dropdown */}
-                {suggestions.length > 0 && (
-                  <div style={{ position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 200, background: 'var(--zm-card)', border: '1px solid var(--zm-border)', borderRadius: 12, marginTop: 4, boxShadow: '0 8px 24px rgba(0,0,0,0.4)', overflow: 'hidden' }}>
-                    {suggestions.map((s, i) => (
-                      <div
-                        key={i}
-                        onMouseDown={e => { e.preventDefault(); pickSuggestion(s); }}
-                        style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 14px', cursor: 'pointer', borderBottom: i < suggestions.length - 1 ? '1px solid var(--zm-border)' : 'none' }}
-                        onMouseEnter={e => e.currentTarget.style.background = 'var(--zm-surface2)'}
-                        onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
-                      >
-                        <MapPin size={12} color="var(--zm-green)" style={{ flexShrink: 0 }} />
-                        <div>
-                          <div style={{ fontSize: 13, fontWeight: 500 }}>{s.label}</div>
-                          {s.city && s.city !== s.label && <div style={{ fontSize: 11, color: 'var(--zm-text-dim)' }}>{s.city}</div>}
-                        </div>
-                      </div>
-                    ))}
+                {pickupLocation && (
+                  <div className="mt-3">
+                    <LocationMap latitude={pickupLocation.latitude} longitude={pickupLocation.longitude} title={area || 'Listing location'} height={150} />
+                    <p className="mt-2 text-xs font-semibold text-emerald-800">Your listing will appear for buyers near {area}.</p>
                   </div>
                 )}
               </div>
               <div style={{ fontSize: 11, color: 'var(--zm-text-dim)', marginTop: 4 }}>
-                {locStatus === 'detecting' && 'Detecting your location…'}
-                {locStatus === 'found'     && '📍 Current location detected — edit if needed'}
-                {locStatus === 'denied'    && 'Location access denied — type your area above'}
-                {(locStatus === 'idle' || locStatus === 'manual') && 'Start typing to search for your area'}
+                {pickupLocation ? 'Coordinates and full address will be saved with this product.' : 'Choose your store or pickup point before publishing.'}
               </div>
             </div>
 
             {/* Price row */}
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: 'var(--zm-surface2)', borderRadius: 12, padding: '10px 14px', marginBottom: 14 }}>
               <span style={{ fontSize: 13, color: 'var(--zm-text-muted)' }}>Listing price</span>
-              <span style={{ fontSize: 16, fontWeight: 700, color: 'var(--zm-green)' }}>₹0 — FREE</span>
+              <span style={{ fontSize: 16, fontWeight: 700, color: 'var(--zm-green)' }}>₹0</span>
             </div>
 
             <button
@@ -301,11 +303,26 @@ export default function ListingSheet() {
               {!photo ? 'Add a photo to continue'
                 : !title.trim() ? 'Add a title to continue'
                 : !category ? 'Pick a category to continue'
-                : "Post listing — it's free"}
+                : !pickupLocation ? 'Choose pickup location'
+                : category === 'Others' && !customCategory.trim() ? 'Enter category to continue'
+                : initialItem ? 'Save changes' : "Post listing — it's free"}
             </button>
           </>
         )}
       </div>
+      <LocationPicker
+        open={showLocationPicker}
+        onClose={() => setShowLocationPicker(false)}
+        onSelect={(location) => {
+          setPickupLocation(location);
+          setArea(locationLabel(location));
+          setCoordinates({ latitude: location.latitude, longitude: location.longitude });
+        }}
+        title="Choose Pickup Location"
+        requireAddressDetails={false}
+        requiredDetails={[]}
+        addressTypeDefault="Other"
+      />
     </div>
   );
 }

@@ -29,7 +29,7 @@ export default function CollectRequestHandler() {
           <div style={{ fontSize: 18, fontWeight: 700, fontFamily: 'Sora, sans-serif', marginBottom: 6 }}>Collect request sent!</div>
           <div style={{ fontSize: 13, color: 'var(--zm-text-muted)', lineHeight: 1.6 }}>
             Waiting for <strong>{p.seller.name}</strong> to accept.<br />
-            If they accept, a chat opens to coordinate.
+            If they accept, their phone number, pickup address, time, and instructions will appear in your notifications.
           </div>
         </div>
 

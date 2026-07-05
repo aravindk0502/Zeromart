@@ -1,31 +1,57 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { X, Send, Bot, Search, MapPin, Star } from 'lucide-react';
-import { useApp } from '../context/AppContext';
 
 const SUGGESTIONS = [
-  'Find books near me',
-  'Any electronics?',
+  'What is near me?',
+  'Show food in Koramangala',
+  'Movie tickets?',
   'How does karma work?',
   'What is ₹29 for?',
-  'How to sell?',
 ];
 
 const PLATFORM_QA = [
   { keys: ['how to sell', 'list item', 'post item', 'give away', 'listing'], answer: 'Tap the + button at the bottom to list a product. Take a photo, add a short description, pick a category — it goes live instantly. Completely free!' },
   { keys: ['how to buy', 'how to request', 'get item', 'buying'], answer: 'Pay a one-time ₹29 to unlock buyer access forever. Then browse, search, and request any item you like.' },
-  { keys: ['delivery', 'shipping', 'courier', 'porter', 'shadowfax'], answer: 'The buyer pays the actual delivery cost. We partner with Shadowfax and Porter. Prices are shown before you confirm.' },
+  { keys: ['delivery', 'shipping', 'courier', 'porter', 'shadowfax', 'uber'], answer: 'ZeroMart currently uses direct collection coordination. Use the seller chat to arrange pickup or your own courier service and share the required contact details.' },
   { keys: ['karma', 'points', 'rating', 'review'], answer: 'Karma points are given by buyers after receiving an item. Higher karma = more visibility and better rewards. You earn 1 karma per successful transaction.' },
-  { keys: ['in person', 'collect', 'pickup', 'nearby'], answer: 'If a seller is within 1 km, you can request to collect in person. A temporary chat opens to coordinate — it deletes once the handoff is done.' },
+  { keys: ['in person', 'collect', 'pickup', 'nearby'], answer: 'Request collection on the item, then use the temporary seller chat to coordinate the handoff. You can share your location or phone number there.' },
   { keys: ['free', 'cost', 'charge', 'fee', 'price'], answer: 'Yes! Listing on ZeroMart is completely free for sellers. Items are listed at ₹0.' },
   { keys: ['reward', 'voucher', 'swiggy', 'bookmyshow', 'myntra', 'milestone'], answer: 'Sellers earn delivery credits and unlock brand vouchers (Swiggy, BookMyShow, Myntra) when they hit karma milestones at 5, 10, 25+ items given.' },
-  { keys: ['account', 'profile', 'login', 'sign up', 'otp', 'mobile', 'number'], answer: 'You need your mobile number only when you buy or sell — we send a quick OTP to verify. One account switches between Seller and Buyer mode.' },
+  { keys: ['account', 'profile', 'login', 'sign up', 'otp', 'mobile', 'number'], answer: 'You need your mobile number only when you buy or sell — we send a quick OTP to verify. One account lets you list for ₹0 and buy ₹0 items after lifetime access.' },
   { keys: ['₹29', '29', 'one time', 'lifetime', 'unlock'], answer: 'The ₹29 is a one-time lifetime fee to unlock buyer access. Pay once, browse and buy forever. No subscriptions.' },
-  { keys: ['chat', 'message', 'talk', 'contact'], answer: 'A temporary chat opens between buyer and seller only when a seller accepts an in-person collection request. It disappears once the handoff is complete.' },
+  { keys: ['chat', 'message', 'talk', 'contact'], answer: 'After a seller accepts your request, their phone number, pickup address, time, and instructions appear in Alerts. You can call or use WhatsApp to coordinate.' },
   { keys: ['report', 'fraud', 'fake', 'scam', 'block'], answer: 'Tap the flag icon on any listing or profile to report. Three verified reports trigger a review. Serious fraud leads to a permanent ban.' },
   { keys: ['credit', 'delivery credit', 'offset'], answer: 'Delivery credits are earned every time you give away an item. Use them to offset your own delivery costs when buying.' },
 ];
 
 const SEARCH_TRIGGERS = ['find', 'search', 'show', 'any', 'looking for', 'do you have', 'got any', 'need', 'want', 'available'];
+const STOP_WORDS = ['near', 'me', 'please', 'the', 'any', 'for', 'some', 'got', 'you', 'have', 'what', 'which', 'with', 'and', 'item', 'items', 'product', 'products', 'zero', 'zeromart'];
+const FEATURE_TOPICS = [
+  {
+    keys: ['feature', 'platform', 'how works', 'what can', 'inside'],
+    answer: 'ZeroMart lets you browse ₹0 items, list products for free, save favorites, search by keyword/location/category/condition, request collection, coordinate by phone or WhatsApp after acceptance, track orders, receive notifications, and ask ZeroBot for help.',
+  },
+  {
+    keys: ['footer', 'terms', 'faq', 'support', 'contact', 'blog', 'social'],
+    answer: 'The footer has Terms and conditions, FAQ, Blogs, Help and support, Contact us, Safety guide, and social links for Instagram, LinkedIn, and X / Twitter.',
+  },
+  {
+    keys: ['location', 'area', 'km', 'radius', 'filter'],
+    answer: 'Use the top location selector or homepage filters to search by area and km radius. The platform supports places like Koramangala, Indiranagar, Jayanagar, HSR Layout, and Whitefield, plus current location.',
+  },
+  {
+    keys: ['favorite', 'favourite', 'saved'],
+    answer: 'Tap the heart on any product to save it. Favorites are available from the bottom nav and show saved product photos and details.',
+  },
+  {
+    keys: ['notification', 'alert', 'updates'],
+    answer: 'Alerts are clickable. Product notifications open the related product, and platform updates open an information detail card.',
+  },
+  {
+    keys: ['profile', 'history', 'order', 'listed', 'collected', 'active listings', 'given away'],
+    answer: 'Profile shows karma points, item activity, clickable items listed, items collected, active listings, given away, and order history with delivery or personal collection status.',
+  },
+];
 
 function isProductSearch(q) {
   const lower = q.toLowerCase();
@@ -34,21 +60,87 @@ function isProductSearch(q) {
 
 function searchProducts(query, products) {
   const q = query.toLowerCase().replace(/[?!.,]/g, '');
-  const words = q.split(/\s+/).filter(w => w.length > 2 && !SEARCH_TRIGGERS.includes(w) && !['near', 'me', 'please', 'the', 'any', 'for', 'some', 'got', 'you', 'have'].includes(w));
+  const words = q.split(/\s+/).filter(w => w.length > 2 && !SEARCH_TRIGGERS.includes(w) && !STOP_WORDS.includes(w));
 
   if (!words.length) return products.slice(0, 4);
 
-  return products.filter(p => {
-    const haystack = (p.title + ' ' + p.category + ' ' + p.description).toLowerCase();
-    return words.some(w => haystack.includes(w));
-  }).slice(0, 4);
+  return products
+    .map(p => {
+      const haystack = [
+        p.title,
+        p.brand,
+        p.category,
+        p.condition,
+        p.description,
+        p.location,
+        p.sellerName,
+        p.status,
+        p.distance,
+      ].filter(Boolean).join(' ').toLowerCase();
+      const score = words.reduce((total, word) => {
+        if (haystack.includes(word)) return total + 2;
+        if (word.endsWith('s') && haystack.includes(word.slice(0, -1))) return total + 1;
+        return total;
+      }, 0);
+      return { product: p, score };
+    })
+    .filter(entry => entry.score > 0)
+    .sort((a, b) => b.score - a.score)
+    .map(entry => entry.product)
+    .slice(0, 5);
 }
 
 function getPlatformAnswer(question) {
   const q = question.toLowerCase();
+  for (const { keys, answer } of FEATURE_TOPICS) {
+    if (keys.some(k => q.includes(k))) return answer;
+  }
   for (const { keys, answer } of PLATFORM_QA) {
     if (keys.some(k => q.includes(k))) return answer;
   }
+  return null;
+}
+
+function buildContextAnswer(question, context) {
+  const q = question.toLowerCase();
+  const products = context.items || [];
+  const locations = [...new Set(products.map(item => item.location).filter(Boolean))];
+  const categories = [...new Set(products.map(item => item.category).filter(Boolean))];
+
+  if (q.includes('how many') || q.includes('summary') || q.includes('dashboard')) {
+    return `I can see ${products.length} products, ${categories.length} categories, ${locations.length} locations, ${context.favorites?.length || 0} favorites, ${context.orders?.length || 0} orders, and ${context.notifications?.length || 0} notifications in this ZeroMart session.`;
+  }
+
+  if (q.includes('category') || q.includes('categories')) {
+    return categories.length
+      ? `Available categories: ${categories.join(', ')}. Ask me for any category, like "show ${categories[0]}".`
+      : 'I do not see categories yet because no products are loaded.';
+  }
+
+  if (q.includes('where') || q.includes('location') || q.includes('area')) {
+    return locations.length
+      ? `Products are currently listed around ${locations.join(', ')}. Your selected area is ${context.locationLabel || 'Your area'}.`
+      : `Your selected area is ${context.locationLabel || 'Your area'}, but I do not see product locations yet.`;
+  }
+
+  if (q.includes('favorite') || q.includes('favourite') || q.includes('saved')) {
+    return context.favorites?.length
+      ? `You have ${context.favorites.length} favorite item${context.favorites.length === 1 ? '' : 's'}. Ask "show my favorites" to open them here.`
+      : 'You have no favorites yet. Tap the heart on any product to save it.';
+  }
+
+  if (q.includes('order') || q.includes('delivery status') || q.includes('collected')) {
+    return context.orders?.length
+      ? `You have ${context.orders.length} order history entr${context.orders.length === 1 ? 'y' : 'ies'}. Delivery orders show delivery status, and in-person handoffs show collected personally in Profile.`
+      : 'No orders yet. When you request delivery or collect personally, it will appear in Profile order history.';
+  }
+
+  if (q.includes('notification') || q.includes('alert')) {
+    return context.notifications?.length
+      ? `You have ${context.notifications.length} notification${context.notifications.length === 1 ? '' : 's'}. Product alerts open product pages; platform updates show an info card.`
+      : 'No notifications yet.';
+  }
+
   return null;
 }
 
@@ -65,20 +157,24 @@ function ProductResultCard({ product, onOpen }) {
       onMouseEnter={e => e.currentTarget.style.borderColor = 'var(--zm-accent)'}
       onMouseLeave={e => e.currentTarget.style.borderColor = 'var(--zm-border)'}
     >
-      <div style={{ fontSize: 28, width: 40, height: 40, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'var(--zm-card)', borderRadius: 8, flexShrink: 0 }}>
-        {product.emoji}
-      </div>
+      {product.image ? (
+        <img src={product.image} alt={product.title} style={{ width: 44, height: 44, objectFit: 'cover', borderRadius: 10, flexShrink: 0 }} />
+      ) : (
+        <div style={{ fontSize: 20, width: 44, height: 44, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'var(--zm-card)', borderRadius: 10, flexShrink: 0 }}>
+          ₹0
+        </div>
+      )}
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ fontSize: 13, fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', marginBottom: 2 }}>
           {product.title}
         </div>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-          <span style={{ fontSize: 11, color: 'var(--zm-green)', fontWeight: 600 }}>FREE</span>
+          <span style={{ fontSize: 11, color: 'var(--zm-green)', fontWeight: 600 }}>₹0</span>
           <span style={{ display: 'flex', alignItems: 'center', gap: 2, fontSize: 11, color: 'var(--zm-text-dim)' }}>
-            <MapPin size={9} /> {product.distance} km
+            <MapPin size={9} /> {product.location} · {product.distance}
           </span>
           <span style={{ display: 'flex', alignItems: 'center', gap: 2, fontSize: 11, color: 'var(--zm-amber)' }}>
-            <Star size={9} fill="currentColor" /> {product.seller.karma}
+            <Star size={9} fill="currentColor" /> {product.sellerKarma || 0}
           </span>
         </div>
       </div>
@@ -128,10 +224,9 @@ function BotMessage({ msg, onOpenProduct }) {
   );
 }
 
-export default function BotAssistant() {
-  const { botOpen, setBotOpen, products, setSelectedProduct } = useApp();
+export default function BotAssistant({ open, onClose, items = [], favorites = [], orders = [], notifications = [], locationLabel, user, onSelectItem }) {
   const [messages, setMessages] = useState([
-    { id: 0, from: 'bot', text: "Hi! I'm ZeroBot 🤖 — Ask me to find items near you (e.g. \"find books\", \"any electronics?\") or ask how ZeroMart works." }
+    { id: 0, from: 'bot', text: "Hi! I'm ZeroBot. I can search products, locations, categories, favorites, order history, notifications, and explain ZeroMart features in this chat." }
   ]);
   const [input, setInput] = useState('');
   const [typing, setTyping] = useState(false);
@@ -153,12 +248,21 @@ export default function BotAssistant() {
     setTimeout(() => {
       setTyping(false);
 
-      // Product search intent
-      if (isProductSearch(question)) {
-        const results = searchProducts(question, products);
+      const botContext = { items, favorites, orders, notifications, locationLabel, user };
+      const favoriteIntent = question.toLowerCase().includes('show my favorite') || question.toLowerCase().includes('show favourite');
+      const contextAnswer = buildContextAnswer(question, botContext);
+      if (contextAnswer && !favoriteIntent) {
+        setMessages(prev => [...prev, { id: Date.now() + 1, from: 'bot', text: contextAnswer }]);
+        return;
+      }
+
+      const productsToSearch = favoriteIntent ? favorites : items;
+      const productIntent = isProductSearch(question) || searchProducts(question, productsToSearch).length > 0;
+      if (productIntent) {
+        const results = favoriteIntent ? productsToSearch.slice(0, 5) : searchProducts(question, productsToSearch);
         const resultMsg = results.length > 0
-          ? `Found ${results.length} item${results.length > 1 ? 's' : ''} near you:`
-          : 'Searched all listings near you.';
+          ? `Found ${results.length} matching ₹0 item${results.length > 1 ? 's' : ''}:`
+          : `I searched ${productsToSearch.length} platform item${productsToSearch.length === 1 ? '' : 's'} but did not find a match. Try a category, location, seller, or product name.`;
         setMessages(prev => [...prev, { id: Date.now() + 1, type: 'products', text: resultMsg, products: results }]);
         return;
       }
@@ -168,17 +272,17 @@ export default function BotAssistant() {
       setMessages(prev => [...prev, {
         id: Date.now() + 1,
         from: 'bot',
-        text: answer || "I can help you find items or answer questions about ZeroMart. Try: \"find clothes\", \"how does karma work?\", or \"what is ₹29 for?\"",
+        text: answer || `I checked the current platform context. Ask me about products, locations, categories, favorites, orders, notifications, karma, delivery, listing, or the ₹29 lifetime buying access.`,
       }]);
     }, 600);
   }
 
   function handleOpenProduct(product) {
-    setBotOpen(false);
-    setSelectedProduct(product);
+    onClose();
+    onSelectItem(product);
   }
 
-  if (!botOpen) return null;
+  if (!open) return null;
 
   return (
     <div className="overlay">
@@ -192,7 +296,7 @@ export default function BotAssistant() {
             <div style={{ fontSize: 14, fontWeight: 600 }}>ZeroBot</div>
             <div style={{ fontSize: 11, color: 'var(--zm-text-dim)' }}>Find items · Platform help</div>
           </div>
-          <button onClick={() => setBotOpen(false)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--zm-text-muted)' }}>
+          <button onClick={onClose} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--zm-text-muted)' }}>
             <X size={18} />
           </button>
         </div>

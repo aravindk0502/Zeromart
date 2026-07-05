@@ -1,59 +1,20 @@
 import React, { useState } from 'react';
 import { X, ShoppingBag, CheckCircle, Zap, Star } from 'lucide-react';
-import { useApp } from '../context/AppContext';
-import { createRazorpayOrder, verifyPayment } from '../lib/api';
 
-export default function BuyerPaySheet() {
-  const { buyerPaySheet, setBuyerPaySheet, completeBuyerPayment, user } = useApp();
+export default function BuyerPaySheet({ open, onClose, onComplete }) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
-  if (!buyerPaySheet) return null;
+  if (!open) return null;
 
   async function handlePay() {
     setError('');
     setLoading(true);
     try {
-      const order = await createRazorpayOrder(2900);
-
-      if (order.demo) {
-        // No Razorpay keys — demo mode
-        completeBuyerPayment();
-        return;
-      }
-
-      // Open Razorpay checkout
-      const rzp = new window.Razorpay({
-        key: order.key_id,
-        amount: order.amount,
-        currency: order.currency,
-        name: 'ZeroMart',
-        description: 'Buyer access — lifetime',
-        image: '/icon-192.png',
-        order_id: order.order_id,
-        prefill: {
-          contact: user.phone ? `+91${user.phone}` : '',
-        },
-        theme: { color: '#7c5cfc' },
-        modal: {
-          ondismiss: () => setLoading(false),
-        },
-        handler: async (response) => {
-          try {
-            await verifyPayment({
-              razorpay_order_id:   response.razorpay_order_id,
-              razorpay_payment_id: response.razorpay_payment_id,
-              razorpay_signature:  response.razorpay_signature,
-              userId: user.supabaseId,
-            });
-            completeBuyerPayment();
-          } catch (err) {
-            setError('Payment verified but account upgrade failed. Contact support.');
-            setLoading(false);
-          }
-        },
-      });
-      rzp.open();
+      setTimeout(() => {
+        onComplete();
+        setLoading(false);
+      }, 900);
     } catch (err) {
       setError(err.message || 'Payment failed. Try again.');
       setLoading(false);
@@ -70,9 +31,9 @@ export default function BuyerPaySheet() {
         </div>
 
         <div style={{ textAlign: 'center', marginBottom: 24 }}>
-          <div style={{ fontSize: 24, fontWeight: 700, fontFamily: 'Sora, sans-serif', marginBottom: 6 }}>Unlock Buyer Access</div>
+          <div style={{ fontSize: 24, fontWeight: 700, fontFamily: 'Sora, sans-serif', marginBottom: 6 }}>Platform fee for buyer access</div>
           <div style={{ fontSize: 13, color: 'var(--zm-text-muted)', lineHeight: 1.6 }}>
-            One payment. Lifetime access.<br />Browse and request anything on ZeroMart.
+            Pay ₹29 once for lifetime access.<br />Then request any ₹0 item on ZeroMart.
           </div>
         </div>
 
@@ -111,7 +72,7 @@ export default function BuyerPaySheet() {
           {loading ? 'Opening payment…' : 'Pay ₹29 and unlock forever'}
         </button>
 
-        <button className="btn btn-ghost btn-full" style={{ marginTop: 8 }} onClick={() => setBuyerPaySheet(false)}>
+        <button className="btn btn-ghost btn-full" style={{ marginTop: 8 }} onClick={onClose}>
           Maybe later
         </button>
       </div>

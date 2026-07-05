@@ -1,6 +1,4 @@
-import React from 'react';
-import { Star, Zap, Gift, Package, Award, ArrowLeft } from 'lucide-react';
-import { useApp } from '../context/AppContext';
+import { ArrowLeft, Award, Gift, Package, Star, Zap } from 'lucide-react';
 
 const KARMA_MILESTONES = [
   { at: 5, reward: 'Swiggy ₹50 voucher', icon: '🍔', unlocked: true },
@@ -9,137 +7,96 @@ const KARMA_MILESTONES = [
   { at: 50, reward: 'Nykaa ₹300 voucher', icon: '💄', unlocked: false },
 ];
 
-export default function SellerPage() {
-  const { user, userListings, setListingSheet, triggerKarmaPopup, setPage } = useApp();
-
-  const nextMilestone = KARMA_MILESTONES.find(m => m.at > user.karma);
-  const progress = nextMilestone ? (user.karma / nextMilestone.at) * 100 : 100;
+export default function SellerPage({ user, items, onBack, onOpenListing, onOpenKarmaDemo }) {
+  const safeUser = user || { name: 'You', karma: 0, credits: 0, vouchers: 0 };
+  const userItems = items.filter((item) => item.sellerName === safeUser.name || item.sellerName === 'Asha Rao');
+  const nextMilestone = KARMA_MILESTONES.find((milestone) => milestone.at > safeUser.karma);
+  const progress = nextMilestone ? (safeUser.karma / nextMilestone.at) * 100 : 100;
 
   return (
-    <div className="page-content" style={{ padding: '52px 0 80px' }}>
-      {/* Header */}
-      <div style={{ padding: '0 16px 20px', background: 'linear-gradient(180deg, rgba(124,92,252,0.08) 0%, transparent 100%)' }}>
-        <div style={{ marginBottom: 16 }}>
-          <button onClick={() => setPage('home')} style={{ display: 'flex', alignItems: 'center', gap: 6, background: 'none', border: 'none', color: 'var(--zm-text-muted)', cursor: 'pointer', fontSize: 13, padding: '0 0 12px', fontFamily: 'Inter, sans-serif' }}>
-            <ArrowLeft size={16} /> Back
-          </button>
-          <div style={{ fontSize: 20, fontWeight: 700, fontFamily: 'Sora, sans-serif', marginBottom: 2 }}>My Seller Hub</div>
-          <div style={{ fontSize: 12, color: 'var(--zm-amber)', fontStyle: 'italic' }}>✨ Do good. Get good. — every item given sends good karma back.</div>
-        </div>
+    <div className="space-y-4">
+      <button onClick={onBack} className="inline-flex items-center gap-2 rounded-full border border-amber-200 bg-white/80 px-3 py-2 text-sm font-semibold text-slate-600 shadow-sm transition hover:bg-amber-50">
+        <ArrowLeft size={16} /> Back
+      </button>
 
-        {/* Stats row */}
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 10, marginBottom: 16 }}>
-          <div style={{ background: 'var(--zm-card)', border: '1px solid var(--zm-border)', borderRadius: 12, padding: '12px 10px', textAlign: 'center' }}>
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 4, marginBottom: 4 }}>
-              <Star size={14} color="var(--zm-amber)" fill="var(--zm-amber)" />
-              <span style={{ fontSize: 20, fontWeight: 700, color: 'var(--zm-amber)' }}>{user.karma}</span>
-            </div>
-            <div style={{ fontSize: 11, color: 'var(--zm-text-muted)' }}>Good karma</div>
+      <section className="rounded-[2rem] border border-amber-100 bg-white p-5 shadow-sm">
+        <div className="flex items-center justify-between">
+          <div>
+            <p className="text-sm font-semibold text-violet-600">My Listings</p>
+            <h2 className="text-xl font-semibold text-slate-900">List what you don’t need</h2>
           </div>
-          <div style={{ background: 'var(--zm-card)', border: '1px solid var(--zm-border)', borderRadius: 12, padding: '12px 10px', textAlign: 'center' }}>
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 4, marginBottom: 4 }}>
-              <Zap size={14} color="var(--zm-green)" />
-              <span style={{ fontSize: 20, fontWeight: 700, color: 'var(--zm-green)' }}>{user.credits}</span>
-            </div>
-            <div style={{ fontSize: 11, color: 'var(--zm-text-muted)' }}>Credits</div>
-          </div>
-          <div style={{ background: 'var(--zm-card)', border: '1px solid var(--zm-border)', borderRadius: 12, padding: '12px 10px', textAlign: 'center' }}>
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 4, marginBottom: 4 }}>
-              <Gift size={14} color="var(--zm-accent)" />
-              <span style={{ fontSize: 20, fontWeight: 700, color: 'var(--zm-accent)' }}>{user.vouchers}</span>
-            </div>
-            <div style={{ fontSize: 11, color: 'var(--zm-text-muted)' }}>Vouchers</div>
+          <div className="rounded-full bg-amber-50 p-3 text-violet-600">
+            <Package size={18} />
           </div>
         </div>
-
-        {/* Karma progress */}
+        <div className="mt-4 grid gap-3 sm:grid-cols-3">
+          <div className="rounded-[1.25rem] border border-amber-100 bg-amber-50 p-3 text-center">
+            <div className="flex items-center justify-center gap-1 text-amber-600"><Star size={15} fill="currentColor" /> <span className="text-lg font-semibold">{safeUser.karma}</span></div>
+            <p className="mt-1 text-xs text-slate-500">Good karma</p>
+          </div>
+          <div className="rounded-[1.25rem] border border-amber-100 bg-amber-50 p-3 text-center">
+            <div className="flex items-center justify-center gap-1 text-violet-600"><Zap size={15} /> <span className="text-lg font-semibold">{safeUser.credits || 0}</span></div>
+            <p className="mt-1 text-xs text-slate-500">Delivery credits</p>
+          </div>
+          <div className="rounded-[1.25rem] border border-violet-100 bg-violet-50 p-3 text-center">
+            <div className="flex items-center justify-center gap-1 text-violet-600"><Gift size={15} /> <span className="text-lg font-semibold">{safeUser.vouchers || 0}</span></div>
+            <p className="mt-1 text-xs text-slate-500">Vouchers</p>
+          </div>
+        </div>
         {nextMilestone && (
-          <div style={{ background: 'var(--zm-card)', border: '1px solid var(--zm-border)', borderRadius: 12, padding: 14 }}>
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
-              <span style={{ fontSize: 12, color: 'var(--zm-text-muted)' }}>Give {nextMilestone.at - user.karma} more to unlock</span>
-              <span style={{ fontSize: 13, fontWeight: 600 }}>{nextMilestone.icon} {nextMilestone.reward}</span>
+          <div className="mt-4 rounded-[1.25rem] border border-slate-100 bg-slate-50 p-4">
+            <div className="flex items-center justify-between text-sm">
+              <span className="text-slate-500">{nextMilestone.at - safeUser.karma} more to unlock</span>
+              <span className="font-semibold text-slate-700">{nextMilestone.icon} {nextMilestone.reward}</span>
             </div>
-            <div style={{ height: 6, background: 'var(--zm-surface2)', borderRadius: 999, overflow: 'hidden' }}>
-              <div style={{ height: '100%', width: `${progress}%`, background: 'var(--zm-amber)', borderRadius: 999, transition: 'width 0.5s ease' }} />
-            </div>
-            <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 6 }}>
-              <span style={{ fontSize: 11, color: 'var(--zm-text-dim)' }}>{user.karma} karma</span>
-              <span style={{ fontSize: 11, color: 'var(--zm-text-dim)' }}>{nextMilestone.at} karma</span>
+            <div className="mt-3 h-2 rounded-full bg-slate-200">
+              <div className="h-2 rounded-full bg-amber-400" style={{ width: `${Math.min(progress, 100)}%` }} />
             </div>
           </div>
         )}
-      </div>
+        <button onClick={onOpenListing} className="mt-4 w-full rounded-[1.1rem] bg-violet-600 px-4 py-3 font-semibold text-white">List for ₹0</button>
+      </section>
 
-      {/* Add listing button */}
-      <div style={{ padding: '0 16px', marginBottom: 20 }}>
-        <button className="btn btn-primary btn-full" onClick={() => setListingSheet(true)} style={{ fontSize: 15, padding: '14px 20px' }}>
-          <Package size={18} />
-          List something for free
-        </button>
-      </div>
-
-      {/* My listings */}
-      <div style={{ padding: '0 16px', marginBottom: 20 }}>
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
-          <span className="section-title" style={{ marginBottom: 0 }}>My listings</span>
-          <span style={{ fontSize: 12, color: 'var(--zm-text-dim)' }}>{userListings.length} active</span>
+      <section className="rounded-[2rem] border border-amber-100 bg-white p-5 shadow-sm">
+        <div className="flex items-center justify-between">
+          <h3 className="font-semibold text-slate-900">Your listings</h3>
+          <span className="text-sm text-slate-500">{userItems.length} live</span>
         </div>
-        {userListings.length === 0 ? (
-          <div style={{ textAlign: 'center', padding: '32px 0', color: 'var(--zm-text-dim)', fontSize: 13 }}>
-            <div style={{ fontSize: 36, marginBottom: 10 }}>📦</div>
-            Nothing listed yet. Tap the button above to get started!
-          </div>
-        ) : (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-            {userListings.map(listing => (
-              <div key={listing.id} className="card" style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-                <div style={{ fontSize: 32, width: 48, height: 48, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'var(--zm-surface2)', borderRadius: 10, flexShrink: 0, overflow: 'hidden' }}>
-                  {listing.photo
-                    ? <img src={listing.photo} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
-                    : listing.emoji}
+        <div className="mt-3 space-y-2">
+          {userItems.length === 0 ? (
+            <div className="rounded-[1.25rem] border border-dashed border-slate-200 p-4 text-sm text-slate-500">Nothing listed yet. Tap the button above to get started.</div>
+          ) : (
+            userItems.map((item) => (
+              <div key={item.id} className="flex items-center justify-between rounded-[1.25rem] border border-slate-100 bg-slate-50 px-3 py-3">
+                <div>
+                  <p className="font-medium text-slate-800">{item.title}</p>
+                  <p className="text-sm text-slate-500">{item.category} · {item.condition}</p>
                 </div>
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ fontSize: 14, fontWeight: 500, marginBottom: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{listing.title}</div>
-                  <div style={{ fontSize: 11, color: 'var(--zm-text-dim)' }}>{listing.category} · {listing.condition}</div>
-                </div>
-                <div style={{ textAlign: 'right', flexShrink: 0 }}>
-                  <div style={{ fontSize: 11, color: 'var(--zm-text-dim)', marginBottom: 4 }}>{listing.listed}</div>
-                  <span className="badge badge-green" style={{ fontSize: 10 }}>Active</span>
-                </div>
+                <span className="rounded-full bg-amber-50 px-3 py-1 text-sm font-semibold text-violet-700">{item.status || 'Active'}</span>
               </div>
-            ))}
-          </div>
-        )}
-      </div>
-
-      {/* Milestones */}
-      <div style={{ padding: '0 16px' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 12 }}>
-          <Award size={16} color="var(--zm-amber)" />
-          <span className="section-title" style={{ marginBottom: 0 }}>Karma milestones</span>
+            ))
+          )}
         </div>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-          {KARMA_MILESTONES.map(m => (
-            <div key={m.at} className="card" style={{ display: 'flex', alignItems: 'center', gap: 12, opacity: m.unlocked ? 1 : 0.5 }}>
-              <div style={{ fontSize: 24 }}>{m.icon}</div>
-              <div style={{ flex: 1 }}>
-                <div style={{ fontSize: 13, fontWeight: 500 }}>{m.reward}</div>
-                <div style={{ fontSize: 11, color: 'var(--zm-text-dim)' }}>Give {m.at} items away</div>
+      </section>
+
+      <section className="rounded-[2rem] border border-amber-100 bg-white p-5 shadow-sm">
+        <div className="flex items-center gap-2">
+          <Award size={16} className="text-amber-500" />
+          <h3 className="font-semibold text-slate-900">Karma milestones</h3>
+        </div>
+        <div className="mt-3 space-y-2">
+          {KARMA_MILESTONES.map((milestone) => (
+            <div key={milestone.at} className="flex items-center justify-between rounded-[1.25rem] border border-slate-100 bg-slate-50 px-3 py-3">
+              <div>
+                <p className="font-medium text-slate-800">{milestone.reward}</p>
+                <p className="text-sm text-slate-500">Reach {milestone.at} karma</p>
               </div>
-              <span className={`badge ${m.unlocked ? 'badge-green' : ''}`} style={{ fontSize: 11, background: m.unlocked ? undefined : 'var(--zm-surface2)', color: m.unlocked ? undefined : 'var(--zm-text-dim)' }}>
-                {m.unlocked ? '✓ Unlocked' : `${m.at - user.karma} to go`}
-              </span>
+              <span className={`rounded-full px-3 py-1 text-sm font-semibold ${milestone.unlocked ? 'bg-amber-50 text-violet-700' : 'bg-slate-100 text-slate-500'}`}>{milestone.unlocked ? 'Unlocked' : 'Locked'}</span>
             </div>
           ))}
         </div>
-      </div>
-
-      {/* Demo karma popup button */}
-      <div style={{ padding: '20px 16px 0' }}>
-        <button className="btn btn-secondary btn-full btn-sm" onClick={() => triggerKarmaPopup({ name: 'Ravi K', initials: 'RK' })}>
-          Demo: trigger karma popup
-        </button>
-      </div>
+        <button onClick={onOpenKarmaDemo} className="mt-4 w-full rounded-[1.1rem] border border-amber-200 bg-white px-4 py-3 text-sm font-semibold text-violet-700">Demo karma popup</button>
+      </section>
     </div>
   );
 }
