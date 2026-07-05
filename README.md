@@ -23,10 +23,29 @@
 ```bash
 cd zeromart
 npm install
-npm start
+npm run dev
 ```
 
-Open http://localhost:3000 in your browser.
+Open http://localhost:5173 in your browser, or use the port printed by Vite.
+
+## Deployment
+
+### Frontend on Vercel
+
+1. Import `aravindk0502/Zeromart`.
+2. Vercel reads `vercel.json`, runs `npm run build`, and publishes `dist`.
+3. Add `VITE_API_URL` and `VITE_GOOGLE_MAPS_API_KEY` from `.env.example`.
+4. Add the final Vercel domain to the Google Maps key HTTP-referrer restrictions.
+
+### Backend on Railway
+
+1. Create a Railway service from the same repository.
+2. Add a PostgreSQL service so Railway provides `DATABASE_URL`.
+3. Add the Railway variables documented in `.env.example`.
+4. Set `CORS_ORIGIN` to the final Vercel URL.
+5. Railway reads `railway.json`, starts `npm start`, and checks `/api/health`.
+
+Never add `.env` to Git. Use `.env.example` only as the variable-name template.
 
 ## Stack
 

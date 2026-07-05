@@ -1,17 +1,36 @@
-const express  = require('express');
-const cors     = require('cors');
-const crypto   = require('crypto');
-const path     = require('path');
-const jwt      = require('jsonwebtoken');
-const Razorpay = require('razorpay');
-const { Pool } = require('pg');
+import express from 'express';
+import cors from 'cors';
+import crypto from 'crypto';
+import path from 'path';
+import { existsSync } from 'fs';
+import { fileURLToPath } from 'url';
+import jwt from 'jsonwebtoken';
+import Razorpay from 'razorpay';
+import pg from 'pg';
 
 const app  = express();
 const PORT = process.env.PORT || 3001;
 const JWT_SECRET = process.env.JWT_SECRET || 'zeromart-dev-secret-change-in-prod';
+const { Pool } = pg;
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const allowedOrigins = String(process.env.CORS_ORIGIN || '')
+  .split(',')
+  .map((origin) => origin.trim().replace(/\/$/, ''))
+  .filter(Boolean);
 
-app.use(cors());
+app.use(cors({
+  origin(origin, callback) {
+    const normalizedOrigin = String(origin || '').replace(/\/$/, '');
+    if (!origin || allowedOrigins.length === 0 || allowedOrigins.includes(normalizedOrigin)) {
+      callback(null, true);
+      return;
+    }
+    callback(new Error('Origin is not allowed by ZeroMart CORS policy.'));
+  },
+}));
 app.use(express.json());
+app.get('/api/health', (_req, res) => res.json({ status: 'ok', service: 'zeromart-api' }));
 
 // ── Database ──────────────────────────────────────────────────────────────────
 
@@ -305,9 +324,12 @@ app.post('/api/verify-payment', authMiddleware, async (req, res) => {
   return res.json({ success: true });
 });
 
-// ── Serve React ───────────────────────────────────────────────────────────────
-app.use(express.static(path.join(__dirname, 'build')));
-app.get(/.*/, (req, res) => res.sendFile(path.join(__dirname, 'build', 'index.html')));
+// ── Optional local/static frontend serving ───────────────────────────────────
+const frontendDirectory = path.join(__dirname, 'dist');
+if (existsSync(frontendDirectory)) {
+  app.use(express.static(frontendDirectory));
+  app.get(/^\/(?!api(?:\/|$)).*/, (_req, res) => res.sendFile(path.join(frontendDirectory, 'index.html')));
+}
 
 // ── Start ─────────────────────────────────────────────────────────────────────
 initDB().then(() => {

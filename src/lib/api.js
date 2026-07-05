@@ -1,7 +1,8 @@
 // All API calls go to our Express server.
 // JWT is stored in localStorage and sent with every authenticated request.
 
-const BASE = '';  // same origin — Express serves both app and API
+const BASE = String(import.meta.env.VITE_API_URL || '').replace(/\/$/, '');
+const apiUrl = (path) => `${BASE}${path}`;
 
 function getToken() { return localStorage.getItem('zm_token'); }
 export function setToken(t) { localStorage.setItem('zm_token', t); }
@@ -14,7 +15,7 @@ function authHeaders() {
 }
 
 async function post(path, body, auth = false) {
-  const res = await fetch(path, {
+  const res = await fetch(apiUrl(path), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', ...(auth ? authHeaders() : {}) },
     body: JSON.stringify(body),
@@ -25,14 +26,14 @@ async function post(path, body, auth = false) {
 }
 
 async function get(path) {
-  const res = await fetch(path, { headers: authHeaders() });
+  const res = await fetch(apiUrl(path), { headers: authHeaders() });
   const data = await res.json();
   if (!res.ok) throw new Error(data.error || 'Request failed');
   return data;
 }
 
 async function put(path, body) {
-  const res = await fetch(path, {
+  const res = await fetch(apiUrl(path), {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json', ...authHeaders() },
     body: JSON.stringify(body),
