@@ -8,3 +8,4 @@ dist/
 *.log
 npm-debug.log*
 .claude/settings.local.json
+.vercel/
