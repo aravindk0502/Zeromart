@@ -48,7 +48,7 @@ async function initDB() {
     CREATE TABLE IF NOT EXISTS users (
       id          SERIAL PRIMARY KEY,
       phone       TEXT UNIQUE NOT NULL,
-      name        TEXT NOT NULL DEFAULT 'ZeroMart User',
+      name        TEXT NOT NULL DEFAULT 'Unknown',
       initials    TEXT NOT NULL DEFAULT 'ZM',
       mode        TEXT NOT NULL DEFAULT 'seller',
       is_buyer    BOOLEAN NOT NULL DEFAULT false,
@@ -106,6 +106,9 @@ async function initDB() {
     DO $$ BEGIN
       ALTER TABLE products ADD COLUMN IF NOT EXISTS pickup_area TEXT DEFAULT '';
     EXCEPTION WHEN duplicate_column THEN NULL; END $$;
+
+    ALTER TABLE users ALTER COLUMN name SET DEFAULT 'Unknown';
+    UPDATE users SET name = 'Unknown' WHERE name = 'ZeroMart User';
 
     -- Seed listings if products table is empty
     INSERT INTO products (title, category, emoji, distance, condition, seller_name, seller_karma, seller_initials, description, nearby_eligible, listed)
@@ -208,7 +211,7 @@ app.post('/api/verify-otp', async (req, res) => {
     );
     user = result.rows[0];
   } else {
-    user = { id: `demo_${phone}`, phone, name: 'ZeroMart User', initials: 'ZM', mode: 'seller', is_buyer: false, karma: 0, credits: 0, vouchers: 0, has_seen_tour: false };
+    user = { id: `demo_${phone}`, phone, name: 'Unknown', initials: 'UN', mode: 'seller', is_buyer: false, karma: 0, credits: 0, vouchers: 0, has_seen_tour: false };
   }
 
   const token = jwt.sign({ id: user.id, phone }, JWT_SECRET, { expiresIn: '90d' });

@@ -529,7 +529,7 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
   const handleLogin = (mobile) => {
     const savedKarma = getKarmaLedger()[accountKey(mobile)];
     setUser({
-      name: 'Asha Rao',
+      name: 'Unknown',
       mobile,
       karma: Number(savedKarma ?? 42),
       listed: 3,
@@ -545,6 +545,12 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
   };
 
   const handleNav = (view) => {
+    if (view === 'notifications') {
+      const visibleNotificationIds = new Set(visibleNotifications.map((notification) => notification.id));
+      setNotifications((current) => current.map((notification) => (
+        visibleNotificationIds.has(notification.id) ? { ...notification, read: true } : notification
+      )));
+    }
     setActiveView(view);
     setSelectedNotification(null);
     setNotice('');
@@ -1354,6 +1360,10 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
       ? orderHistory.filter((order) => accountKey(order.buyerId) === accountKey(activeAccountId))
       : orderHistory
   ), [activeAccountId, orderHistory, user?.isDemo]);
+  const unreadNotificationCount = useMemo(
+    () => visibleNotifications.filter((notification) => !notification.read).length,
+    [visibleNotifications],
+  );
   const receivedOrders = useMemo(() => (
     getRequests()
       .filter((request) => accountKey(request.sellerId) === accountKey(activeAccountId))
@@ -1927,7 +1937,7 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
                   <button
                     key={item.key}
                     onClick={item.action}
-                    className={`flex w-full items-center gap-3 rounded-2xl px-4 py-3 text-left text-sm font-semibold transition ${
+                    className={`relative flex w-full items-center gap-3 rounded-2xl px-4 py-3 text-left text-sm font-semibold transition ${
                       isActive
                         ? 'bg-gradient-to-r from-amber-500 to-violet-600 text-white shadow-lg shadow-violet-500/20'
                         : 'border border-amber-100 bg-white/70 text-slate-600 hover:-translate-y-0.5 hover:bg-amber-50'
@@ -1935,6 +1945,11 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
                   >
                     <Icon size={18} />
                     <span>{item.label}</span>
+                    {item.key === 'notifications' && unreadNotificationCount > 0 && (
+                      <span className="ml-auto inline-flex min-w-5 items-center justify-center rounded-full bg-rose-500 px-1.5 py-1 text-[10px] font-extrabold leading-none text-white shadow-sm">
+                        {unreadNotificationCount > 99 ? '99+' : unreadNotificationCount}
+                      </span>
+                    )}
                   </button>
                 );
               })}
@@ -2370,14 +2385,22 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
               handleNav(item.key);
             };
             return (
-              <button key={item.key} onClick={handleBottomNav} className={`mx-auto flex h-[58px] w-full max-w-[74px] min-w-0 flex-col items-center justify-center rounded-full px-1 text-[10px] font-semibold leading-none sm:text-[11px] ${isActive ? 'bg-gradient-to-r from-amber-500 to-violet-600 text-white shadow' : 'text-slate-600'}`}>
-                <Icon size={19} strokeWidth={2.2} />
+              <button key={item.key} onClick={handleBottomNav} className={`relative mx-auto flex h-[58px] w-full max-w-[74px] min-w-0 flex-col items-center justify-center rounded-full px-1 text-[10px] font-semibold leading-none sm:text-[11px] ${isActive ? 'bg-gradient-to-r from-amber-500 to-violet-600 text-white shadow' : 'text-slate-600'}`}>
+                <span className="relative">
+                  <Icon size={19} strokeWidth={2.2} />
+                  {item.key === 'notifications' && unreadNotificationCount > 0 && (
+                    <span className="absolute -right-3 -top-3 inline-flex min-w-5 items-center justify-center rounded-full bg-rose-500 px-1 py-1 text-[9px] font-extrabold leading-none text-white shadow ring-2 ring-white">
+                      {unreadNotificationCount > 99 ? '99+' : unreadNotificationCount}
+                    </span>
+                  )}
+                </span>
                 <span className="mt-1.5 max-w-full truncate">{item.label}</span>
               </button>
             );
           })}
-          <button onClick={handleOpenListing} className="absolute left-1/2 top-0 z-50 flex h-16 w-16 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full bg-gradient-to-br from-amber-500 to-violet-600 text-white shadow-lg shadow-violet-600/25 ring-4 ring-white" aria-label="Create listing">
-            <Plus size={28} strokeWidth={2.2} />
+          <button onClick={handleOpenListing} className="absolute left-1/2 top-0 z-50 flex h-16 w-16 -translate-x-1/2 -translate-y-1/2 flex-col items-center justify-center rounded-full bg-gradient-to-br from-amber-500 to-violet-600 text-white shadow-lg shadow-violet-600/25 ring-4 ring-white" aria-label="List item">
+            <Plus size={23} strokeWidth={2.2} />
+            <span className="mt-0.5 text-[9px] font-extrabold leading-none">List Item</span>
           </button>
         </div>
       </nav>

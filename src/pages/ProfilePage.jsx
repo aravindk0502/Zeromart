@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { ArrowLeft, LocateFixed, LogOut, MapPin, PackageCheck, ShieldCheck, Truck } from 'lucide-react';
+import { ArrowLeft, Check, LocateFixed, LogOut, MapPin, PackageCheck, Pencil, ShieldCheck, Truck, X } from 'lucide-react';
 import { useLocationEngine } from '../hooks/useLocationEngine';
 import LocationMap from '../components/LocationMap';
 import OrderTrackingModal from '../components/OrderTrackingModal';
@@ -20,10 +20,23 @@ export default function ProfilePage({ user, items = [], orders = [], receivedOrd
   const locationEngine = useLocationEngine();
   const [selectedStat, setSelectedStat] = useState('Items listed');
   const [selectedOrder, setSelectedOrder] = useState(null);
+  const [isEditingProfile, setIsEditingProfile] = useState(false);
+  const [profileDraft, setProfileDraft] = useState({
+    name: user?.name || 'Unknown',
+    mobile: user?.mobile || '',
+  });
 
   useEffect(() => {
     if (locationEngine.location) onUpdateUser?.({ location: locationEngine.location });
   }, [locationEngine.location?.updatedAt]);
+
+  useEffect(() => {
+    if (isEditingProfile) return;
+    setProfileDraft({
+      name: user?.name || 'Unknown',
+      mobile: user?.mobile || '',
+    });
+  }, [isEditingProfile, user?.mobile, user?.name]);
 
   const handleProfileImage = (event) => {
     const file = event.target.files?.[0];
@@ -33,6 +46,14 @@ export default function ProfilePage({ user, items = [], orders = [], receivedOrd
       onUpdateUser?.({ profileImage: reader.result });
     };
     reader.readAsDataURL(file);
+  };
+
+  const handleSaveProfile = () => {
+    const name = profileDraft.name.trim() || 'Unknown';
+    const mobile = profileDraft.mobile.replace(/\D/g, '').slice(-10);
+    onUpdateUser?.({ name, mobile });
+    setProfileDraft({ name, mobile });
+    setIsEditingProfile(false);
   };
 
   if (!user) {
@@ -137,8 +158,16 @@ export default function ProfilePage({ user, items = [], orders = [], receivedOrd
         <div className="flex items-start justify-between gap-3">
           <div>
             <p className="text-sm font-semibold text-violet-600">Your profile</p>
-            <h2 className="text-xl font-semibold text-slate-900">{user.name}</h2>
+            <h2 className="text-xl font-semibold text-slate-900">{user.name || 'Unknown'}</h2>
             <p className="mt-1 text-sm text-slate-500">One account to buy and sell</p>
+            <button
+              type="button"
+              onClick={() => setIsEditingProfile((current) => !current)}
+              className="mt-3 inline-flex items-center gap-2 rounded-full border border-violet-200 bg-violet-50 px-3 py-2 text-xs font-bold text-violet-700 transition hover:bg-violet-100"
+            >
+              {isEditingProfile ? <X size={14} /> : <Pencil size={14} />}
+              {isEditingProfile ? 'Cancel editing' : 'Edit profile'}
+            </button>
           </div>
           <div className="text-right">
             <label className="group block cursor-pointer">
@@ -154,6 +183,41 @@ export default function ProfilePage({ user, items = [], orders = [], receivedOrd
             </label>
           </div>
         </div>
+
+        {isEditingProfile && (
+          <div className="mt-4 rounded-[1.5rem] border border-violet-100 bg-violet-50/60 p-4">
+            <div className="grid gap-3 sm:grid-cols-2">
+              <label className="block">
+                <span className="text-xs font-bold uppercase tracking-[0.12em] text-slate-500">Name</span>
+                <input
+                  type="text"
+                  value={profileDraft.name}
+                  onChange={(event) => setProfileDraft((current) => ({ ...current, name: event.target.value }))}
+                  placeholder="Unknown"
+                  className="mt-2 w-full rounded-xl border border-violet-100 bg-white px-3 py-2.5 text-sm font-semibold text-slate-900 outline-none focus:border-violet-300 focus:ring-2 focus:ring-violet-100"
+                />
+              </label>
+              <label className="block">
+                <span className="text-xs font-bold uppercase tracking-[0.12em] text-slate-500">Mobile number</span>
+                <input
+                  type="tel"
+                  inputMode="numeric"
+                  value={profileDraft.mobile}
+                  onChange={(event) => setProfileDraft((current) => ({ ...current, mobile: event.target.value.replace(/\D/g, '').slice(0, 10) }))}
+                  placeholder="10-digit mobile number"
+                  className="mt-2 w-full rounded-xl border border-violet-100 bg-white px-3 py-2.5 text-sm font-semibold text-slate-900 outline-none focus:border-violet-300 focus:ring-2 focus:ring-violet-100"
+                />
+              </label>
+            </div>
+            <button
+              type="button"
+              onClick={handleSaveProfile}
+              className="mt-3 inline-flex w-full items-center justify-center gap-2 rounded-xl bg-violet-600 px-4 py-3 text-sm font-bold text-white shadow-sm transition hover:bg-violet-700 sm:w-auto"
+            >
+              <Check size={16} /> Save profile
+            </button>
+          </div>
+        )}
 
         <div className="mt-4 rounded-[1.5rem] border border-amber-100 bg-gradient-to-r from-amber-50 to-violet-50 p-4">
           <div className="flex items-center justify-between gap-3">
