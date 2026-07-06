@@ -13,7 +13,7 @@ const PLATFORM_QA = [
   { keys: ['how to sell', 'list item', 'post item', 'give away', 'listing'], answer: 'Tap the + button at the bottom to list a product. Take a photo, add a short description, pick a category — it goes live instantly. Completely free!' },
   { keys: ['how to buy', 'how to request', 'get item', 'buying'], answer: 'Pay a one-time ₹29 to unlock buyer access forever. Then browse, search, and request any item you like.' },
   { keys: ['delivery', 'shipping', 'courier', 'porter', 'shadowfax', 'uber'], answer: 'ZeroMart currently uses direct collection coordination. Use the seller chat to arrange pickup or your own courier service and share the required contact details.' },
-  { keys: ['karma', 'points', 'rating', 'review'], answer: 'Karma points are given by buyers after receiving an item. Higher karma = more visibility and better rewards. You earn 1 karma per successful transaction.' },
+  { keys: ['karma', 'points', 'rating', 'review'], answer: 'Karma is mandatory after collection. The buyer who received the item sends good karma to the seller or store, and that seller/store gains the karma point.' },
   { keys: ['in person', 'collect', 'pickup', 'nearby'], answer: 'Request collection on the item, then use the temporary seller chat to coordinate the handoff. You can share your location or phone number there.' },
   { keys: ['free', 'cost', 'charge', 'fee', 'price'], answer: 'Yes! Listing on ZeroMart is completely free for sellers. Items are listed at ₹0.' },
   { keys: ['reward', 'voucher', 'swiggy', 'bookmyshow', 'myntra', 'milestone'], answer: 'Sellers earn delivery credits and unlock brand vouchers (Swiggy, BookMyShow, Myntra) when they hit karma milestones at 5, 10, 25+ items given.' },
@@ -22,6 +22,9 @@ const PLATFORM_QA = [
   { keys: ['chat', 'message', 'talk', 'contact'], answer: 'After a seller accepts your request, their phone number, pickup address, time, and instructions appear in Alerts. You can call or use WhatsApp to coordinate.' },
   { keys: ['report', 'fraud', 'fake', 'scam', 'block'], answer: 'Tap the flag icon on any listing or profile to report. Three verified reports trigger a review. Serious fraud leads to a permanent ban.' },
   { keys: ['credit', 'delivery credit', 'offset'], answer: 'Delivery credits are earned every time you give away an item. Use them to offset your own delivery costs when buying.' },
+  { keys: ['business', 'store', 'reserve', 'qr', 'collection id', 'collection pass'], answer: 'Business store items use Reserve & Collect. After reserving, the buyer gets a collection ID/QR pass with directions. The store marks it collected, then the buyer must send good karma.' },
+  { keys: ['limit', '24 hour', 'again', 'sold out', 'stock'], answer: 'Each user can request up to 2 quantity per product in 24 hours. If stock reaches 0, the product shows Sold Out and the request button is disabled.' },
+  { keys: ['live', 'listed now', 'new listing', 'real time'], answer: 'New listings are saved into ZeroMart marketplace storage and refreshed into the feed by location. The nearest live listings appear first, then karma and freshness decide the order.' },
 ];
 
 const SEARCH_TRIGGERS = ['find', 'search', 'show', 'any', 'looking for', 'do you have', 'got any', 'need', 'want', 'available'];
@@ -41,7 +44,7 @@ const FEATURE_TOPICS = [
   },
   {
     keys: ['favorite', 'favourite', 'saved'],
-    answer: 'Tap the heart on any product to save it. Favorites are available from the bottom nav and show saved product photos and details.',
+    answer: 'Tap the heart on any product to save it. Favorites show a count badge in the bottom nav, appear on the Favorites page, and can be removed from there.',
   },
   {
     keys: ['notification', 'alert', 'updates'],
@@ -49,7 +52,7 @@ const FEATURE_TOPICS = [
   },
   {
     keys: ['profile', 'history', 'order', 'listed', 'collected', 'active listings', 'given away'],
-    answer: 'Profile shows karma points, item activity, clickable items listed, items collected, active listings, given away, and order history with delivery or personal collection status.',
+    answer: 'Profile shows karma points, photo, bio, optional website/location links, item activity, active listings, given away, and order history with collection status.',
   },
 ];
 

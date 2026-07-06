@@ -62,15 +62,22 @@ export default function LocationPicker({
     try {
       const location = await engine.detectCurrentLocation();
       if (!location) throw new Error('Current location was not available. Search for an address manually.');
-      setSelectedLocation(location);
-      setAddressDetails({
+      const nextDetails = {
         doorNo: location?.doorNo || '',
         buildingName: location?.buildingName || '',
         floor: location?.floor || '',
         landmark: location?.landmark || '',
         addressType: location?.addressType || addressTypeDefault,
-      });
+      };
+      setSelectedLocation(location);
+      setAddressDetails(nextDetails);
       setSearchError('');
+      if (!requireAddressDetails && requiredDetails.length === 0) {
+        const finalLocation = await validateCompletedAddress(withAddressDetails(location, nextDetails));
+        if (onSelect) onSelect(finalLocation);
+        else engine.setLocation(finalLocation);
+        onClose?.();
+      }
     } catch (error) {
       const message = Number(error?.code) === 1
         ? 'Location access is blocked. Enable it in browser settings or search manually.'

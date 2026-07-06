@@ -71,9 +71,9 @@ const sectionProducts = {
 
 const sectionContent = {
   b2b: {
-    title: 'Nearby Stores & Restaurants',
-    description: 'Nearby supermarkets, restaurants, bakeries and stores ranked by distance and Store Karma.',
-    badge: 'Trusted local businesses',
+    title: 'Stores and People Sharing Near You',
+    description: 'Store products appear first, followed by useful items shared by people nearby.',
+    badge: 'Nearby ₹0 listings',
   },
   food: {
     title: 'Food waste rescue',
@@ -231,22 +231,8 @@ export default function HomePage({
             </button>
           </div>
         </div>
-        {homeSection === 'b2b' && (
-          <div className="relative mt-4 grid grid-cols-3 gap-2 rounded-2xl border border-emerald-100 bg-white/75 p-2.5 shadow-inner">
-            {[
-              ['Verified', 'Partners'],
-              ['₹0', 'Listings'],
-              ['Trusted', 'Reputation'],
-            ].map(([value, label]) => (
-              <div key={label} className="min-w-0 rounded-xl bg-emerald-50/70 px-2 py-2 text-center">
-                <p className="truncate text-sm font-extrabold text-emerald-800">{value}</p>
-                <p className="truncate text-[10px] font-bold uppercase tracking-[0.08em] text-slate-400">{label}</p>
-              </div>
-            ))}
-          </div>
-        )}
         {homeSection !== 'explore' && (
-          <div className="relative mt-5 flex snap-x gap-4 overflow-x-auto pb-3">
+          <div className="relative mt-4 flex snap-x gap-4 overflow-x-auto pb-3">
             {sectionListings.length === 0 && (
               <div className="w-full rounded-2xl border border-dashed border-emerald-200 bg-white/80 p-5 text-center">
                 <p className="font-bold text-slate-800">No local business products in this radius yet</p>
@@ -346,8 +332,8 @@ export default function HomePage({
         )}
       </section>
 
-      <section className="rounded-[1.5rem] border border-amber-100/80 bg-white/70 p-4 shadow-[0_16px_55px_rgba(15,23,42,0.06)] sm:p-5">
-        <div className="mb-4 flex items-start gap-3">
+      <section className="-mt-1 rounded-[1.5rem] border border-amber-100/80 bg-white/70 p-4 shadow-[0_16px_55px_rgba(15,23,42,0.06)] sm:p-5">
+        <div className="mb-3 flex items-start gap-3">
           <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-gradient-to-br from-amber-500 to-violet-600 text-white shadow-lg shadow-violet-500/15">
             <Users size={20} />
           </div>
@@ -448,45 +434,33 @@ export default function HomePage({
         </div>
       )}
 
-      <footer className="rounded-[1.5rem] border border-amber-100 bg-white/90 p-5 shadow-[0_16px_55px_rgba(15,23,42,0.08)]">
-        <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
-          <div className="max-w-sm">
+      <footer className="rounded-[1.35rem] border border-amber-100 bg-white/90 p-4 shadow-[0_12px_36px_rgba(15,23,42,0.06)]">
+        <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+          <div className="max-w-md">
             <div className="flex items-center gap-2 text-sm font-semibold text-amber-700">
               <Sparkles size={16} />
               ZeroMart
             </div>
-            <p className="mt-2 text-sm leading-6 text-slate-600">
+            <p className="mt-1 text-xs leading-5 text-slate-500 sm:text-sm">
               A local ₹0 marketplace for nearby free items, reuse, good karma, and community giving around {locationLabel}.
             </p>
           </div>
-          <div className="grid flex-1 gap-4 text-sm sm:grid-cols-3">
-            <div>
-              <p className="font-semibold text-slate-900">Company</p>
-              <div className="mt-2 grid gap-2 text-slate-500">
-                <a href="#" onClick={(event) => event.preventDefault()} className="hover:text-violet-700">Terms and conditions</a>
-                <a href="#" onClick={(event) => event.preventDefault()} className="hover:text-violet-700">FAQ</a>
-                <a href="#" onClick={(event) => event.preventDefault()} className="hover:text-violet-700">Blogs</a>
-              </div>
-            </div>
-            <div>
-              <p className="font-semibold text-slate-900">Support</p>
-              <div className="mt-2 grid gap-2 text-slate-500">
-                <a href="#" onClick={(event) => event.preventDefault()} className="hover:text-violet-700">Help and support</a>
-                <a href="mailto:support@zeromart.local" className="hover:text-violet-700">Contact us</a>
-                <a href="#" onClick={(event) => event.preventDefault()} className="hover:text-violet-700">Safety guide</a>
-              </div>
-            </div>
-            <div>
-              <p className="font-semibold text-slate-900">Social</p>
-              <div className="mt-2 grid gap-2 text-slate-500">
-                <a href="#" onClick={(event) => event.preventDefault()} className="hover:text-violet-700">Instagram</a>
-                <a href="#" onClick={(event) => event.preventDefault()} className="hover:text-violet-700">LinkedIn</a>
-                <a href="#" onClick={(event) => event.preventDefault()} className="hover:text-violet-700">X / Twitter</a>
-              </div>
-            </div>
+          <div className="flex flex-wrap gap-2 text-xs font-semibold text-slate-500">
+            {['Terms and conditions', 'FAQ', 'Blogs', 'Help and support', 'Safety guide', 'Instagram', 'LinkedIn', 'X / Twitter'].map((label) => (
+              <a
+                key={label}
+                href={label === 'Help and support' ? 'mailto:support@zeromart.local' : '#'}
+                onClick={(event) => {
+                  if (label !== 'Help and support') event.preventDefault();
+                }}
+                className="rounded-full border border-amber-100 bg-amber-50/50 px-3 py-1.5 transition hover:border-violet-200 hover:bg-violet-50 hover:text-violet-700"
+              >
+                {label}
+              </a>
+            ))}
           </div>
         </div>
-        <div className="mt-5 border-t border-amber-100 pt-4 text-xs leading-5 text-slate-400">
+        <div className="mt-3 border-t border-amber-100 pt-3 text-[11px] leading-4 text-slate-400">
           © 2026 ZeroMart. Give what you do not need and keep useful items moving locally.
         </div>
       </footer>

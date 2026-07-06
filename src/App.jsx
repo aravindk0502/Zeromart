@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Award, Bell, Bot, Building2, Flame, Gem, Heart, Home, LocateFixed, MapPin, Medal, Plus, Search, ShieldCheck, SlidersHorizontal, Sparkles, Trophy, User } from 'lucide-react';
 import HomePage, { ProductRail } from './pages/HomePage';
 import SectionPage from './pages/SectionPage';
@@ -208,7 +208,13 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
   const [currentCoordinates, setCurrentCoordinates] = useState(locationEngine.location);
   const [showOtpModal, setShowOtpModal] = useState(false);
   const [notice, setNotice] = useState('');
-  const [favorites, setFavorites] = useState([]);
+  const [favorites, setFavorites] = useState(() => {
+    try {
+      return JSON.parse(localStorage.getItem('zeromart-favorites') || '[]');
+    } catch {
+      return [];
+    }
+  });
   const [orderHistory, setOrderHistory] = useState(loadOrderHistory);
   const [orderSuccess, setOrderSuccess] = useState(null);
   const [quantityItem, setQuantityItem] = useState(null);
@@ -222,6 +228,7 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
   const [karmaTarget, setKarmaTarget] = useState(null);
   const [selectedNotification, setSelectedNotification] = useState(null);
   const [notifications, setNotifications] = useState(loadNotifications);
+  const skipTransactionPersistRef = useRef(false);
   const [requestClock, setRequestClock] = useState(Date.now());
   const [hasSeenTour, setHasSeenTour] = useState(() => {
     if (typeof window === 'undefined') return false;
@@ -346,27 +353,36 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
   }, [activeAccountId]);
 
   useEffect(() => {
-    const syncBusinessItems = () => {
+    const syncMarketplaceItems = () => {
       setBusinessSession(getBusinessSession());
-      setItems((prev) => applyProductExpiry(mergeListingsById(
-        initialItems.filter((item) => item.isBusinessProduct),
-        getBusinessMarketplaceItems().map(normalizeProductStock),
-        prev.filter((item) => !item.isBusinessProduct),
-      )));
+      skipTransactionPersistRef.current = true;
+      setItems(applyProductExpiry(mergeListingsById(
+        initialItems,
+        getTransactionProducts(),
+        getBusinessMarketplaceItems(),
+      ).map(normalizeProductStock)));
     };
     const syncOrderHistory = () => setOrderHistory(loadOrderHistory());
     const syncNotifications = () => setNotifications(loadNotifications());
-    window.addEventListener('storage', syncBusinessItems);
+    window.addEventListener('storage', syncMarketplaceItems);
     window.addEventListener('storage', syncOrderHistory);
     window.addEventListener('storage', syncNotifications);
-    window.addEventListener('zeromart-business-change', syncBusinessItems);
+    window.addEventListener('zeromart-business-change', syncMarketplaceItems);
+    window.addEventListener('zeromart-marketplace-change', syncMarketplaceItems);
+    window.addEventListener('zeromart-transactions-change', syncMarketplaceItems);
     window.addEventListener('zeromart-business-change', syncOrderHistory);
+    window.addEventListener('zeromart-transactions-change', syncOrderHistory);
+    window.addEventListener('zeromart-transactions-change', syncNotifications);
     return () => {
-      window.removeEventListener('storage', syncBusinessItems);
+      window.removeEventListener('storage', syncMarketplaceItems);
       window.removeEventListener('storage', syncOrderHistory);
       window.removeEventListener('storage', syncNotifications);
-      window.removeEventListener('zeromart-business-change', syncBusinessItems);
+      window.removeEventListener('zeromart-business-change', syncMarketplaceItems);
+      window.removeEventListener('zeromart-marketplace-change', syncMarketplaceItems);
+      window.removeEventListener('zeromart-transactions-change', syncMarketplaceItems);
       window.removeEventListener('zeromart-business-change', syncOrderHistory);
+      window.removeEventListener('zeromart-transactions-change', syncOrderHistory);
+      window.removeEventListener('zeromart-transactions-change', syncNotifications);
     };
   }, []);
 
@@ -383,6 +399,10 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
   }, [orderHistory]);
 
   useEffect(() => {
+    if (skipTransactionPersistRef.current) {
+      skipTransactionPersistRef.current = false;
+      return;
+    }
     saveTransactionProducts(items.filter((item) => !item.isBusinessProduct));
   }, [items]);
 
@@ -544,12 +564,30 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
     setNotice('Welcome! You can list for free and buy anything for ₹0 with a one-time ₹29 platform fee for lifetime unlimited buying access.');
   };
 
+  const favoriteCount = favorites.length;
+
   const handleNav = (view) => {
+    if (view === 'home') {
+      setActiveView('home');
+      setSelectedNotification(null);
+      setNotice('');
+      setItems(applyProductExpiry(mergeListingsById(
+        initialItems,
+        getTransactionProducts(),
+        getBusinessMarketplaceItems(),
+      ).map(normalizeProductStock)));
+      requestAnimationFrame(() => window.scrollTo({ top: 0, behavior: 'smooth' }));
+      return;
+    }
     if (view === 'notifications') {
       const visibleNotificationIds = new Set(visibleNotifications.map((notification) => notification.id));
-      setNotifications((current) => current.map((notification) => (
-        visibleNotificationIds.has(notification.id) ? { ...notification, read: true } : notification
-      )));
+      setNotifications((current) => {
+        const next = current.map((notification) => (
+          visibleNotificationIds.has(notification.id) ? { ...notification, read: true } : notification
+        ));
+        localStorage.setItem('zeromart-notifications', JSON.stringify(next));
+        return next;
+      });
     }
     setActiveView(view);
     setSelectedNotification(null);
@@ -990,8 +1028,10 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
   const toggleFavorite = (item) => {
     setFavorites((prev) => {
       const exists = prev.some((entry) => entry.id === item.id);
-      if (exists) return prev.filter((entry) => entry.id !== item.id);
-      return [...prev, item];
+      const next = exists ? prev.filter((entry) => entry.id !== item.id) : [...prev, item];
+      localStorage.setItem('zeromart-favorites', JSON.stringify(next));
+      setNotice(exists ? `${item.title} removed from favorites.` : `${item.title} added to favorites.`);
+      return next;
     });
   };
 
@@ -1950,6 +1990,11 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
                         {unreadNotificationCount > 99 ? '99+' : unreadNotificationCount}
                       </span>
                     )}
+                    {item.key === 'favorites' && favoriteCount > 0 && (
+                      <span className="ml-auto inline-flex min-w-5 items-center justify-center rounded-full bg-rose-500 px-1.5 py-1 text-[10px] font-extrabold leading-none text-white shadow-sm">
+                        {favoriteCount > 99 ? '99+' : favoriteCount}
+                      </span>
+                    )}
                   </button>
                 );
               })}
@@ -2391,6 +2436,11 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
                   {item.key === 'notifications' && unreadNotificationCount > 0 && (
                     <span className="absolute -right-3 -top-3 inline-flex min-w-5 items-center justify-center rounded-full bg-rose-500 px-1 py-1 text-[9px] font-extrabold leading-none text-white shadow ring-2 ring-white">
                       {unreadNotificationCount > 99 ? '99+' : unreadNotificationCount}
+                    </span>
+                  )}
+                  {item.key === 'favorites' && favoriteCount > 0 && (
+                    <span className="absolute -right-3 -top-3 inline-flex min-w-5 items-center justify-center rounded-full bg-rose-500 px-1 py-1 text-[9px] font-extrabold leading-none text-white shadow ring-2 ring-white">
+                      {favoriteCount > 99 ? '99+' : favoriteCount}
                     </span>
                   )}
                 </span>

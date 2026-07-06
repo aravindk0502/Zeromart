@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { ArrowLeft, Check, LocateFixed, LogOut, MapPin, PackageCheck, Pencil, ShieldCheck, Truck, X } from 'lucide-react';
+import { ArrowLeft, Check, ExternalLink, LocateFixed, LogOut, MapPin, PackageCheck, Pencil, ShieldCheck, Truck, X } from 'lucide-react';
 import { useLocationEngine } from '../hooks/useLocationEngine';
 import LocationMap from '../components/LocationMap';
 import OrderTrackingModal from '../components/OrderTrackingModal';
@@ -20,10 +20,14 @@ export default function ProfilePage({ user, items = [], orders = [], receivedOrd
   const locationEngine = useLocationEngine();
   const [selectedStat, setSelectedStat] = useState('Items listed');
   const [selectedOrder, setSelectedOrder] = useState(null);
+  const [previewImage, setPreviewImage] = useState(null);
   const [isEditingProfile, setIsEditingProfile] = useState(false);
   const [profileDraft, setProfileDraft] = useState({
     name: user?.name || 'Unknown',
     mobile: user?.mobile || '',
+    bio: user?.bio || '',
+    locationLink: user?.locationLink || '',
+    websiteLink: user?.websiteLink || '',
   });
 
   useEffect(() => {
@@ -35,8 +39,11 @@ export default function ProfilePage({ user, items = [], orders = [], receivedOrd
     setProfileDraft({
       name: user?.name || 'Unknown',
       mobile: user?.mobile || '',
+      bio: user?.bio || '',
+      locationLink: user?.locationLink || '',
+      websiteLink: user?.websiteLink || '',
     });
-  }, [isEditingProfile, user?.mobile, user?.name]);
+  }, [isEditingProfile, user?.bio, user?.locationLink, user?.mobile, user?.name, user?.websiteLink]);
 
   const handleProfileImage = (event) => {
     const file = event.target.files?.[0];
@@ -51,8 +58,11 @@ export default function ProfilePage({ user, items = [], orders = [], receivedOrd
   const handleSaveProfile = () => {
     const name = profileDraft.name.trim() || 'Unknown';
     const mobile = profileDraft.mobile.replace(/\D/g, '').slice(-10);
-    onUpdateUser?.({ name, mobile });
-    setProfileDraft({ name, mobile });
+    const bio = profileDraft.bio.trim().slice(0, 180);
+    const locationLink = profileDraft.locationLink.trim();
+    const websiteLink = profileDraft.websiteLink.trim();
+    onUpdateUser?.({ name, mobile, bio, locationLink, websiteLink });
+    setProfileDraft({ name, mobile, bio, locationLink, websiteLink });
     setIsEditingProfile(false);
   };
 
@@ -147,6 +157,10 @@ export default function ProfilePage({ user, items = [], orders = [], receivedOrd
     locationEngine.location?.state,
     locationEngine.location?.country,
   ].filter((value, index, values) => value && values.indexOf(value) === index);
+  const normalizeUrl = (value) => {
+    if (!value) return '';
+    return /^https?:\/\//i.test(value) ? value : `https://${value}`;
+  };
 
   return (
     <div className="space-y-4">
@@ -160,6 +174,21 @@ export default function ProfilePage({ user, items = [], orders = [], receivedOrd
             <p className="text-sm font-semibold text-violet-600">Your profile</p>
             <h2 className="text-xl font-semibold text-slate-900">{user.name || 'Unknown'}</h2>
             <p className="mt-1 text-sm text-slate-500">One account to buy and sell</p>
+            {user.bio && <p className="mt-2 max-w-xl text-sm leading-6 text-slate-600">{user.bio}</p>}
+            {(user.locationLink || user.websiteLink) && (
+              <div className="mt-3 flex flex-wrap gap-2">
+                {user.locationLink && (
+                  <a href={normalizeUrl(user.locationLink)} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 rounded-full border border-emerald-100 bg-emerald-50 px-3 py-1.5 text-xs font-bold text-emerald-800">
+                    <MapPin size={13} /> Location
+                  </a>
+                )}
+                {user.websiteLink && (
+                  <a href={normalizeUrl(user.websiteLink)} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 rounded-full border border-violet-100 bg-violet-50 px-3 py-1.5 text-xs font-bold text-violet-700">
+                    <ExternalLink size={13} /> Website
+                  </a>
+                )}
+              </div>
+            )}
             <button
               type="button"
               onClick={() => setIsEditingProfile((current) => !current)}
@@ -170,7 +199,7 @@ export default function ProfilePage({ user, items = [], orders = [], receivedOrd
             </button>
           </div>
           <div className="text-right">
-            <label className="group block cursor-pointer">
+            <button type="button" onClick={() => user.profileImage && setPreviewImage(user.profileImage)} className="group block w-full cursor-pointer text-right">
               <div className="ml-auto flex h-16 w-16 items-center justify-center overflow-hidden rounded-full border-2 border-amber-100 bg-amber-50 text-violet-600 transition group-hover:border-violet-200">
                 {user.profileImage ? (
                   <img src={user.profileImage} alt={user.name} className="h-full w-full object-cover" />
@@ -178,6 +207,8 @@ export default function ProfilePage({ user, items = [], orders = [], receivedOrd
                   <ShieldCheck size={22} />
                 )}
               </div>
+            </button>
+            <label className="block cursor-pointer">
               <input type="file" accept="image/*" className="hidden" onChange={handleProfileImage} />
               <span className="mt-2 block text-xs font-semibold text-violet-700">Add photo</span>
             </label>
@@ -205,6 +236,36 @@ export default function ProfilePage({ user, items = [], orders = [], receivedOrd
                   value={profileDraft.mobile}
                   onChange={(event) => setProfileDraft((current) => ({ ...current, mobile: event.target.value.replace(/\D/g, '').slice(0, 10) }))}
                   placeholder="10-digit mobile number"
+                  className="mt-2 w-full rounded-xl border border-violet-100 bg-white px-3 py-2.5 text-sm font-semibold text-slate-900 outline-none focus:border-violet-300 focus:ring-2 focus:ring-violet-100"
+                />
+              </label>
+              <label className="block sm:col-span-2">
+                <span className="text-xs font-bold uppercase tracking-[0.12em] text-slate-500">Bio</span>
+                <textarea
+                  value={profileDraft.bio}
+                  onChange={(event) => setProfileDraft((current) => ({ ...current, bio: event.target.value.slice(0, 180) }))}
+                  placeholder="A few words about you"
+                  rows={3}
+                  className="mt-2 w-full resize-none rounded-xl border border-violet-100 bg-white px-3 py-2.5 text-sm font-semibold text-slate-900 outline-none focus:border-violet-300 focus:ring-2 focus:ring-violet-100"
+                />
+              </label>
+              <label className="block">
+                <span className="text-xs font-bold uppercase tracking-[0.12em] text-slate-500">Location link optional</span>
+                <input
+                  type="url"
+                  value={profileDraft.locationLink}
+                  onChange={(event) => setProfileDraft((current) => ({ ...current, locationLink: event.target.value }))}
+                  placeholder="Google Maps or location link"
+                  className="mt-2 w-full rounded-xl border border-violet-100 bg-white px-3 py-2.5 text-sm font-semibold text-slate-900 outline-none focus:border-violet-300 focus:ring-2 focus:ring-violet-100"
+                />
+              </label>
+              <label className="block">
+                <span className="text-xs font-bold uppercase tracking-[0.12em] text-slate-500">Website optional</span>
+                <input
+                  type="url"
+                  value={profileDraft.websiteLink}
+                  onChange={(event) => setProfileDraft((current) => ({ ...current, websiteLink: event.target.value }))}
+                  placeholder="your-site.com"
                   className="mt-2 w-full rounded-xl border border-violet-100 bg-white px-3 py-2.5 text-sm font-semibold text-slate-900 outline-none focus:border-violet-300 focus:ring-2 focus:ring-violet-100"
                 />
               </label>
@@ -476,6 +537,19 @@ export default function ProfilePage({ user, items = [], orders = [], receivedOrd
         )}
       </section>
       <OrderTrackingModal order={selectedOrder} onClose={() => setSelectedOrder(null)} />
+      {previewImage && (
+        <div className="fixed inset-0 z-[220] flex items-center justify-center bg-slate-950/75 p-5 backdrop-blur-sm" role="dialog" aria-modal="true">
+          <button
+            type="button"
+            onClick={() => setPreviewImage(null)}
+            className="absolute right-4 top-4 rounded-full bg-white/90 p-3 text-slate-700 shadow-lg"
+            aria-label="Close profile photo"
+          >
+            <X size={20} />
+          </button>
+          <img src={previewImage} alt={`${user.name || 'Unknown'} profile`} className="max-h-[82vh] max-w-full rounded-[2rem] object-contain shadow-2xl" />
+        </div>
+      )}
     </div>
   );
 }
