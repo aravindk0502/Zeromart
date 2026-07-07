@@ -28,7 +28,8 @@ export default function ListingSheet({ open, onClose, onSubmit, initialItem = nu
   const [condition, setCondition] = useState('Good');
   const [expiry, setExpiry] = useState('');
   const [expiryTime, setExpiryTime] = useState('');
-  const [totalQuantity, setTotalQuantity] = useState(1);
+  // Keep quantity as string to allow empty editing on mobile, coerce to number on submit
+  const [totalQuantity, setTotalQuantity] = useState('1');
   const [area, setArea]           = useState('');
   const [coordinates, setCoordinates] = useState(null);
   const [pickupLocation, setPickupLocation] = useState(null);
@@ -49,7 +50,7 @@ export default function ListingSheet({ open, onClose, onSubmit, initialItem = nu
       setCondition(initialItem.condition || 'Good');
       setExpiry(initialItem.validTill || '');
       setExpiryTime(initialItem.expiryTime || '');
-      setTotalQuantity(Number(initialItem.totalQuantity || initialItem.quantity || 1));
+      setTotalQuantity(String(Number(initialItem.totalQuantity || initialItem.quantity || 1)));
       setArea(initialItem.location || '');
       setCoordinates(initialItem.coordinates || null);
       setPickupLocation(initialItem.locationData || null);
@@ -59,6 +60,8 @@ export default function ListingSheet({ open, onClose, onSubmit, initialItem = nu
       setPickupLocation(locationEngine.location);
       setArea(locationLabel(locationEngine.location));
       setCoordinates({ latitude: locationEngine.location.latitude, longitude: locationEngine.location.longitude });
+      // Default expiry to today so mobile date input shows date by default
+      setExpiry(new Date().toISOString().slice(0, 10));
     }
   }, [locationEngine.location, open, initialItem]);
 
@@ -66,7 +69,7 @@ export default function ListingSheet({ open, onClose, onSubmit, initialItem = nu
 
   function reset() {
     setPhoto(null); setTitle(''); setDesc('');
-    setCategory(''); setCustomCategory(''); setCondition('Good'); setExpiry(''); setExpiryTime(''); setTotalQuantity(1);
+    setCategory(''); setCustomCategory(''); setCondition('Good'); setExpiry(''); setExpiryTime(''); setTotalQuantity('1');
     setArea(''); setCoordinates(null); setPickupLocation(null); setPosted(false);
   }
 
@@ -93,8 +96,8 @@ export default function ListingSheet({ open, onClose, onSubmit, initialItem = nu
       validTill: expiry,
       expiryDate: expiry,
       expiryTime,
-      totalQuantity,
-      availableQuantity: initialItem ? Number(initialItem.availableQuantity ?? totalQuantity) : totalQuantity,
+      totalQuantity: Number(totalQuantity || 1),
+      availableQuantity: initialItem ? Number(initialItem.availableQuantity ?? Number(totalQuantity || 1)) : Number(totalQuantity || 1),
       reservedQuantity: Number(initialItem?.reservedQuantity || 0),
       soldQuantity: Number(initialItem?.soldQuantity || 0),
       maxQuantityPerUserPer24h: 2,
@@ -254,7 +257,17 @@ export default function ListingSheet({ open, onClose, onSubmit, initialItem = nu
             <div className="mb-3 grid grid-cols-2 gap-2">
               <label className="text-xs font-semibold text-slate-600">
                 Total quantity
-                <input className="input mt-1" type="number" min="1" value={totalQuantity} onChange={(event) => setTotalQuantity(Math.max(1, Number(event.target.value || 1)))} />
+                <input
+                  className="input mt-1"
+                  type="number"
+                  min="1"
+                  value={totalQuantity}
+                  onChange={(event) => setTotalQuantity(event.target.value)}
+                  onBlur={(event) => {
+                    const n = Number(event.target.value);
+                    setTotalQuantity(String(Number.isFinite(n) && !Number.isNaN(n) ? Math.max(1, n) : 1));
+                  }}
+                />
               </label>
               <label className="text-xs font-semibold text-slate-600">
                 Expiry time (optional)

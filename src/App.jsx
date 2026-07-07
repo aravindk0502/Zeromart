@@ -1547,9 +1547,10 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
     ))
     .slice(0, 10), [rankedItems, requestClock]);
   const rescueIds = useMemo(() => new Set(rescueItems.map((item) => String(item.id))), [rescueItems]);
+  // Include rescue items also in the community feed — do not exclude by rescueIds
   const communityRankedItems = useMemo(
-    () => rankedItems.filter((item) => !item.isBusinessProduct && !rescueIds.has(String(item.id))),
-    [rankedItems, rescueIds]
+    () => rankedItems.filter((item) => !item.isBusinessProduct),
+    [rankedItems]
   );
 
   useEffect(() => {
