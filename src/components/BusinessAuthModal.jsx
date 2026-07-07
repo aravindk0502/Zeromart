@@ -61,7 +61,7 @@ export default function BusinessAuthModal({ open = true, onClose, onSuccess, emb
         </div>
         <div className="mt-4 flex gap-3">
           <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-emerald-600 text-white"><Building2 size={21} /></div>
-          <div className="min-w-0"><p className="text-xs font-bold uppercase tracking-[0.16em] text-emerald-700">ZeroMart Business</p><h2 className="mt-1 text-xl font-bold text-slate-900">{step === 'otp' ? 'Verify mobile number' : mode === 'login' ? 'Business Login' : 'Create business account'}</h2></div>
+          <div className="min-w-0"><p className="text-xs font-bold uppercase tracking-[0.16em] text-emerald-700">Drizn Business</p><h2 className="mt-1 text-xl font-bold text-slate-900">{step === 'otp' ? 'Verify mobile number' : mode === 'login' ? 'Business Login' : 'Create business account'}</h2></div>
         </div>
       </div>
       <div className="p-5">

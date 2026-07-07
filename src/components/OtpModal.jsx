@@ -74,7 +74,7 @@ export default function OtpModal({ onClose, onVerify }) {
               />
             </label>
             <div className="rounded-2xl border border-slate-200 bg-slate-50 p-3">
-              <p className="text-sm font-medium text-slate-700">ZeroMart account</p>
+              <p className="text-sm font-medium text-slate-700">Drizn account</p>
               <p className="mt-1 text-sm font-semibold text-violet-700">Buy for ₹0. Sell for ₹0. Earn good karma.</p>
             </div>
             <button onClick={handleVerify} className="w-full rounded-2xl bg-violet-600 px-4 py-3 font-semibold text-white">

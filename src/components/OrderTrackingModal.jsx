@@ -36,7 +36,7 @@ export default function OrderTrackingModal({ order, onClose }) {
             {order.image ? <img src={order.image} alt="" className="h-20 w-20 shrink-0 rounded-2xl object-cover" /> : <div className="flex h-20 w-20 shrink-0 items-center justify-center rounded-2xl bg-emerald-50 text-emerald-700"><PackageCheck size={28} /></div>}
             <div className="min-w-0">
               <h3 className="break-words text-xl font-extrabold text-slate-900">{order.title || order.productName}</h3>
-              <p className="mt-1 text-sm text-slate-500">From {order.sellerName || 'ZeroMart seller'}</p>
+              <p className="mt-1 text-sm text-slate-500">From {order.sellerName || 'Drizn seller'}</p>
               <span className="mt-2 inline-flex items-center gap-1.5 rounded-full bg-emerald-50 px-3 py-1 text-xs font-bold text-emerald-700">
                 {isDelivery ? <Truck size={13} /> : <PackageCheck size={13} />}
                 {isDelivery ? 'Delivery' : 'In-person collection'}

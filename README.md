@@ -1,6 +1,6 @@
-# ZeroMart — Phase 1 Pilot App
+# Drizn — Phase 1 Pilot App
 
-**Give what you don't need. Earn what you can use.**
+**Good Things. Nearby.**
 
 ## What's included
 
@@ -12,7 +12,7 @@
 - Seller hub with karma score, delivery credits, vouchers, milestones
 - Compulsory karma popup after every transaction
 - Temporary chat for in-person collection (auto-deletes after handoff)
-- ZeroBot — platform assistant (no hallucination, only platform answers)
+- Drizn AI — platform assistant (no hallucination, only platform answers)
 - Listing sheet — photo + description, posts instantly
 - Buyer access unlock — ₹29 one-time payment gate
 - Notifications page

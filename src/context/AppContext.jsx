@@ -28,7 +28,7 @@ const PLATFORM_ANSWERS = {
   'delivery': 'The buyer pays the actual delivery cost. We work with Shadowfax and Porter. Prices are shown before you confirm.',
   'karma': 'Karma points are given by buyers after receiving an item. Higher karma = more visibility and better rewards.',
   'in person': 'If a seller is within 1 km of you, you can request to collect in person.',
-  'free': 'Yes! Listing on ZeroMart is completely free for sellers. Items are listed at ₹0.',
+  'free': 'Yes! Listing on Drizn is completely free for sellers. Items are listed at ₹0.',
   'reward': 'Sellers earn delivery credits and unlock vouchers from brands like Swiggy and BookMyShow when they hit karma milestones.',
   'account': 'One account can switch between Seller and Buyer mode anytime. Buyer mode requires a one-time ₹29 fee.',
   '29': 'The ₹29 is a one-time lifetime fee to unlock buyer access. Pay once, browse and buy forever.',

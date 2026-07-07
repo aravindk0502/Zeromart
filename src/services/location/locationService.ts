@@ -72,7 +72,7 @@ const safeText = (value: unknown, fallback = '') => (
     ? fallback
     : String(value).trim()
 );
-export const INDIA_ONLY_ERROR = 'ZeroMart is currently available only in India. Please select an Indian location.';
+export const INDIA_ONLY_ERROR = 'Drizn is currently available only in India. Please select an Indian location.';
 
 export const isIndiaLocation = (input: any) => {
   const countryCode = String(input?.countryCode || input?.country_code || '').trim().toLowerCase();

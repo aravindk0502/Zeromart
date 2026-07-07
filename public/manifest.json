@@ -1,7 +1,7 @@
 {
-  "name": "ZeroMart — Give freely. Receive abundantly.",
-  "short_name": "ZeroMart",
-  "description": "Free marketplace. Give what you don't need, earn karma, get rewards.",
+  "name": "Drizn",
+  "short_name": "Drizn",
+  "description": "Drizn – Good Things. Nearby.",
   "start_url": "/",
   "display": "standalone",
   "orientation": "portrait",

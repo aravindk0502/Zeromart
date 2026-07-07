@@ -278,7 +278,7 @@ export default function NotificationsPage({
               {selectedNotification.type === 'request' && requestActions(selectedNotification)}
               {selectedNotification.type === 'request' && selectedNotification.requestStatus === 'pending' && selectedNotification.sellerPhone && (
                 <a
-                  href={createWhatsAppLink(selectedNotification.sellerPhone, `Hello,\n\n${selectedNotification.buyerName} from ${selectedNotification.buyerLocation} requested to collect your product:\n\n${selectedNotification.productName || 'ZeroMart item'}\n\nQuantity: ${selectedNotification.quantity || 1}\n\nPlease confirm here:\n${selectedNotification.requestUrl || `${window.location.origin}/request/${selectedNotification.requestId}`}`)}
+                  href={createWhatsAppLink(selectedNotification.sellerPhone, `Hello,\n\n${selectedNotification.buyerName} from ${selectedNotification.buyerLocation} requested to collect your product:\n\n${selectedNotification.productName || 'Drizn item'}\n\nQuantity: ${selectedNotification.quantity || 1}\n\nPlease confirm here:\n${selectedNotification.requestUrl || `${window.location.origin}/request/${selectedNotification.requestId}`}`)}
                   target="_blank"
                   rel="noreferrer"
                   className="mt-3 inline-flex items-center gap-2 text-sm font-bold text-emerald-700"

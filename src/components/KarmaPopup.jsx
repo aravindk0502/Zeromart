@@ -58,7 +58,7 @@ export default function KarmaPopup({ open, seller, onSubmit, mandatory = false }
             </div>
 
             <div className="mt-5 rounded-2xl border border-amber-100 bg-gradient-to-r from-amber-50 to-amber-50 px-4 py-3 text-sm font-semibold italic text-amber-800">
-              “Do good. Get good.” — the ZeroMart way
+              “Do good. Get good.” — the Drizn way
             </div>
 
             <div className="my-5 flex justify-center gap-2">

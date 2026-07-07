@@ -12,10 +12,10 @@ const SUGGESTIONS = [
 const PLATFORM_QA = [
   { keys: ['how to sell', 'list item', 'post item', 'give away', 'listing'], answer: 'Tap the + button at the bottom to list a product. Take a photo, add a short description, pick a category — it goes live instantly. Completely free!' },
   { keys: ['how to buy', 'how to request', 'get item', 'buying'], answer: 'Pay a one-time ₹29 to unlock buyer access forever. Then browse, search, and request any item you like.' },
-  { keys: ['delivery', 'shipping', 'courier', 'porter', 'shadowfax', 'uber'], answer: 'ZeroMart currently uses direct collection coordination. Use the seller chat to arrange pickup or your own courier service and share the required contact details.' },
+  { keys: ['delivery', 'shipping', 'courier', 'porter', 'shadowfax', 'uber'], answer: 'Drizn currently uses direct collection coordination. Use the seller chat to arrange pickup or your own courier service and share the required contact details.' },
   { keys: ['karma', 'points', 'rating', 'review'], answer: 'Karma is mandatory after collection. The buyer who received the item sends good karma to the seller or store, and that seller/store gains the karma point.' },
   { keys: ['in person', 'collect', 'pickup', 'nearby'], answer: 'For community items, send a collection request and wait for the seller to accept. Their phone, pickup address, date, time, and instructions then appear in Alerts. Business items use Reserve & Collect with a collection ID and QR pass.' },
-  { keys: ['free', 'cost', 'charge', 'fee', 'price'], answer: 'Yes! Listing on ZeroMart is completely free for sellers. Items are listed at ₹0.' },
+  { keys: ['free', 'cost', 'charge', 'fee', 'price'], answer: 'Yes! Listing on Drizn is completely free for sellers. Items are listed at ₹0.' },
   { keys: ['reward', 'voucher', 'swiggy', 'bookmyshow', 'myntra', 'milestone'], answer: 'Sellers earn delivery credits and unlock brand vouchers (Swiggy, BookMyShow, Myntra) when they hit karma milestones at 5, 10, 25+ items given.' },
   { keys: ['account', 'profile', 'login', 'sign up', 'otp', 'mobile', 'number'], answer: 'You need your mobile number only when you buy or sell — we send a quick OTP to verify. One account lets you list for ₹0 and buy ₹0 items after lifetime access.' },
   { keys: ['₹29', '29', 'one time', 'lifetime', 'unlock'], answer: 'The ₹29 is a one-time lifetime fee to unlock buyer access. Pay once, browse and buy forever. No subscriptions.' },
@@ -24,15 +24,15 @@ const PLATFORM_QA = [
   { keys: ['credit', 'delivery credit', 'offset'], answer: 'Delivery credits are earned every time you give away an item. Use them to offset your own delivery costs when buying.' },
   { keys: ['business', 'store', 'reserve', 'qr', 'collection id', 'collection pass'], answer: 'Business store items use Reserve & Collect. After reserving, the buyer gets a collection ID/QR pass with directions. The store marks it collected, then the buyer must send good karma.' },
   { keys: ['limit', '24 hour', 'again', 'sold out', 'stock'], answer: 'Each user can request up to 2 quantity per product in 24 hours. If stock reaches 0, the product shows Sold Out and the request button is disabled.' },
-  { keys: ['live', 'listed now', 'new listing', 'real time'], answer: 'New listings are saved into ZeroMart marketplace storage and refreshed into the feed by location. The nearest live listings appear first, then karma and freshness decide the order.' },
+  { keys: ['live', 'listed now', 'new listing', 'real time'], answer: 'New listings are saved into Drizn marketplace storage and refreshed into the feed by location. The nearest live listings appear first, then karma and freshness decide the order.' },
 ];
 
 const SEARCH_TRIGGERS = ['find', 'search', 'show', 'any', 'looking for', 'do you have', 'got any', 'need', 'want', 'available'];
-const STOP_WORDS = ['near', 'me', 'please', 'the', 'any', 'for', 'some', 'got', 'you', 'have', 'what', 'which', 'with', 'and', 'item', 'items', 'product', 'products', 'zero', 'zeromart'];
+const STOP_WORDS = ['near', 'me', 'please', 'the', 'any', 'for', 'some', 'got', 'you', 'have', 'what', 'which', 'with', 'and', 'item', 'items', 'product', 'products', 'drizn', 'ai'];
 const FEATURE_TOPICS = [
   {
     keys: ['feature', 'platform', 'how works', 'what can', 'inside'],
-    answer: 'ZeroMart lets you browse ₹0 items, list products for free, save favorites, search by keyword/location/category/condition, request collection, coordinate by phone or WhatsApp after acceptance, track orders, receive notifications, and ask ZeroBot for help.',
+    answer: 'Drizn lets you browse ₹0 items, list products for free, save favorites, search by keyword/location/category/condition, request collection, coordinate by phone or WhatsApp after acceptance, track orders, receive notifications, and ask Drizn AI for help.',
   },
   {
     keys: ['footer', 'terms', 'faq', 'support', 'contact', 'blog', 'social'],
@@ -111,7 +111,7 @@ function buildContextAnswer(question, context) {
   const categories = [...new Set(products.map(item => item.category).filter(Boolean))];
 
   if (q.includes('how many') || q.includes('summary') || q.includes('dashboard')) {
-    return `I can see ${products.length} products, ${categories.length} categories, ${locations.length} locations, ${context.favorites?.length || 0} favorites, ${context.orders?.length || 0} orders, and ${context.notifications?.length || 0} notifications in this ZeroMart session.`;
+    return `I can see ${products.length} products, ${categories.length} categories, ${locations.length} locations, ${context.favorites?.length || 0} favorites, ${context.orders?.length || 0} orders, and ${context.notifications?.length || 0} notifications in this Drizn session.`;
   }
 
   if (q.includes('category') || q.includes('categories')) {
@@ -229,7 +229,7 @@ function BotMessage({ msg, onOpenProduct }) {
 
 export default function BotAssistant({ open, onClose, items = [], favorites = [], orders = [], notifications = [], locationLabel, user, onSelectItem }) {
   const [messages, setMessages] = useState([
-    { id: 0, from: 'bot', text: "Hi! I'm ZeroBot. I can search products, locations, categories, favorites, order history, notifications, and explain ZeroMart features in this chat." }
+    { id: 0, from: 'bot', text: "Hi! I'm Drizn AI. I can help you with everything inside Drizn." }
   ]);
   const [input, setInput] = useState('');
   const [typing, setTyping] = useState(false);
@@ -275,7 +275,7 @@ export default function BotAssistant({ open, onClose, items = [], favorites = []
       setMessages(prev => [...prev, {
         id: Date.now() + 1,
         from: 'bot',
-        text: answer || 'I can help only with ZeroMart platform features.',
+        text: answer || 'I can help only with Drizn platform features.',
       }]);
     }, 600);
   }
@@ -296,7 +296,7 @@ export default function BotAssistant({ open, onClose, items = [], favorites = []
             <Bot size={18} color="var(--zm-accent)" />
           </div>
           <div style={{ flex: 1 }}>
-            <div style={{ fontSize: 14, fontWeight: 600 }}>ZeroBot</div>
+            <div style={{ fontSize: 14, fontWeight: 600 }}>Drizn AI</div>
             <div style={{ fontSize: 11, color: 'var(--zm-text-dim)' }}>Find items · Platform help</div>
           </div>
           <button onClick={onClose} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--zm-text-muted)' }}>

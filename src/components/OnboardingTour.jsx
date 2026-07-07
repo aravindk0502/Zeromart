@@ -4,7 +4,7 @@ import { ArrowLeft, ArrowRight, X } from 'lucide-react';
 const STEPS = [
   {
     icon: '✨',
-    title: 'Welcome to ZeroMart',
+    title: 'Welcome to Drizn',
     subtitle: 'A calmer way to give and receive nearby.',
     body: 'Browse free listings, discover useful items in your area, and help your community reuse what is still loved.',
     accent: 'from-amber-500 to-violet-600',

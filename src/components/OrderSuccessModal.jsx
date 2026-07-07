@@ -4,7 +4,7 @@ import { QRCodeSVG } from 'qrcode.react';
 function CollectionQr({ value }) {
   return (
     <div className="mx-auto w-fit rounded-xl border-4 border-white bg-white p-2 shadow">
-      <QRCodeSVG value={String(value || 'ZEROMART')} size={128} level="M" includeMargin aria-label="Collection QR code" />
+      <QRCodeSVG value={String(value || 'DRIZN')} size={128} level="M" includeMargin aria-label="Collection QR code" />
     </div>
   );
 }

@@ -59,7 +59,7 @@ const DISCOVERY_STAGES = [
   { key: 'india', label: 'Across India', radiusKm: Number.POSITIVE_INFINITY },
 ];
 
-const platformSearchKeywords = 'zeromart zero mart karma good karma free 0 rs ₹0 rupees local business b2b marketplace listing list item seller buyer pickup delivery in person collect product item movie movies ticket tickets food electronics books cosmetics home furniture';
+const platformSearchKeywords = 'drizn drizn ai good things nearby karma good karma free 0 rs ₹0 rupees local business b2b marketplace listing list item seller buyer pickup delivery in person collect product item movie movies ticket tickets food electronics books cosmetics home furniture';
 
 const getItemCoordinates = (item) => item.coordinates
   || (item.locationData ? { latitude: item.locationData.latitude, longitude: item.locationData.longitude } : null)
@@ -111,12 +111,11 @@ const stripFallbackDemoWhenLiveExists = (catalog) => {
   return hasRealListings ? normalized.filter((item) => !isLegacyDemoRecord(item)) : normalized;
 };
 
-const loadMarketplaceItems = () => {
-  const liveListings = getLiveListings();
-  const fallbackListings = fallbackMarketplaceListings();
-  const source = liveListings.length ? mergeListingsById(fallbackListings, liveListings) : fallbackListings;
-  return applyProductExpiry(stripFallbackDemoWhenLiveExists(source).map(normalizeProductStock));
-};
+// Single source of truth: the homepage marketplace reads ONLY from drizn_live_listings.
+// No dummy/demo fallback — an empty store means an empty marketplace.
+const loadMarketplaceItems = () => (
+  applyProductExpiry(stripFallbackDemoWhenLiveExists(getLiveListings()).map(normalizeProductStock))
+);
 
 const loadOrderHistory = () => {
   try {
@@ -344,6 +343,7 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
     window.addEventListener('storage', syncMarketplaceItems);
     window.addEventListener('storage', syncOrderHistory);
     window.addEventListener('storage', syncNotifications);
+    window.addEventListener('drizn_listings_updated', syncMarketplaceItems);
     window.addEventListener('zeromart-business-change', syncMarketplaceItems);
     window.addEventListener('zeromart-marketplace-change', syncMarketplaceItems);
     window.addEventListener('zeromart-transactions-change', syncMarketplaceItems);
@@ -355,6 +355,7 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
       window.removeEventListener('storage', syncMarketplaceItems);
       window.removeEventListener('storage', syncOrderHistory);
       window.removeEventListener('storage', syncNotifications);
+      window.removeEventListener('drizn_listings_updated', syncMarketplaceItems);
       window.removeEventListener('zeromart-business-change', syncMarketplaceItems);
       window.removeEventListener('zeromart-marketplace-change', syncMarketplaceItems);
       window.removeEventListener('zeromart-transactions-change', syncMarketplaceItems);
@@ -369,6 +370,20 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
     const showLocationToast = (event) => setNotice(event.detail || 'Location updated');
     window.addEventListener('zeromart-location-toast', showLocationToast);
     return () => window.removeEventListener('zeromart-location-toast', showLocationToast);
+  }, []);
+
+  // Dev/demo utility: clear every live listing so the marketplace starts empty.
+  // Run `driznResetListings()` in the browser console.
+  useEffect(() => {
+    window.driznResetListings = () => {
+      saveLiveListings([]);
+      localStorage.removeItem('zeromart-transaction-products');
+      skipTransactionPersistRef.current = true;
+      setItems([]);
+      window.dispatchEvent(new Event('drizn_listings_updated'));
+      return 'Drizn live listings cleared. Marketplace is now empty.';
+    };
+    return () => { delete window.driznResetListings; };
   }, []);
 
   useEffect(() => {
@@ -774,7 +789,7 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
       type: 'business-reservation',
       createdAt: new Date().toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' }),
     };
-    reservation.whatsappLink = createWhatsAppLink(activeBuyer.mobile, `Your ZeroMart order ${collectionCode} is reserved at ${requestedItem.sellerName}. Show this collection ID or QR at the store to collect ${requestedItem.title} × ${reservedQuantity}.`);
+    reservation.whatsappLink = createWhatsAppLink(activeBuyer.mobile, `Your Drizn order ${collectionCode} is reserved at ${requestedItem.sellerName}. Show this collection ID or QR at the store to collect ${requestedItem.title} × ${reservedQuantity}.`);
     saveReservations([reservation, ...getReservations()]);
     saveBusinessProducts(getBusinessProducts().map((product) => {
       if (product.id !== requestedItem.businessProductId) return product;
@@ -827,7 +842,7 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
       collectionTime: collectionWindow,
       pickupAddress: reservation.businessPickupAddress,
       mapsLink: `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(reservation.businessPickupAddress || '')}`,
-      whatsappLink: createWhatsAppLink(reservation.storePhone, `Hello, I reserved ${requestedItem.title} on ZeroMart. Collection ID: ${collectionCode}.`),
+      whatsappLink: createWhatsAppLink(reservation.storePhone, `Hello, I reserved ${requestedItem.title} on Drizn. Collection ID: ${collectionCode}.`),
       time: 'Just now',
       read: false,
     }, {
@@ -897,9 +912,9 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
       const productName = notification.productName || notification.title.replace('Request for ', '');
       const sellerPhone = confirmation.sellerPhone || notification.sellerPhone || '';
       const collectionSummary = `${confirmation.collectionDate} at ${confirmation.collectionTime}`;
-      const buyerWhatsappLink = createWhatsAppLink(notification.buyerPhone, `Your ZeroMart request for ${productName} is confirmed by ${notification.sellerName}. Collect on ${collectionSummary} from ${confirmation.pickupAddress}. Seller phone: ${sellerPhone}.${confirmation.optionalMessage ? ` Message: ${confirmation.optionalMessage}` : ''}`);
-      const sellerWhatsappLink = createWhatsAppLink(sellerPhone, `Hello, I am ${notification.buyerName}. My ZeroMart collection for ${productName} is confirmed for ${collectionSummary}.`);
-      const emailSubject = encodeURIComponent('ZeroMart Collection Confirmation');
+      const buyerWhatsappLink = createWhatsAppLink(notification.buyerPhone, `Your Drizn request for ${productName} is confirmed by ${notification.sellerName}. Collect on ${collectionSummary} from ${confirmation.pickupAddress}. Seller phone: ${sellerPhone}.${confirmation.optionalMessage ? ` Message: ${confirmation.optionalMessage}` : ''}`);
+      const sellerWhatsappLink = createWhatsAppLink(sellerPhone, `Hello, I am ${notification.buyerName}. My Drizn collection for ${productName} is confirmed for ${collectionSummary}.`);
+      const emailSubject = encodeURIComponent('Drizn Collection Confirmation');
       const emailBody = encodeURIComponent(`Product: ${productName}\nCollection time: ${collectionSummary}\nPickup address: ${confirmation.pickupAddress}\nSeller phone: ${sellerPhone}`);
       const emailLink = `mailto:seller@email.com?subject=${emailSubject}&body=${emailBody}`;
       const acceptedNotification = {
@@ -1626,7 +1641,7 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
     });
     const profileMap = new Map();
     leaderboardItems.forEach((item) => {
-      const name = item.sellerName || item.brand || 'ZeroMart giver';
+      const name = item.sellerName || item.brand || 'Drizn giver';
       const itemCoordinates = getItemCoordinates(item);
       const itemDistanceKm = localCoordinates && itemCoordinates
         ? haversineKm(localCoordinates, itemCoordinates)
@@ -1703,8 +1718,8 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
             <div className="flex items-center gap-3">
               <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-gradient-to-br from-amber-500 to-violet-600 text-xl text-white shadow-lg shadow-violet-500/20">✨</div>
               <div>
-                <p className="text-2xl font-semibold text-slate-900">ZeroMart</p>
-                <p className="text-sm text-slate-500">₹0 goods, real kindness</p>
+                <p className="text-2xl font-semibold text-slate-900">Drizn</p>
+                <p className="text-sm text-slate-500">Good Things. Nearby.</p>
               </div>
             </div>
             <nav className="mt-8 space-y-2">
@@ -1787,8 +1802,9 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
                   <Sparkles size={13} />
                   Community marketplace
                 </div>
-                <p className="text-3xl font-extrabold text-white drop-shadow-sm sm:text-4xl">ZeroMart</p>
-                <p className="mt-2 max-w-xs text-sm font-medium leading-6 text-white/90">Pass useful things forward. Find nearby items and earn good karma.</p>
+                <p className="text-3xl font-extrabold text-white drop-shadow-sm sm:text-4xl">Drizn</p>
+                <p className="mt-1 text-lg font-bold text-white/95 drop-shadow-sm">Good Things. Nearby.</p>
+                <p className="mt-2 max-w-xs text-sm font-medium leading-6 text-white/90">Everything on Drizn is FREE to collect. No hidden charges. Just people helping people reduce waste.</p>
                 <div className="mt-4 flex flex-wrap gap-2">
                   <span className="rounded-full border border-white/25 bg-white/15 px-3 py-1.5 text-xs font-semibold text-white backdrop-blur-md">₹0 community finds</span>
                   <span className="rounded-full border border-white/25 bg-white/15 px-3 py-1.5 text-xs font-semibold text-white backdrop-blur-md">Local good karma</span>
@@ -1983,7 +1999,7 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
                           setSearchInput(event.target.value);
                           setSearchQuery(event.target.value.trim());
                         }}
-                        placeholder="Search anything on ZeroMart"
+                        placeholder="Search anything on Drizn"
                         className="w-full rounded-[1rem] border-2 border-violet-200 bg-white py-3 pl-11 pr-4 text-sm font-semibold text-slate-800 shadow-[0_8px_24px_rgba(124,58,237,0.08)] outline-none transition placeholder:text-slate-400 focus:border-violet-500 focus:bg-white focus:ring-4 focus:ring-violet-100"
                       />
                     </label>

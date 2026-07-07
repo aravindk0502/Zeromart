@@ -53,7 +53,7 @@ export default function CollectionPass({ order, onTrack }) {
             <p className={`text-xs font-extrabold uppercase tracking-[0.14em] ${state.active ? 'text-emerald-700' : 'text-slate-500'}`}>{state.label}</p>
           </div>
           <h3 className="mt-2 truncate text-lg font-extrabold text-slate-900">{order.title || order.productName}</h3>
-          <p className="mt-1 text-sm text-slate-500">{order.sellerName ? `Collect from ${order.sellerName}` : 'ZeroMart collection'}</p>
+          <p className="mt-1 text-sm text-slate-500">{order.sellerName ? `Collect from ${order.sellerName}` : 'Drizn collection'}</p>
         </div>
         <span className={`rounded-full px-3 py-1 text-xs font-bold ${state.active ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-200 text-slate-600'}`}>
           {state.active ? order.status || 'Reserved' : state.collected ? 'Collected' : 'Expired'}

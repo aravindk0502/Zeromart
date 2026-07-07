@@ -93,7 +93,7 @@ export default function DemoFlowPanel({
         <div className="flex items-start justify-between gap-3">
           <div>
             <p className="text-xs font-extrabold uppercase tracking-[0.14em] text-violet-600">Temporary testing tool</p>
-            <h2 className="mt-1 text-2xl font-extrabold text-slate-900">Test ZeroMart Flow</h2>
+            <h2 className="mt-1 text-2xl font-extrabold text-slate-900">Test Drizn Flow</h2>
             <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-500">
               Switch between Buyer, Seller, and Business to test the real end-to-end collection flow.
             </p>

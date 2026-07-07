@@ -100,6 +100,28 @@ export default function BusinessPortal({ path, navigate }) {
     return () => window.clearInterval(timer);
   }, [account?.id]);
 
+  // Publish current active business inventory into the shared drizn_live_listings
+  // store on load, so store products appear live for every user (and survive resets).
+  useEffect(() => {
+    if (!account) return;
+    const accounts = getBusinessAccounts();
+    applyExpiryRules(getBusinessProducts(), getBusinessRules()).forEach((product) => {
+      const status = String(product.status || '').toLowerCase();
+      const availableQuantity = Number(product.availableQuantity ?? product.quantity ?? 0);
+      const expiryTimestamp = product.expiryDate
+        ? new Date(`${product.expiryDate}T${product.expiryTime || '23:59'}:00`).getTime()
+        : null;
+      const expired = expiryTimestamp && Date.now() > expiryTimestamp;
+      const liveId = `business-product-${product.id}`;
+      if (product.autoList === false || availableQuantity <= 0 || expired || ['expired', 'sold', 'hidden', 'completed'].includes(status)) {
+        removeLiveListing(liveId);
+        return;
+      }
+      const accountForProduct = accounts.find((entry) => entry.id === product.businessId) || account;
+      upsertLiveListing(toMarketplaceItem(product, accountForProduct));
+    });
+  }, [account?.id]);
+
   const page = path.split('/').filter(Boolean)[1] || 'dashboard';
   useEffect(() => {
     if (account) showHelp(PAGE_HELP[page]);
@@ -201,7 +223,7 @@ export default function BusinessPortal({ path, navigate }) {
         <div className="flex items-center justify-between">
           <button onClick={() => navigate('/')} className="flex items-center gap-3 text-left">
             <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-emerald-600 text-white shadow-lg shadow-emerald-600/20"><Sparkles size={22} /></div>
-            <div><p className="text-lg font-extrabold">ZeroMart</p><p className="text-xs font-semibold text-emerald-700">Business workspace</p></div>
+            <div><p className="text-lg font-extrabold">Drizn</p><p className="text-xs font-semibold text-emerald-700">Business workspace</p></div>
           </button>
           <button onClick={() => setMobileNav(false)} className="rounded-lg p-2 text-slate-500 lg:hidden"><X size={20} /></button>
         </div>
@@ -266,7 +288,7 @@ function Dashboard({ account, products, orders, navigate, setInventoryMode }) {
     ['Store Good Karma', account.karma, ShieldCheck], ['Customers Nearby', customersNearby, UserRound],
   ];
   return <div className="space-y-6">
-    <section className="overflow-hidden rounded-3xl bg-emerald-700 p-6 text-white shadow-xl shadow-emerald-900/10 sm:p-8"><p className="text-sm font-bold text-emerald-100">Welcome back, {account.ownerName}</p><h2 className="mt-2 max-w-2xl text-3xl font-extrabold">Turn inventory into value before it becomes waste.</h2><p className="mt-3 max-w-xl text-sm leading-6 text-emerald-100">Expiry rules automatically publish eligible products into the ZeroMart marketplace.</p></section>
+    <section className="overflow-hidden rounded-3xl bg-emerald-700 p-6 text-white shadow-xl shadow-emerald-900/10 sm:p-8"><p className="text-sm font-bold text-emerald-100">Welcome back, {account.ownerName}</p><h2 className="mt-2 max-w-2xl text-3xl font-extrabold">Turn inventory into value before it becomes waste.</h2><p className="mt-3 max-w-xl text-sm leading-6 text-emerald-100">Expiry rules automatically publish eligible products into the Drizn marketplace.</p></section>
     <section className="grid grid-cols-2 gap-3 lg:grid-cols-4">{cards.map(([label, value, Icon]) => <MetricCard key={label} label={label} value={value} icon={Icon} />)}</section>
     <section><div className="mb-3"><h2 className="text-lg font-extrabold">Quick actions</h2><p className="text-sm text-slate-500">Keep your store moving.</p></div><div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
       <Quick label="Add Product" icon={PackagePlus} onClick={() => { setInventoryMode('manual'); navigate('/business/inventory'); }} />
@@ -511,7 +533,7 @@ function Orders({ account, orders, allOrders, setOrders, updateAccount, persistP
         collectionTime: changedOrder.collectionWindow || 'During store opening hours',
         pickupAddress: account.address || account.storeLocation || '',
         mapsLink: `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(account.address || account.storeLocation || '')}`,
-        whatsappLink: createWhatsAppLink(account.mobile, `Hello, I am contacting ${account.businessName} about ZeroMart order ${changedOrder.orderId || changedOrder.id} for ${changedOrder.productName}.`),
+        whatsappLink: createWhatsAppLink(account.mobile, `Hello, I am contacting ${account.businessName} about Drizn order ${changedOrder.orderId || changedOrder.id} for ${changedOrder.productName}.`),
         time: 'Just now',
         read: false,
       };

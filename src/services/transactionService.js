@@ -1,5 +1,5 @@
 const STORAGE_KEYS = {
-  liveListings: 'zeromart_live_listings',
+  liveListings: 'drizn_live_listings',
   products: 'zeromart-transaction-products',
   requests: 'zeromart-requests',
   orders: 'zeromart-reservations',
@@ -134,6 +134,8 @@ export const saveLiveListings = (listings) => {
   localStorage.setItem(STORAGE_KEYS.liveListings, JSON.stringify(value));
   window.dispatchEvent(new CustomEvent('zeromart-live-listings-change', { detail: { key: STORAGE_KEYS.liveListings, value } }));
   window.dispatchEvent(new CustomEvent('zeromart-transactions-change', { detail: { key: STORAGE_KEYS.liveListings, value } }));
+  // Single public signal that any live-listing write happened (same-tab live refresh).
+  window.dispatchEvent(new Event('drizn_listings_updated'));
   return value;
 };
 

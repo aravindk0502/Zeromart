@@ -153,7 +153,7 @@ export const createBusinessOrder = (item, buyer, details = {}) => {
     buyerId: details.buyerId || buyer?.userId || buyer?.mobile || '',
     productId: item.businessProductId,
     productName: item.title,
-    buyerName: details.buyerName || buyer?.name || 'ZeroMart buyer',
+    buyerName: details.buyerName || buyer?.name || 'Drizn buyer',
     buyerMobile: details.buyerPhone || buyer?.mobile || '',
     buyerLocationData: details.buyerLocationData || buyer?.location || null,
     buyerBusinessId: details.buyerBusinessId || buyer?.businessId || null,

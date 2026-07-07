@@ -33,7 +33,7 @@ export default function BuyerPaySheet({ open, onClose, onComplete }) {
         <div style={{ textAlign: 'center', marginBottom: 24 }}>
           <div style={{ fontSize: 24, fontWeight: 700, fontFamily: 'Sora, sans-serif', marginBottom: 6 }}>Platform fee for buyer access</div>
           <div style={{ fontSize: 13, color: 'var(--zm-text-muted)', lineHeight: 1.6 }}>
-            Pay ₹29 once for lifetime access.<br />Then request any ₹0 item on ZeroMart.
+            Pay ₹29 once for lifetime access.<br />Then request any ₹0 item on Drizn.
           </div>
         </div>
 

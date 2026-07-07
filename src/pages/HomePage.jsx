@@ -189,8 +189,9 @@ export default function HomePage({
 
         <div className="grid gap-3 p-4 sm:grid-cols-2 sm:p-5 xl:grid-cols-3">
           {nearbyProducts.length === 0 ? (
-            <div className="rounded-[1.5rem] border border-dashed border-slate-200 bg-white/80 p-6 text-center text-sm text-slate-500 sm:col-span-2 xl:col-span-3">
-              No nearby products yet. List the first item in this location.
+            <div className="rounded-[1.5rem] border border-dashed border-slate-200 bg-white/80 p-6 text-center sm:col-span-2 xl:col-span-3">
+              <p className="text-base font-bold text-slate-700">No live listings yet.</p>
+              <p className="mt-1 text-sm text-slate-500">List an item and it will appear here instantly.</p>
             </div>
           ) : nearbyProducts.map((item) => {
             const isBusiness = item.isBusinessProduct || item.listingType === 'business' || item.sellerType === 'business';
@@ -220,7 +221,7 @@ export default function HomePage({
                   {isBusiness && (
                     <div className="absolute inset-x-0 top-0 flex items-start justify-between gap-2 p-3">
                       <span className="inline-flex items-center gap-1 rounded-full border border-white/60 bg-white/90 px-2.5 py-1 text-[10px] font-extrabold text-emerald-700 shadow-sm backdrop-blur">
-                        <ShieldCheck size={12} /> ZeroMart Partner
+                        <ShieldCheck size={12} /> Drizn Partner
                       </span>
                       <span className="rounded-full bg-emerald-700/90 px-2.5 py-1 text-[10px] font-bold text-white shadow-sm backdrop-blur">
                         {item.nearExpiryDeal ? 'Near Expiry' : 'Verified'}
@@ -313,15 +314,15 @@ export default function HomePage({
         <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
           <div className="flex flex-wrap items-center gap-2 text-xs">
             <span className="inline-flex items-center gap-1.5 font-extrabold text-amber-700">
-              <Sparkles size={15} /> ZeroMart
+              <Sparkles size={15} /> Drizn
             </span>
-            <span className="font-semibold text-slate-500">₹0 local sharing</span>
+            <span className="font-semibold text-slate-500">Good Things. Nearby.</span>
           </div>
           <nav className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] font-semibold text-slate-500">
             {['About', 'Help', 'Terms', 'Contact', 'Instagram', 'LinkedIn', 'WhatsApp'].map((label) => (
               <a
                 key={label}
-                href={['Help', 'Contact'].includes(label) ? 'mailto:support@zeromart.local' : '#'}
+                href={['Help', 'Contact'].includes(label) ? 'mailto:support@drizn.local' : '#'}
                 onClick={(event) => {
                   if (!['Help', 'Contact'].includes(label)) event.preventDefault();
                 }}
@@ -333,7 +334,7 @@ export default function HomePage({
           </nav>
         </div>
         <div className="mt-2 border-t border-slate-100 pt-2 text-[11px] leading-5 text-slate-400">
-          © 2026 ZeroMart. Give what you do not need and keep useful items moving locally.
+          © Drizn · Good Things. Nearby.
         </div>
       </footer>
     </div>

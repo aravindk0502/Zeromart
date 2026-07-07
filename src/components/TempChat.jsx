@@ -109,7 +109,7 @@ export default function TempChat({ open, chat, onClose, onComplete }) {
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, flex: 1 }}>
             <div className="avatar avatar-sm overflow-hidden">
               {chat?.profileImage
-                ? <img src={chat.profileImage} alt={chat?.name || 'ZeroMart profile'} className="h-full w-full object-cover" />
+                ? <img src={chat.profileImage} alt={chat?.name || 'Drizn profile'} className="h-full w-full object-cover" />
                 : chat?.initials || 'NZ'}
             </div>
             <div>

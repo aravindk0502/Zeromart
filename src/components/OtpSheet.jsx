@@ -184,7 +184,7 @@ export default function OtpSheet() {
             )}
 
             <div style={{ textAlign: 'center', marginTop: 14, fontSize: 11, color: 'var(--zm-text-dim)' }}>
-              By continuing you agree to ZeroMart's Terms &amp; Privacy Policy
+              By continuing you agree to Drizn's Terms &amp; Privacy Policy
             </div>
           </>
         )}

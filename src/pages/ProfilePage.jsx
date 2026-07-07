@@ -155,7 +155,7 @@ export default function ProfilePage({ user, items = [], orders = [], receivedOrd
     {
       label: 'Active listings',
       value: user.activeListings,
-      detail: 'Your currently live listings visible on ZeroMart.',
+      detail: 'Your currently live listings visible on Drizn.',
       rows: activeItems.length
         ? activeItems.map((item) => ({
             id: item.id,
@@ -469,7 +469,7 @@ export default function ProfilePage({ user, items = [], orders = [], receivedOrd
       <section className="rounded-[2rem] border border-amber-100 bg-white p-5 shadow-sm">
         <div>
           <p className="text-sm font-semibold text-violet-600">Profile activity</p>
-          <h2 className="mt-1 text-xl font-semibold text-slate-900">Your ZeroMart summary</h2>
+          <h2 className="mt-1 text-xl font-semibold text-slate-900">Your Drizn summary</h2>
         </div>
         <div className="mt-4 grid gap-3 sm:grid-cols-2">
           {statCards.map((stat) => (
