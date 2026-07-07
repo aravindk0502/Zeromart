@@ -162,7 +162,7 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
   const [locationLabel, setLocationLabel] = useState(() => (
     locationEngine.status === 'locating'
       ? 'Detecting location…'
-      : getHeaderLocationLabel(locationEngine.location, locationEngine.label)
+      : getHeaderLocationLabel(locationEngine.location, locationEngine.label || 'Choose location')
   ));
   const [searchInput, setSearchInput] = useState('');
   const [searchQuery, setSearchQuery] = useState('');
@@ -441,7 +441,7 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
     setLocationLabel(
       locationEngine.status === 'locating' && !locationEngine.location
         ? 'Detecting location…'
-        : getHeaderLocationLabel(locationEngine.location, locationEngine.label)
+        : getHeaderLocationLabel(locationEngine.location, locationEngine.label || 'Choose location')
     );
     setCurrentCoordinates(locationEngine.location);
   }, [locationEngine.label, locationEngine.location, locationEngine.status]);
