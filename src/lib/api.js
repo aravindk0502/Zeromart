@@ -65,6 +65,10 @@ export const insertProduct = (listing, user) => post('/api/products', {
   pickup_area:     listing.area || '',
 }, true);
 
+export const updateProduct = (id, data) => put(`/api/products/${id}`, data);
+export const deleteProduct = (id) => fetch(apiUrl(`/api/products/${id}`), { method: 'DELETE', headers: authHeaders() }).then((r) => r.json());
+export const fetchPersistence = () => get('/api/persistence');
+
 // ── Favourites ────────────────────────────────────────────────────────────────
 export const fetchFavourites  = ()   => get('/api/favourites').catch(() => []);
 export const toggleFavouriteAPI = (id) => post(`/api/favourites/${id}`, {}, true);

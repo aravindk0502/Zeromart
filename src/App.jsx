@@ -32,7 +32,7 @@ import {
   completePendingKarmaAction, getPendingKarmaActions, savePendingKarmaAction,
   getLiveListings, saveLiveListings, upsertLiveListing, removeLiveListing, normalizeLiveListing,
 } from './services/transactionService';
-import { fetchProducts, insertProduct, isLoggedIn } from './lib/api';
+import { fetchProducts, insertProduct, updateProduct, deleteProduct, fetchPersistence, isLoggedIn } from './lib/api';
 
 const navItems = [
   { key: 'home', label: 'Home', icon: Home },
@@ -260,6 +260,9 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
         // ignore
       }
     }).catch(() => {});
+    fetchPersistence().then((resp) => {
+      setServerPersistent(Boolean(resp && resp.db));
+    }).catch(() => setServerPersistent(false));
   }, []);
 
   useEffect(() => {
@@ -1125,6 +1128,24 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
       };
       setItems((prev) => prev.map((item) => (item.id === editingItem.id ? updatedItem : item)));
       setFavorites((prev) => prev.map((item) => (item.id === editingItem.id ? updatedItem : item)));
+      // Sync update to server if possible
+      if (isLoggedIn() && serverPersistent) {
+        try {
+          await updateProduct(updatedItem.id, {
+            title: updatedItem.title,
+            category: updatedItem.category,
+            emoji: '',
+            condition: updatedItem.condition,
+            description: updatedItem.description,
+            photo_url: updatedItem.image || null,
+            nearby_eligible: true,
+            pickup_area: updatedItem.location || '',
+          });
+          setNotice('Updated on server and locally.');
+        } catch (err) {
+          setNotice('Updated locally. Server update failed.');
+        }
+      }
       upsertLiveListing(updatedItem);
       setSelectedItem(updatedItem);
       setEditingItem(null);
@@ -1215,7 +1236,11 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
     if (!window.confirm(`Delete "${item.title}"? This cannot be undone.`)) return;
     setItems((prev) => prev.filter((entry) => entry.id !== item.id));
     setFavorites((prev) => prev.filter((entry) => entry.id !== item.id));
+    // Remove locally and attempt server delete if possible
     removeLiveListing(item.id);
+    if (isLoggedIn() && serverPersistent) {
+      deleteProduct(item.id).catch(() => {});
+    }
     setUser((prev) => (prev ? {
       ...prev,
       listed: Math.max(0, (Number(prev.listed) || 0) - 1),

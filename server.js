@@ -267,6 +267,39 @@ app.post('/api/products', authMiddleware, async (req, res) => {
   return res.json({ id: result.rows[0].id });
 });
 
+// Update product
+app.put('/api/products/:id', authMiddleware, async (req, res) => {
+  if (!process.env.DATABASE_URL) return res.json({ success: true, id: Number(req.params.id) });
+  const { id } = req.params;
+  const { title, category, emoji, condition, description, photo_url, nearby_eligible, pickup_area } = req.body;
+  try {
+    await pool.query(
+      `UPDATE products SET title=$1, category=$2, emoji=$3, condition=$4, description=$5, photo_url=$6, nearby_eligible=$7, pickup_area=$8, updated_at=now() WHERE id=$9`,
+      [title, category, emoji || '📦', condition, description || '', photo_url || null, nearby_eligible ?? true, pickup_area || '', id]
+    );
+    return res.json({ success: true, id: Number(id) });
+  } catch (err) {
+    return res.status(500).json({ error: 'Could not update product' });
+  }
+});
+
+// Delete product
+app.delete('/api/products/:id', authMiddleware, async (req, res) => {
+  if (!process.env.DATABASE_URL) return res.json({ success: true });
+  const { id } = req.params;
+  try {
+    await pool.query('DELETE FROM products WHERE id=$1', [id]);
+    return res.json({ success: true });
+  } catch (err) {
+    return res.status(500).json({ error: 'Could not delete product' });
+  }
+});
+
+// Expose whether database persistence is enabled
+app.get('/api/persistence', (_req, res) => {
+  return res.json({ db: Boolean(process.env.DATABASE_URL) });
+});
+
 // Get favourites
 app.get('/api/favourites', authMiddleware, async (req, res) => {
   if (!process.env.DATABASE_URL) return res.json([]);
