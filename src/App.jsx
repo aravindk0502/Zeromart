@@ -1478,11 +1478,30 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
     return catalogItems.map(normalizeProductStock).filter(isMarketplaceVisible).map((item) => {
       const itemCoordinates = getItemCoordinates(item);
       const distanceFromActive = activeLocation && itemCoordinates ? haversineKm(activeLocation, itemCoordinates) : null;
+      const requestState = getProductRequestState(item, activeAccountId, requestClock);
+      const expiryTimestamp = getExpiryTimestamp(item);
+      const hoursRemaining = expiryTimestamp === null
+        ? Number.POSITIVE_INFINITY
+        : Math.max(0, (expiryTimestamp - requestClock) / (60 * 60 * 1000));
+      const rescueWindowDays = Number(item.expiryWindowDays ?? item.listBeforeExpiryDays ?? 5);
+      const nearExpiry = expiryTimestamp !== null
+        && hoursRemaining <= rescueWindowDays * 24
+        && Number(requestState?.requestableStock ?? item.availableQuantity ?? 0) > 0;
+      let rescueBadge = '';
+      if (nearExpiry) {
+        if (hoursRemaining <= 12) rescueBadge = 'Rescue Now';
+        else if (hoursRemaining <= 24) rescueBadge = 'Expires Today';
+        else if (hoursRemaining <= 48) rescueBadge = 'Expires Tomorrow';
+        else rescueBadge = `${Math.ceil(hoursRemaining / 24)} Days Left`;
+      }
       return {
         ...item,
         distanceKm: distanceFromActive,
         distance: distanceFromActive === null ? item.distance : formatDistance(distanceFromActive),
-        requestState: getProductRequestState(item, activeAccountId, requestClock),
+        requestState,
+        nearExpiry,
+        rescueBadge,
+        hoursRemaining,
       };
     }).filter((item) => {
       const searchableText = [
@@ -1520,37 +1539,19 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
   }, [activeAccountId, categoryFilter, conditionFilter, currentCoordinates, hasActiveSearch, items, radiusKm, requestClock, searchQuery]);
 
   const rescueItems = useMemo(() => rankedItems
-    .map((item) => {
-      const expiryTimestamp = getExpiryTimestamp(item);
-      const hoursRemaining = expiryTimestamp === null
-        ? Number.POSITIVE_INFINITY
-        : Math.max(0, (expiryTimestamp - requestClock) / (60 * 60 * 1000));
-      const rescueWindowDays = Number(item.expiryWindowDays ?? item.listBeforeExpiryDays ?? 5);
-      const rescueEligible = expiryTimestamp !== null
-        && hoursRemaining <= rescueWindowDays * 24
-        && Number(item.requestState?.requestableStock ?? item.availableQuantity ?? 0) > 0;
-      if (!rescueEligible) return null;
-      const rescueLabel = hoursRemaining <= 12
-        ? `Expires in ${Math.max(1, Math.ceil(hoursRemaining))} hours`
-        : hoursRemaining <= 24
-          ? 'Expires Today'
-          : hoursRemaining <= 48
-            ? 'Expires Tomorrow'
-            : `${Math.ceil(hoursRemaining / 24)} Days Left`;
-      return { ...item, hoursRemaining, rescueLabel };
-    })
-    .filter(Boolean)
+    .filter((item) => item.nearExpiry)
+    .map((item) => ({ ...item }))
     .sort((first, second) => (
-      first.hoursRemaining - second.hoursRemaining
+      (first.hoursRemaining ?? Number.POSITIVE_INFINITY) - (second.hoursRemaining ?? Number.POSITIVE_INFINITY)
       || (first.distanceKm ?? Infinity) - (second.distanceKm ?? Infinity)
       || (second.sellerKarma || 0) - (first.sellerKarma || 0)
     ))
     .slice(0, 10), [rankedItems, requestClock]);
   const rescueIds = useMemo(() => new Set(rescueItems.map((item) => String(item.id))), [rescueItems]);
-  // Exclude rescue items from the main community feed — keep them only in the rescue section
+  // Include rescue items in the main feed as well; they will also appear in the Rescue section
   const communityRankedItems = useMemo(
-    () => rankedItems.filter((item) => !item.isBusinessProduct && !rescueIds.has(String(item.id))),
-    [rankedItems, rescueIds]
+    () => rankedItems.filter((item) => !item.isBusinessProduct),
+    [rankedItems]
   );
 
   useEffect(() => {
@@ -1577,7 +1578,6 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
   const businessDealsNearby = rankedItems
     .filter((item) => (
       item.isBusinessProduct
-      && !rescueIds.has(String(item.id))
       && (item.distanceKm === null || item.distanceKm <= 25)
     ))
     .sort((first, second) => (

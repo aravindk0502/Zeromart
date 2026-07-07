@@ -228,6 +228,11 @@ export default function HomePage({
                       </span>
                     </div>
                   )}
+                  {item.nearExpiry && (
+                    <span className={`absolute left-2 top-2 rounded-full px-2.5 py-1 text-[10px] font-extrabold uppercase tracking-wide text-white shadow ${item.hoursRemaining <= 24 ? 'bg-red-600' : item.hoursRemaining <= 48 ? 'bg-orange-500' : 'bg-amber-500'}`}>
+                      {item.rescueBadge}
+                    </span>
+                  )}
                   <button
                     type="button"
                     onClick={(event) => {
