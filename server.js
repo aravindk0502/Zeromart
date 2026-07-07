@@ -8,7 +8,7 @@ import jwt from 'jsonwebtoken';
 import Razorpay from 'razorpay';
 import pg from 'pg';
 
-const app  = express();
+export const app = express();
 const PORT = process.env.PORT || 3001;
 const JWT_SECRET = process.env.JWT_SECRET || 'zeromart-dev-secret-change-in-prod';
 const { Pool } = pg;
@@ -39,7 +39,7 @@ const pool = new Pool({
   ssl: process.env.DATABASE_URL ? { rejectUnauthorized: false } : false,
 });
 
-async function initDB() {
+export async function initDB() {
   if (!process.env.DATABASE_URL) {
     console.log('[DB] No DATABASE_URL — running without database (demo mode)');
     return;
@@ -374,9 +374,11 @@ if (existsSync(frontendDirectory)) {
 }
 
 // ── Start ─────────────────────────────────────────────────────────────────────
-initDB().then(() => {
-  app.listen(PORT, () => console.log(`ZeroMart running on port ${PORT}`));
-}).catch(err => {
-  console.error('[DB init failed]', err.message);
-  app.listen(PORT, () => console.log(`ZeroMart running (no DB) on port ${PORT}`));
-});
+if (process.argv[1] === fileURLToPath(import.meta.url)) {
+  initDB().then(() => {
+    app.listen(PORT, () => console.log(`ZeroMart running on port ${PORT}`));
+  }).catch(err => {
+    console.error('[DB init failed]', err.message);
+  });
+}
+

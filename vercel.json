@@ -4,14 +4,18 @@
   "installCommand": "npm ci",
   "buildCommand": "npm run build",
   "outputDirectory": "dist",
+  "functions": {
+    "api/**/*.js": {
+      "runtime": "nodejs18.x"
+    }
+  },
   "rewrites": [
     {
-      "source": "/(.*)",
+      "source": "/(?!api(?:/|$)).*",
       "destination": "/index.html"
     }
-  ]
-
-  ,"redirects": [
+  ],
+  "redirects": [
     {
       "source": "/(.*)",
       "has": [ { "type": "host", "value": "drizn.com" } ],
