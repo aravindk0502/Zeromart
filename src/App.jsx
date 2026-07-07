@@ -250,16 +250,19 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
     fetchProducts().then((serverProducts) => {
       if (!Array.isArray(serverProducts) || serverProducts.length === 0) return;
       try {
+        // mark server products as persisted
+        const marked = serverProducts.map((p) => ({ ...p, serverPersisted: true, serverId: p.id }));
         // Persist server products into the shared live listings store (deduped by id)
         saveLiveListings([
-          ...serverProducts,
+          ...marked,
           ...getLiveListings(),
         ]);
-        setItems((prev) => ([...serverProducts.map(normalizeLiveListing), ...prev]));
+        setItems((prev) => ([...marked.map(normalizeLiveListing), ...prev]));
       } catch (err) {
         // ignore
       }
     }).catch(() => {});
+
     fetchPersistence().then((resp) => {
       setServerPersistent(Boolean(resp && resp.db));
     }).catch(() => setServerPersistent(false));
@@ -1097,6 +1100,53 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
     setUser(nextUser);
     setNotice('Profile updated successfully');
   };
+
+  // Migrate local listings to server when a user logs in (one-time prompt)
+  useEffect(() => {
+    let migrated = false;
+    if (!user) return;
+    try {
+      const local = getLiveListings();
+      const candidates = local.filter((item) => (
+        String(item.ownerMobile || '').startsWith('guest')
+        || String(item.sellerId || '').startsWith('guest')
+        || item.isOwn === true
+      ));
+      if (!candidates.length) return;
+      // Ask user for confirmation once
+      if (!window.confirm(`We found ${candidates.length} local listing(s). Upload them to your account so others can see them?`)) return;
+      (async () => {
+        for (const item of candidates) {
+          try {
+            const payload = {
+              title: item.title,
+              category: item.category,
+              emoji: '',
+              condition: item.condition,
+              description: item.description || '',
+              photo_url: item.image || null,
+              nearby_eligible: true,
+              pickup_area: item.location || '',
+            };
+            const resp = await insertProduct(payload, user).catch(() => null);
+            if (resp && resp.id) {
+              // update local listing id to server id and mark persisted
+              item.id = resp.id;
+              item.serverPersisted = true;
+              item.serverId = resp.id;
+              upsertLiveListing(item);
+              migrated = true;
+            }
+          } catch (err) {
+            // skip failures
+          }
+        }
+        if (migrated) setNotice('Local listings uploaded to your account.');
+      })();
+    } catch (err) {
+      // ignore
+    }
+  }, [user?.userId, user?.mobile]);
 
   const handleListingSubmit = async (formData) => {
     if (editingItem) {

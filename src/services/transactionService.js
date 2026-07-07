@@ -91,9 +91,13 @@ export const normalizeLiveListing = (listing = {}) => {
   const sellerName = listing.sellerName || listing.storeName || listing.businessName || (isBusiness ? 'Business Store' : 'Unknown');
   const expiryDate = listing.expiryDate || listing.validTill || '';
   const id = listing.id || `${isBusiness ? 'business' : 'community'}-${Date.now()}`;
+  const serverPersisted = Boolean(listing.serverPersisted || listing.serverId || listing._server === true);
+  const serverId = listing.serverId || null;
 
   return normalizeProductStock({
     ...listing,
+    serverPersisted,
+    serverId,
     id,
     title,
     name: listing.name || title,

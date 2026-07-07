@@ -273,6 +273,9 @@ app.put('/api/products/:id', authMiddleware, async (req, res) => {
   const { id } = req.params;
   const { title, category, emoji, condition, description, photo_url, nearby_eligible, pickup_area } = req.body;
   try {
+    const existing = await pool.query('SELECT seller_id FROM products WHERE id=$1', [id]);
+    if (existing.rows.length === 0) return res.status(404).json({ error: 'Not found' });
+    if (String(existing.rows[0].seller_id) !== String(req.user.id)) return res.status(403).json({ error: 'Not allowed' });
     await pool.query(
       `UPDATE products SET title=$1, category=$2, emoji=$3, condition=$4, description=$5, photo_url=$6, nearby_eligible=$7, pickup_area=$8, updated_at=now() WHERE id=$9`,
       [title, category, emoji || '📦', condition, description || '', photo_url || null, nearby_eligible ?? true, pickup_area || '', id]
@@ -288,6 +291,9 @@ app.delete('/api/products/:id', authMiddleware, async (req, res) => {
   if (!process.env.DATABASE_URL) return res.json({ success: true });
   const { id } = req.params;
   try {
+    const existing = await pool.query('SELECT seller_id FROM products WHERE id=$1', [id]);
+    if (existing.rows.length === 0) return res.status(404).json({ error: 'Not found' });
+    if (String(existing.rows[0].seller_id) !== String(req.user.id)) return res.status(403).json({ error: 'Not allowed' });
     await pool.query('DELETE FROM products WHERE id=$1', [id]);
     return res.json({ success: true });
   } catch (err) {
