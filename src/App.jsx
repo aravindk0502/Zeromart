@@ -32,6 +32,7 @@ import {
   completePendingKarmaAction, getPendingKarmaActions, savePendingKarmaAction,
   getLiveListings, saveLiveListings, upsertLiveListing, removeLiveListing, normalizeLiveListing,
 } from './services/transactionService';
+import { fetchProducts, insertProduct, isLoggedIn } from './lib/api';
 
 const navItems = [
   { key: 'home', label: 'Home', icon: Home },
@@ -241,6 +242,24 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
     if (savedUser && !getBusinessSession()) {
       setUser(JSON.parse(savedUser));
     }
+  }, []);
+
+  // Merge server-side products (if any) into local live listings so all users see server-published items
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    fetchProducts().then((serverProducts) => {
+      if (!Array.isArray(serverProducts) || serverProducts.length === 0) return;
+      try {
+        // Persist server products into the shared live listings store (deduped by id)
+        saveLiveListings([
+          ...serverProducts,
+          ...getLiveListings(),
+        ]);
+        setItems((prev) => ([...serverProducts.map(normalizeLiveListing), ...prev]));
+      } catch (err) {
+        // ignore
+      }
+    }).catch(() => {});
   }, []);
 
   useEffect(() => {
@@ -1076,7 +1095,7 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
     setNotice('Profile updated successfully');
   };
 
-  const handleListingSubmit = (formData) => {
+  const handleListingSubmit = async (formData) => {
     if (editingItem) {
       const updatedItem = {
         ...editingItem,
@@ -1149,6 +1168,31 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
       updatedAt: new Date().toISOString(),
     };
     setItems((prev) => [newItem, ...prev]);
+    // If user is authenticated, persist to server so other users can see this listing
+    if (isLoggedIn()) {
+      try {
+        const payload = {
+          title: formData.title,
+          category: formData.category,
+          emoji: '',
+          condition: formData.condition,
+          description: formData.description || '',
+          photo_url: formData.image || null,
+          nearby_eligible: true,
+          pickup_area: formData.pickupArea || '',
+        };
+        const resp = await insertProduct(payload, user).catch(() => null);
+        if (resp && resp.id) {
+          newItem.id = resp.id;
+          newItem.createdAt = new Date().toISOString();
+        }
+      } catch (err) {
+        // ignore server failures — keep local listing
+      }
+    } else {
+      setNotice('This listing is saved locally only. Sign up or log in to make it visible to everyone.');
+    }
+
     upsertLiveListing(newItem);
     setUser((prev) => (prev ? {
       ...prev,
