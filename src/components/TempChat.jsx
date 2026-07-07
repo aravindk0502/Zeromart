@@ -107,7 +107,11 @@ export default function TempChat({ open, chat, onClose, onComplete }) {
         {/* Header */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '16px 16px 12px', borderBottom: '1px solid var(--zm-border)', flexShrink: 0 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, flex: 1 }}>
-            <div className="avatar avatar-sm">{chat?.initials || 'NZ'}</div>
+            <div className="avatar avatar-sm overflow-hidden">
+              {chat?.profileImage
+                ? <img src={chat.profileImage} alt={chat?.name || 'ZeroMart profile'} className="h-full w-full object-cover" />
+                : chat?.initials || 'NZ'}
+            </div>
             <div>
               <div style={{ fontSize: 14, fontWeight: 600 }}>{chat?.name || 'Nearby seller'}</div>
               <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>

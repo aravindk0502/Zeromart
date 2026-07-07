@@ -76,6 +76,7 @@ export default function LocationPicker({
         const finalLocation = await validateCompletedAddress(withAddressDetails(location, nextDetails));
         if (onSelect) onSelect(finalLocation);
         else engine.setLocation(finalLocation);
+        window.dispatchEvent(new CustomEvent('zeromart-location-toast', { detail: 'Location updated' }));
         onClose?.();
       }
     } catch (error) {
@@ -106,6 +107,7 @@ export default function LocationPicker({
       const finalLocation = await validateCompletedAddress(buildFinalLocation());
       if (onSelect) onSelect(finalLocation);
       else engine.setLocation(finalLocation);
+      window.dispatchEvent(new CustomEvent('zeromart-location-toast', { detail: 'Location updated' }));
       onClose?.();
     } catch (error) {
       setSearchError(error?.message || 'Check the address and try again.');

@@ -46,9 +46,9 @@ export default function CollectRequestHandler() {
           </div>
         </div>
 
-        {/* Simulate seller accepting */}
+        {/* Seller response */}
         <div style={{ fontSize: 12, color: 'var(--zm-text-dim)', textAlign: 'center', marginBottom: 16 }}>
-          Demo: simulate seller's response
+          Seller response
         </div>
         <div style={{ display: 'flex', gap: 10 }}>
           <button className="btn btn-green" style={{ flex: 1 }} onClick={accept}>

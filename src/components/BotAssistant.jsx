@@ -14,7 +14,7 @@ const PLATFORM_QA = [
   { keys: ['how to buy', 'how to request', 'get item', 'buying'], answer: 'Pay a one-time ₹29 to unlock buyer access forever. Then browse, search, and request any item you like.' },
   { keys: ['delivery', 'shipping', 'courier', 'porter', 'shadowfax', 'uber'], answer: 'ZeroMart currently uses direct collection coordination. Use the seller chat to arrange pickup or your own courier service and share the required contact details.' },
   { keys: ['karma', 'points', 'rating', 'review'], answer: 'Karma is mandatory after collection. The buyer who received the item sends good karma to the seller or store, and that seller/store gains the karma point.' },
-  { keys: ['in person', 'collect', 'pickup', 'nearby'], answer: 'Request collection on the item, then use the temporary seller chat to coordinate the handoff. You can share your location or phone number there.' },
+  { keys: ['in person', 'collect', 'pickup', 'nearby'], answer: 'For community items, send a collection request and wait for the seller to accept. Their phone, pickup address, date, time, and instructions then appear in Alerts. Business items use Reserve & Collect with a collection ID and QR pass.' },
   { keys: ['free', 'cost', 'charge', 'fee', 'price'], answer: 'Yes! Listing on ZeroMart is completely free for sellers. Items are listed at ₹0.' },
   { keys: ['reward', 'voucher', 'swiggy', 'bookmyshow', 'myntra', 'milestone'], answer: 'Sellers earn delivery credits and unlock brand vouchers (Swiggy, BookMyShow, Myntra) when they hit karma milestones at 5, 10, 25+ items given.' },
   { keys: ['account', 'profile', 'login', 'sign up', 'otp', 'mobile', 'number'], answer: 'You need your mobile number only when you buy or sell — we send a quick OTP to verify. One account lets you list for ₹0 and buy ₹0 items after lifetime access.' },
@@ -36,7 +36,7 @@ const FEATURE_TOPICS = [
   },
   {
     keys: ['footer', 'terms', 'faq', 'support', 'contact', 'blog', 'social'],
-    answer: 'The footer has Terms and conditions, FAQ, Blogs, Help and support, Contact us, Safety guide, and social links for Instagram, LinkedIn, and X / Twitter.',
+    answer: 'The compact footer links to About, Help, Terms, Contact, Instagram, LinkedIn, and WhatsApp.',
   },
   {
     keys: ['location', 'area', 'km', 'radius', 'filter'],
@@ -52,7 +52,7 @@ const FEATURE_TOPICS = [
   },
   {
     keys: ['profile', 'history', 'order', 'listed', 'collected', 'active listings', 'given away'],
-    answer: 'Profile shows karma points, photo, bio, optional website/location links, item activity, active listings, given away, and order history with collection status.',
+    answer: 'Profile shows karma points, photo, bio, optional website, Instagram and location links, item activity, active listings, given away, and order history with collection status.',
   },
 ];
 
@@ -275,7 +275,7 @@ export default function BotAssistant({ open, onClose, items = [], favorites = []
       setMessages(prev => [...prev, {
         id: Date.now() + 1,
         from: 'bot',
-        text: answer || `I checked the current platform context. Ask me about products, locations, categories, favorites, orders, notifications, karma, delivery, listing, or the ₹29 lifetime buying access.`,
+        text: answer || 'I can help only with ZeroMart platform features.',
       }]);
     }, 600);
   }

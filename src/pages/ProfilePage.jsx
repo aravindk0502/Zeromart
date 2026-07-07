@@ -5,30 +5,51 @@ import LocationMap from '../components/LocationMap';
 import OrderTrackingModal from '../components/OrderTrackingModal';
 import CollectionPass, { getCollectionPassState } from '../components/CollectionPass';
 
-const makeFallbackRows = (count, label, status) => {
-  const total = Math.max(0, Number(count) || 0);
-  const visible = Math.min(total, 8);
-  return Array.from({ length: visible }, (_, index) => ({
-    id: `${label}-${index + 1}`,
-    title: `${label} ${index + 1}`,
-    meta: status,
-    status,
-  }));
-};
+const resizeProfileImage = (file) => new Promise((resolve, reject) => {
+  const reader = new FileReader();
+  reader.onerror = () => reject(new Error('Could not read this image.'));
+  reader.onload = () => {
+    const image = new Image();
+    image.onerror = () => reject(new Error('Could not prepare this image.'));
+    image.onload = () => {
+      const maxSize = 640;
+      const sourceWidth = image.width || maxSize;
+      const sourceHeight = image.height || maxSize;
+      const scale = Math.min(1, maxSize / Math.max(sourceWidth, sourceHeight));
+      const canvas = document.createElement('canvas');
+      canvas.width = Math.max(1, Math.round(sourceWidth * scale));
+      canvas.height = Math.max(1, Math.round(sourceHeight * scale));
+      const context = canvas.getContext('2d');
+      if (!context) {
+        reject(new Error('Could not prepare this image.'));
+        return;
+      }
+      context.drawImage(image, 0, 0, canvas.width, canvas.height);
+      resolve(canvas.toDataURL('image/jpeg', 0.82));
+    };
+    image.src = String(reader.result || '');
+  };
+  reader.readAsDataURL(file);
+});
+
+const buildProfileDraft = (user) => ({
+  name: user?.name || 'Unknown',
+  mobile: user?.mobile || '',
+  bio: user?.bio || '',
+  locationLink: user?.locationLink || '',
+  websiteLink: user?.websiteLink || '',
+  instagramLink: user?.instagramLink || '',
+});
 
 export default function ProfilePage({ user, items = [], orders = [], receivedOrders = [], onLogin, onBack, onLogout, onUpdateUser, onSelectItem }) {
   const locationEngine = useLocationEngine();
   const [selectedStat, setSelectedStat] = useState('Items listed');
   const [selectedOrder, setSelectedOrder] = useState(null);
   const [previewImage, setPreviewImage] = useState(null);
+  const [pendingProfileImage, setPendingProfileImage] = useState('');
   const [isEditingProfile, setIsEditingProfile] = useState(false);
-  const [profileDraft, setProfileDraft] = useState({
-    name: user?.name || 'Unknown',
-    mobile: user?.mobile || '',
-    bio: user?.bio || '',
-    locationLink: user?.locationLink || '',
-    websiteLink: user?.websiteLink || '',
-  });
+  const [profileError, setProfileError] = useState('');
+  const [profileDraft, setProfileDraft] = useState(buildProfileDraft(user));
 
   useEffect(() => {
     if (locationEngine.location) onUpdateUser?.({ location: locationEngine.location });
@@ -36,23 +57,24 @@ export default function ProfilePage({ user, items = [], orders = [], receivedOrd
 
   useEffect(() => {
     if (isEditingProfile) return;
-    setProfileDraft({
-      name: user?.name || 'Unknown',
-      mobile: user?.mobile || '',
-      bio: user?.bio || '',
-      locationLink: user?.locationLink || '',
-      websiteLink: user?.websiteLink || '',
-    });
-  }, [isEditingProfile, user?.bio, user?.locationLink, user?.mobile, user?.name, user?.websiteLink]);
+    setProfileDraft(buildProfileDraft(user));
+    setPendingProfileImage('');
+    setProfileError('');
+  }, [isEditingProfile, user?.bio, user?.instagramLink, user?.locationLink, user?.mobile, user?.name, user?.websiteLink]);
 
-  const handleProfileImage = (event) => {
+  const handleProfileImage = async (event) => {
     const file = event.target.files?.[0];
     if (!file) return;
-    const reader = new FileReader();
-    reader.onload = () => {
-      onUpdateUser?.({ profileImage: reader.result });
-    };
-    reader.readAsDataURL(file);
+    setProfileError('');
+    try {
+      const image = await resizeProfileImage(file);
+      setPendingProfileImage(image);
+      setIsEditingProfile(true);
+    } catch (error) {
+      setProfileError(error?.message || 'Could not use this image. Try a smaller photo.');
+    } finally {
+      event.target.value = '';
+    }
   };
 
   const handleSaveProfile = () => {
@@ -61,9 +83,24 @@ export default function ProfilePage({ user, items = [], orders = [], receivedOrd
     const bio = profileDraft.bio.trim().slice(0, 180);
     const locationLink = profileDraft.locationLink.trim();
     const websiteLink = profileDraft.websiteLink.trim();
-    onUpdateUser?.({ name, mobile, bio, locationLink, websiteLink });
-    setProfileDraft({ name, mobile, bio, locationLink, websiteLink });
-    setIsEditingProfile(false);
+    const instagramLink = profileDraft.instagramLink.trim();
+    try {
+      onUpdateUser?.({
+        name,
+        mobile,
+        bio,
+        locationLink,
+        websiteLink,
+        instagramLink,
+        ...(pendingProfileImage ? { profileImage: pendingProfileImage } : {}),
+      });
+      setProfileDraft({ name, mobile, bio, locationLink, websiteLink, instagramLink });
+      setPendingProfileImage('');
+      setIsEditingProfile(false);
+      setProfileError('');
+    } catch (error) {
+      setProfileError(error?.message || 'Could not save profile. Please try again.');
+    }
   };
 
   if (!user) {
@@ -99,7 +136,7 @@ export default function ProfilePage({ user, items = [], orders = [], receivedOrd
             image: item.image,
             item,
           }))
-        : makeFallbackRows(user.listed, 'Listed item', 'Listed for ₹0'),
+        : [],
     },
     {
       label: 'Items collected',
@@ -113,7 +150,7 @@ export default function ProfilePage({ user, items = [], orders = [], receivedOrd
             status: order.type === 'delivery' ? 'Delivery order' : 'Collected personally',
             image: order.image,
           }))
-        : makeFallbackRows(user.collected, 'Collected item', 'Collected personally'),
+        : [],
     },
     {
       label: 'Active listings',
@@ -128,7 +165,7 @@ export default function ProfilePage({ user, items = [], orders = [], receivedOrd
             image: item.image,
             item,
           }))
-        : makeFallbackRows(user.activeListings, 'Active listing', 'Available'),
+        : [],
     },
     {
       label: 'Given away',
@@ -142,7 +179,7 @@ export default function ProfilePage({ user, items = [], orders = [], receivedOrd
             status: 'Good karma received',
             image: order.image,
           }))
-        : makeFallbackRows(user.givenAway, 'Given away item', 'Good karma received'),
+        : [],
     },
   ];
   const activeStat = statCards.find((stat) => stat.label === selectedStat) || statCards[0];
@@ -175,7 +212,7 @@ export default function ProfilePage({ user, items = [], orders = [], receivedOrd
             <h2 className="text-xl font-semibold text-slate-900">{user.name || 'Unknown'}</h2>
             <p className="mt-1 text-sm text-slate-500">One account to buy and sell</p>
             {user.bio && <p className="mt-2 max-w-xl text-sm leading-6 text-slate-600">{user.bio}</p>}
-            {(user.locationLink || user.websiteLink) && (
+            {(user.locationLink || user.websiteLink || user.instagramLink) && (
               <div className="mt-3 flex flex-wrap gap-2">
                 {user.locationLink && (
                   <a href={normalizeUrl(user.locationLink)} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 rounded-full border border-emerald-100 bg-emerald-50 px-3 py-1.5 text-xs font-bold text-emerald-800">
@@ -185,6 +222,11 @@ export default function ProfilePage({ user, items = [], orders = [], receivedOrd
                 {user.websiteLink && (
                   <a href={normalizeUrl(user.websiteLink)} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 rounded-full border border-violet-100 bg-violet-50 px-3 py-1.5 text-xs font-bold text-violet-700">
                     <ExternalLink size={13} /> Website
+                  </a>
+                )}
+                {user.instagramLink && (
+                  <a href={normalizeUrl(user.instagramLink)} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 rounded-full border border-rose-100 bg-rose-50 px-3 py-1.5 text-xs font-bold text-rose-700">
+                    <ExternalLink size={13} /> Instagram
                   </a>
                 )}
               </div>
@@ -199,10 +241,10 @@ export default function ProfilePage({ user, items = [], orders = [], receivedOrd
             </button>
           </div>
           <div className="text-right">
-            <button type="button" onClick={() => user.profileImage && setPreviewImage(user.profileImage)} className="group block w-full cursor-pointer text-right">
+            <button type="button" onClick={() => (pendingProfileImage || user.profileImage) && setPreviewImage(pendingProfileImage || user.profileImage)} className="group block w-full cursor-pointer text-right">
               <div className="ml-auto flex h-16 w-16 items-center justify-center overflow-hidden rounded-full border-2 border-amber-100 bg-amber-50 text-violet-600 transition group-hover:border-violet-200">
-                {user.profileImage ? (
-                  <img src={user.profileImage} alt={user.name} className="h-full w-full object-cover" />
+                {pendingProfileImage || user.profileImage ? (
+                  <img src={pendingProfileImage || user.profileImage} alt={user.name} className="h-full w-full object-cover" />
                 ) : (
                   <ShieldCheck size={22} />
                 )}
@@ -215,8 +257,15 @@ export default function ProfilePage({ user, items = [], orders = [], receivedOrd
           </div>
         </div>
 
+        {profileError && !isEditingProfile && (
+          <p className="mt-3 rounded-xl border border-rose-100 bg-rose-50 px-3 py-2 text-sm font-semibold text-rose-700">{profileError}</p>
+        )}
+
         {isEditingProfile && (
           <div className="mt-4 rounded-[1.5rem] border border-violet-100 bg-violet-50/60 p-4">
+            {profileError && (
+              <p className="mb-3 rounded-xl border border-rose-100 bg-rose-50 px-3 py-2 text-sm font-semibold text-rose-700">{profileError}</p>
+            )}
             <div className="grid gap-3 sm:grid-cols-2">
               <label className="block">
                 <span className="text-xs font-bold uppercase tracking-[0.12em] text-slate-500">Name</span>
@@ -266,6 +315,16 @@ export default function ProfilePage({ user, items = [], orders = [], receivedOrd
                   value={profileDraft.websiteLink}
                   onChange={(event) => setProfileDraft((current) => ({ ...current, websiteLink: event.target.value }))}
                   placeholder="your-site.com"
+                  className="mt-2 w-full rounded-xl border border-violet-100 bg-white px-3 py-2.5 text-sm font-semibold text-slate-900 outline-none focus:border-violet-300 focus:ring-2 focus:ring-violet-100"
+                />
+              </label>
+              <label className="block sm:col-span-2">
+                <span className="text-xs font-bold uppercase tracking-[0.12em] text-slate-500">Instagram optional</span>
+                <input
+                  type="url"
+                  value={profileDraft.instagramLink}
+                  onChange={(event) => setProfileDraft((current) => ({ ...current, instagramLink: event.target.value }))}
+                  placeholder="instagram.com/your-profile"
                   className="mt-2 w-full rounded-xl border border-violet-100 bg-white px-3 py-2.5 text-sm font-semibold text-slate-900 outline-none focus:border-violet-300 focus:ring-2 focus:ring-violet-100"
                 />
               </label>

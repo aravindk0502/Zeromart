@@ -14,8 +14,6 @@ import QuantityRequestModal from './components/QuantityRequestModal';
 import KarmaPopup from './components/KarmaPopup';
 import BotAssistant from './components/BotAssistant';
 import BusinessAuthModal from './components/BusinessAuthModal';
-import DemoFlowPanel from './components/DemoFlowPanel';
-import { initialItems } from './data/dummyData';
 import {
   clearBusinessSession, createBusinessOrder, getBusinessAccounts, getBusinessMarketplaceItems,
   getBusinessOrders, getBusinessProducts, getBusinessPurchases, getBusinessSession,
@@ -31,6 +29,7 @@ import {
   getProductRequestState, getPurchaseHistory, getQuantityAllowance, isMarketplaceVisible, normalizeProductStock, recordPurchaseAttempt,
   savePurchaseHistory, saveRequests, getRequests, saveReservations, getReservations, createWhatsAppLink,
   updatePurchaseHistoryStatus, confirmHandoff, getTransactionProducts, saveTransactionProducts,
+  completePendingKarmaAction, getPendingKarmaActions, savePendingKarmaAction,
 } from './services/transactionService';
 
 const navItems = [
@@ -59,70 +58,10 @@ const DISCOVERY_STAGES = [
   { key: 'india', label: 'Across India', radiusKm: Number.POSITIVE_INFINITY },
 ];
 
-const areaCoordinates = {
-  Koramangala: { latitude: 12.9352, longitude: 77.6245 },
-  Indiranagar: { latitude: 12.9784, longitude: 77.6408 },
-  Jayanagar: { latitude: 12.9250, longitude: 77.5938 },
-  'HSR Layout': { latitude: 12.9116, longitude: 77.6474 },
-  Whitefield: { latitude: 12.9698, longitude: 77.7500 },
-};
-
-const DEMO_BUYER = {
-  userId: 'demo_buyer',
-  name: 'Demo Buyer',
-  mobile: '9999999999',
-  role: 'buyer',
-  karma: 8,
-  listed: 0,
-  collected: 0,
-  activeListings: 0,
-  givenAway: 0,
-  isBuyer: true,
-  isDemo: true,
-  profileImage: '',
-};
-
-const DEMO_SELLER = {
-  userId: 'demo_seller',
-  name: 'Demo Community Seller',
-  mobile: '8888888888',
-  role: 'seller',
-  karma: 24,
-  listed: 1,
-  collected: 0,
-  activeListings: 1,
-  givenAway: 3,
-  isBuyer: true,
-  isDemo: true,
-  profileImage: '',
-};
-
-const DEMO_BUSINESS = {
-  id: 'demo_business',
-  businessId: 'demo_business',
-  userId: 'demo_business',
-  role: 'business',
-  ownerName: 'Demo Store Owner',
-  mobile: '7777777777',
-  businessName: 'Demo Fresh Store',
-  businessType: 'Bakery',
-  storeLocation: 'Velachery',
-  address: 'Demo Market Road, Velachery, Chennai',
-  karma: 18,
-  isBuyer: true,
-  isDemo: true,
-};
-
-const DEMO_COMMUNITY_ITEM_ID = 'demo-community-fresh-bread';
-const DEMO_BUSINESS_PRODUCT_ID = 'demo-business-fruit-box';
-
-const localBusinessSearchItems = initialItems.filter((item) => item.isBusinessProduct);
-
 const platformSearchKeywords = 'zeromart zero mart karma good karma free 0 rs ₹0 rupees local business b2b marketplace listing list item seller buyer pickup delivery in person collect product item movie movies ticket tickets food electronics books cosmetics home furniture';
 
 const getItemCoordinates = (item) => item.coordinates
   || (item.locationData ? { latitude: item.locationData.latitude, longitude: item.locationData.longitude } : null)
-  || areaCoordinates[item.location]
   || null;
 
 const getHeaderLocationLabel = (location, fallback = 'Choose location') => {
@@ -136,6 +75,28 @@ const mergeListingsById = (...catalogs) => {
   const listings = new Map();
   catalogs.flat().filter(Boolean).forEach((item) => listings.set(String(item.id), item));
   return [...listings.values()];
+};
+
+const isLegacyDemoRecord = (record) => {
+  if (!record) return false;
+  if (record.isDemo === true) return true;
+  const identifiers = [
+    record.id,
+    record.userId,
+    record.buyerId,
+    record.sellerId,
+    record.businessId,
+    record.productId,
+    record.businessProductId,
+    record.recipientId,
+    record.requestId,
+  ].filter(Boolean).map((value) => String(value).toLowerCase());
+  return identifiers.some((value) => (
+    value.startsWith('demo_')
+    || value.startsWith('demo-')
+    || value.startsWith('chennai-')
+    || value.startsWith('business-product-demo-')
+  ));
 };
 
 const loadOrderHistory = () => {
@@ -162,17 +123,11 @@ const createOrderId = () => {
   return `ZM-${date}-${suffix}`;
 };
 
-const DEFAULT_NOTIFICATIONS = [
-  { id: 1, title: 'New nearby listing', body: 'Meera just listed movie tickets near you.', time: '5m ago', read: false, type: 'product', itemId: 4 },
-  { id: 2, title: 'Karma update', body: 'You earned a new karma point from a recent handoff.', time: '1h ago', read: false, type: 'info', infoTitle: 'Good karma received', infoBody: 'Your karma increased after a successful handoff. Keep listing useful items for ₹0 to earn more good karma.' },
-  { id: 3, title: 'ZeroMart update', body: 'Listing remains free. Buying unlocks once for ₹29 lifetime access.', time: 'Today', read: true, type: 'info', infoTitle: 'Platform information', infoBody: 'You can list any item for ₹0 without paying. The one-time ₹29 lifetime fee appears only when you try to buy or request an item.' },
-];
-
 const loadNotifications = () => {
   try {
-    return JSON.parse(localStorage.getItem('zeromart-notifications')) || DEFAULT_NOTIFICATIONS;
+    return JSON.parse(localStorage.getItem('zeromart-notifications')) || [];
   } catch {
-    return DEFAULT_NOTIFICATIONS;
+    return [];
   }
 };
 
@@ -185,7 +140,6 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
   const [items, setItems] = useState(() => {
     const storedCommunityProducts = getTransactionProducts();
     return applyProductExpiry(mergeListingsById(
-      initialItems,
       storedCommunityProducts,
       getBusinessMarketplaceItems(),
     ).map(normalizeProductStock));
@@ -215,6 +169,9 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
       return [];
     }
   });
+  const [favoriteBadgeCount, setFavoriteBadgeCount] = useState(() => (
+    Math.max(0, Number(localStorage.getItem('zeromart-new-favorites-count')) || 0)
+  ));
   const [orderHistory, setOrderHistory] = useState(loadOrderHistory);
   const [orderSuccess, setOrderSuccess] = useState(null);
   const [quantityItem, setQuantityItem] = useState(null);
@@ -224,7 +181,6 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
   const [showKarmaPopup, setShowKarmaPopup] = useState(false);
   const [showBotAssistant, setShowBotAssistant] = useState(false);
   const [showBusinessAuth, setShowBusinessAuth] = useState(false);
-  const [showDemoPanel, setShowDemoPanel] = useState(false);
   const [karmaTarget, setKarmaTarget] = useState(null);
   const [selectedNotification, setSelectedNotification] = useState(null);
   const [notifications, setNotifications] = useState(loadNotifications);
@@ -318,6 +274,18 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
     const showPendingBuyerKarma = () => {
       if (!activeAccountId) return;
       try {
+        const unifiedPending = getPendingKarmaActions().find((entry) => (
+          accountKey(entry.buyerId) === accountKey(activeAccountId)
+        ));
+        if (unifiedPending) {
+          setKarmaTarget({
+            ...unifiedPending,
+            mandatory: true,
+            initials: unifiedPending.initials || unifiedPending.name?.split(' ').map((part) => part[0]).join('').slice(0, 2).toUpperCase(),
+          });
+          setShowKarmaPopup(true);
+          return;
+        }
         const pendingCommunity = JSON.parse(localStorage.getItem('zeromart-pending-community-karma'));
         if (pendingCommunity && accountKey(pendingCommunity.buyerId) === accountKey(activeAccountId)) {
           setKarmaTarget({ ...pendingCommunity, type: 'user', mandatory: true });
@@ -357,7 +325,6 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
       setBusinessSession(getBusinessSession());
       skipTransactionPersistRef.current = true;
       setItems(applyProductExpiry(mergeListingsById(
-        initialItems,
         getTransactionProducts(),
         getBusinessMarketplaceItems(),
       ).map(normalizeProductStock)));
@@ -387,10 +354,20 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
   }, []);
 
   useEffect(() => {
-    if (user) {
-      localStorage.setItem('zeromart-user', JSON.stringify(user));
-    } else {
-      localStorage.removeItem('zeromart-user');
+    const showLocationToast = (event) => setNotice(event.detail || 'Location updated');
+    window.addEventListener('zeromart-location-toast', showLocationToast);
+    return () => window.removeEventListener('zeromart-location-toast', showLocationToast);
+  }, []);
+
+  useEffect(() => {
+    try {
+      if (user) {
+        localStorage.setItem('zeromart-user', JSON.stringify(user));
+      } else {
+        localStorage.removeItem('zeromart-user');
+      }
+    } catch {
+      setNotice('Profile is updated for this session, but browser storage is full. Try a smaller profile photo.');
     }
   }, [user]);
 
@@ -551,11 +528,11 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
     setUser({
       name: 'Unknown',
       mobile,
-      karma: Number(savedKarma ?? 42),
-      listed: 3,
-      collected: 2,
-      activeListings: 2,
-      givenAway: 1,
+      karma: Number(savedKarma ?? 0),
+      listed: 0,
+      collected: 0,
+      activeListings: 0,
+      givenAway: 0,
       isBuyer: false,
       profileImage: '',
       location: locationEngine.location,
@@ -564,20 +541,21 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
     setNotice('Welcome! You can list for free and buy anything for ₹0 with a one-time ₹29 platform fee for lifetime unlimited buying access.');
   };
 
-  const favoriteCount = favorites.length;
-
   const handleNav = (view) => {
     if (view === 'home') {
       setActiveView('home');
       setSelectedNotification(null);
       setNotice('');
       setItems(applyProductExpiry(mergeListingsById(
-        initialItems,
         getTransactionProducts(),
         getBusinessMarketplaceItems(),
       ).map(normalizeProductStock)));
-      requestAnimationFrame(() => window.scrollTo({ top: 0, behavior: 'smooth' }));
+      requestAnimationFrame(() => window.scrollTo({ top: 0, behavior: 'auto' }));
       return;
+    }
+    if (view === 'favorites') {
+      setFavoriteBadgeCount(0);
+      localStorage.setItem('zeromart-new-favorites-count', '0');
     }
     if (view === 'notifications') {
       const visibleNotificationIds = new Set(visibleNotifications.map((notification) => notification.id));
@@ -675,7 +653,6 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
       sellerPhone: requestedItem?.ownerMobile || requestedItem?.sellerPhone || '',
       productName: historyEntry.title,
       requestUrl,
-      isDemo: Boolean(requestedItem?.isDemo),
       status: 'pending',
       createdAt: createdAtIso,
       expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
@@ -699,7 +676,6 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
       sellerPickupAddress: requestedItem?.locationData?.fullAddress || requestedItem?.location || '',
       sellerLocationData: requestedItem?.locationData || null,
       requestUrl,
-      isDemo: Boolean(requestedItem?.isDemo),
       recipientId: requestedItem?.sellerId || requestedItem?.businessId || requestedItem?.ownerMobile || requestedItem?.sellerName,
       buyerId: activeAccountId,
       requestStatus: 'pending',
@@ -719,7 +695,7 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
     setQuantityItem(null);
     setSelectedItem(null);
     setNotice('Request sent. Chat and contact sharing will unlock only after the seller accepts.');
-    if (requestRecord.sellerPhone && !requestRecord.isDemo) {
+    if (requestRecord.sellerPhone) {
       const sellerMessage = [
         'Hello,',
         '',
@@ -761,7 +737,7 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
       id: orderId,
       orderId,
       collectionCode,
-      qrCodeValue: requestedItem.businessId === DEMO_BUSINESS.id ? collectionCode : `${orderId}|${collectionCode}`,
+      qrCodeValue: `${orderId}|${collectionCode}`,
       buyerId: activeAccountId,
       buyerName: activeBuyer.name,
       buyerPhone: activeBuyer.mobile,
@@ -899,7 +875,7 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
             pickupAddress: confirmation.pickupAddress || '',
             sellerPhone: accepted ? (confirmation.sellerPhone || notification.sellerPhone || '') : '',
             optionalMessage: confirmation.optionalMessage || '',
-            sellerGave: accepted && !request.isDemo ? true : request.sellerGave,
+            sellerGave: request.sellerGave,
           }
         : request
     )));
@@ -931,7 +907,6 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
         collectionTime: confirmation.collectionTime || '',
         pickupAddress: confirmation.pickupAddress || '',
         optionalMessage: confirmation.optionalMessage || '',
-        isDemo: Boolean(notification.isDemo),
         mapsLink: `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(confirmation.pickupAddress || '')}`,
         whatsappLink: sellerWhatsappLink,
         buyerWhatsappLink,
@@ -953,7 +928,7 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
         ));
         return [acceptedNotification, ...sellerUpdate.filter((entry) => entry.id !== acceptedNotification.id)];
       });
-      if (notification.buyerPhone && !notification.isDemo) window.open(buyerWhatsappLink, '_blank', 'noopener,noreferrer');
+      if (notification.buyerPhone) window.open(buyerWhatsappLink, '_blank', 'noopener,noreferrer');
     } else {
       const declinedNotification = {
         id: `declined-${notification.requestId}`,
@@ -1030,9 +1005,47 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
       const exists = prev.some((entry) => entry.id === item.id);
       const next = exists ? prev.filter((entry) => entry.id !== item.id) : [...prev, item];
       localStorage.setItem('zeromart-favorites', JSON.stringify(next));
-      setNotice(exists ? `${item.title} removed from favorites.` : `${item.title} added to favorites.`);
+      if (!exists) {
+        setFavoriteBadgeCount((current) => {
+          const nextCount = current + 1;
+          localStorage.setItem('zeromart-new-favorites-count', String(nextCount));
+          return nextCount;
+        });
+      }
+      setNotice(exists ? 'Removed from favourites' : 'Added to favourites');
       return next;
     });
+  };
+
+  const handleUpdateUser = (updates) => {
+    if (!user) return;
+    const currentUser = user;
+    const nextUser = { ...currentUser, ...updates };
+    const ownsListing = (item) => (
+      item.sellerId === currentUser.userId
+      || item.ownerMobile === currentUser.mobile
+      || item.sellerName === currentUser.name
+      || item.sellerName === 'You'
+    );
+    const applyProfile = (item) => ownsListing(item)
+      ? {
+          ...item,
+          sellerName: nextUser.name || 'Unknown',
+          sellerProfileImage: nextUser.profileImage || '',
+        }
+      : item;
+    setItems((existing) => existing.map(applyProfile));
+    setFavorites((existing) => {
+      const nextFavorites = existing.map(applyProfile);
+      try {
+        localStorage.setItem('zeromart-favorites', JSON.stringify(nextFavorites));
+      } catch {
+        setNotice('Profile saved, but the browser could not update cached favourites.');
+      }
+      return nextFavorites;
+    });
+    setUser(nextUser);
+    setNotice('Profile updated successfully');
   };
 
   const handleListingSubmit = (formData) => {
@@ -1079,6 +1092,7 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
       sellerName: user?.name || 'You',
       sellerId: user?.userId || user?.mobile || 'guest-owner',
       sellerKarma: user?.karma || 0,
+      sellerProfileImage: user?.profileImage || '',
       ownerMobile: user?.mobile || 'guest-owner',
       isOwn: true,
       image: formData.image || 'https://images.unsplash.com/photo-1512436991641-6745cdb1723f?auto=format&fit=crop&w=900&q=80',
@@ -1098,7 +1112,6 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
       coordinates: formData.coordinates,
       locationData: formData.locationData,
       createdAt: new Date().toISOString(),
-      isDemo: Boolean(user?.isDemo),
     };
     setItems((prev) => [newItem, ...prev]);
     setUser((prev) => (prev ? {
@@ -1166,6 +1179,7 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
           ? { ...order, karmaGiven: true }
           : order
       )));
+      completePendingKarmaAction(karmaTarget.pendingActionId || `business:${karmaTarget.orderId}`);
       localStorage.removeItem('zeromart-pending-business-karma');
       setShowKarmaPopup(false);
       setKarmaTarget(null);
@@ -1182,6 +1196,7 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
         request.requestId === karmaTarget.requestId ? { ...request, karmaGiven: true } : request
       )));
     }
+    completePendingKarmaAction(karmaTarget?.pendingActionId || `community:${karmaTarget?.requestId}`);
     setItems((prev) => prev.map((item) => (
       item.sellerName === karmaTarget?.name
         ? { ...item, sellerKarma: Number(item.sellerKarma || 0) + 1 }
@@ -1198,11 +1213,14 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
     localStorage.removeItem(`zeromart-chat-${target.requestId}`);
     const pendingKarma = {
       ...(target.karmaRecipient || target),
+      id: `community:${target.requestId}`,
+      pendingActionId: `community:${target.requestId}`,
       buyerId: result.request?.buyerId,
       sellerId: result.request?.sellerId,
       requestId: target.requestId,
       mandatory: true,
     };
+    savePendingKarmaAction(pendingKarma);
     localStorage.setItem('zeromart-pending-community-karma', JSON.stringify(pendingKarma));
     if (accountKey(result.request?.buyerId) === accountKey(activeAccountId)) {
       setKarmaTarget(pendingKarma);
@@ -1244,7 +1262,7 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
 
   const handleMarkCollected = (notification) => {
     const pendingRequest = getRequests().find((request) => request.requestId === notification.requestId);
-    if (pendingRequest && !pendingRequest.isDemo) {
+    if (pendingRequest) {
       saveRequests(getRequests().map((request) => (
         request.requestId === notification.requestId && request.status === 'accepted'
           ? { ...request, sellerGave: true }
@@ -1281,7 +1299,7 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
   const handleSellerHandover = (notification) => {
     const result = confirmHandoff(notification.requestId, 'seller');
     if (!result.request) {
-      setNotice('This demo request could not be found.');
+      setNotice('This collection request could not be found.');
       return;
     }
     if (result.alreadyCompleted) {
@@ -1365,11 +1383,8 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
   }, [activeAccountId, currentCoordinates, items, requestClock, selectedItem]);
   const visibleNotifications = useMemo(() => {
     const requestsById = new Map(getRequests().map((request) => [request.requestId, request]));
-    const isDemoRole = Boolean(user?.isDemo || businessSession?.isDemo);
     return notifications.filter((notification) => (
-      isDemoRole
-        ? Boolean(notification.recipientId) && accountKey(notification.recipientId) === accountKey(activeAccountId)
-        : !notification.recipientId || accountKey(notification.recipientId) === accountKey(activeAccountId)
+      !notification.recipientId || accountKey(notification.recipientId) === accountKey(activeAccountId)
     )).map((notification) => {
       if (notification.type !== 'request' || !notification.requestId) return notification;
       const request = requestsById.get(notification.requestId);
@@ -1394,12 +1409,12 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
       }
       return { ...notification, requestStatus: request.status };
     });
-  }, [activeAccountId, businessSession?.isDemo, notifications, user?.isDemo]);
+  }, [activeAccountId, notifications]);
   const visibleOrderHistory = useMemo(() => (
-    user?.isDemo
-      ? orderHistory.filter((order) => accountKey(order.buyerId) === accountKey(activeAccountId))
-      : orderHistory
-  ), [activeAccountId, orderHistory, user?.isDemo]);
+    activeAccountId
+      ? orderHistory.filter((order) => !order.buyerId || accountKey(order.buyerId) === accountKey(activeAccountId))
+      : []
+  ), [activeAccountId, orderHistory]);
   const unreadNotificationCount = useMemo(
     () => visibleNotifications.filter((notification) => !notification.read).length,
     [visibleNotifications],
@@ -1410,7 +1425,7 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
       .sort((first, second) => new Date(second.createdAt || 0) - new Date(first.createdAt || 0))
   ), [activeAccountId, notifications]);
   const filterOptions = useMemo(() => {
-    const searchableCatalog = mergeListingsById(items, localBusinessSearchItems);
+    const searchableCatalog = items;
     const categories = ['All', ...new Set(searchableCatalog.map((item) => item.category).filter(Boolean))];
     const conditions = ['All', ...new Set(searchableCatalog.map((item) => item.condition).filter(Boolean))];
     return { categories, conditions };
@@ -1421,7 +1436,7 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
     const activeLocation = currentCoordinates;
     if (!activeLocation) return [];
     const catalogItems = hasActiveSearch
-      ? mergeListingsById(items, localBusinessSearchItems)
+      ? items
       : items;
     return catalogItems.map(normalizeProductStock).filter(isMarketplaceVisible).map((item) => {
       const itemCoordinates = getItemCoordinates(item);
@@ -1571,7 +1586,7 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
       state: 500,
       country: Number.POSITIVE_INFINITY,
     }[leaderboardScope];
-    const leaderboardItems = mergeListingsById(items, localBusinessSearchItems).filter((item) => {
+    const leaderboardItems = items.filter((item) => {
       if (leaderboardScope === 'near1' || leaderboardScope === 'near5') {
         if (!localCoordinates) return false;
         const itemCoordinates = getItemCoordinates(item);
@@ -1601,7 +1616,7 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
         completed: 0,
         distanceKm: Number.POSITIVE_INFINITY,
         location: item.location,
-        image: user?.name === name ? user.profileImage : '',
+        image: item.sellerProfileImage || (user?.name === name ? user.profileImage : ''),
       };
       profileMap.set(name, {
         ...existing,
@@ -1610,7 +1625,7 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
         completed: existing.completed + Number(item.completedCount || item.soldQuantity || 0),
         distanceKm: Math.min(existing.distanceKm, itemDistanceKm ?? Number.POSITIVE_INFINITY),
         location: existing.location || item.location,
-        image: existing.image || (user?.name === name ? user.profileImage : ''),
+        image: existing.image || item.sellerProfileImage || (user?.name === name ? user.profileImage : ''),
       });
     });
     if (user) {
@@ -1653,286 +1668,10 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
   }, [currentCoordinates, items, leaderboardScope, locationEngine.location, locationLabel, radiusKm, user]);
   const selectedPublicProfileItems = useMemo(() => {
     if (!selectedPublicProfile) return [];
-    return mergeListingsById(items, localBusinessSearchItems).filter((item) => (item.sellerName || item.brand) === selectedPublicProfile.name);
+    return items.filter((item) => (item.sellerName || item.brand) === selectedPublicProfile.name);
   }, [items, selectedPublicProfile]);
   const hasActiveSession = Boolean(user || businessSession);
   const visibleNotice = hasActiveSession && /you are logged out/i.test(notice) ? '' : notice;
-  const latestDemoRequest = getRequests()
-    .filter((request) => (
-      request.productId === DEMO_COMMUNITY_ITEM_ID
-      || request.sellerId === DEMO_SELLER.userId
-      || request.sellerId === DEMO_SELLER.mobile
-      || request.sellerId === DEMO_SELLER.name
-    ))
-    .sort((first, second) => new Date(second.createdAt || 0) - new Date(first.createdAt || 0))[0] || null;
-  const latestDemoBusinessOrder = getBusinessOrders()
-    .filter((order) => order.businessId === DEMO_BUSINESS.id)
-    .sort((first, second) => new Date(second.createdAt || 0) - new Date(first.createdAt || 0))[0] || null;
-  const demoRole = businessSession?.id === DEMO_BUSINESS.id
-    ? 'business'
-    : user?.mobile === DEMO_BUYER.mobile
-      ? 'buyer'
-      : user?.mobile === DEMO_SELLER.mobile
-        ? 'seller'
-        : '';
-
-  const ensureDemoData = () => {
-    const coordinates = currentCoordinates || areaCoordinates['HSR Layout'];
-    const locationData = {
-      latitude: coordinates.latitude,
-      longitude: coordinates.longitude,
-      area: 'Velachery',
-      locality: 'Velachery',
-      subLocality: 'Velachery',
-      city: 'Chennai',
-      district: 'Chennai',
-      state: 'Tamil Nadu',
-      country: 'India',
-      countryCode: 'in',
-      street: 'Demo Market Road',
-      doorNo: '12',
-      buildingName: 'Demo Community House',
-      landmark: 'Near Velachery Market',
-      postalCode: '600042',
-      addressType: 'Other',
-      fullAddress: '12, Demo Community House, Demo Market Road, Velachery, Chennai, Tamil Nadu 600042, India',
-      formattedAddress: '12, Demo Community House, Demo Market Road, Velachery, Chennai, Tamil Nadu 600042, India',
-    };
-    const expiry = new Date(Date.now() + 3 * 86400000).toISOString().slice(0, 10);
-    const demoKarmaKey = accountKey(DEMO_SELLER.userId);
-    const karmaLedger = getKarmaLedger();
-    const demoSellerKarma = Number(karmaLedger[demoKarmaKey] ?? DEMO_SELLER.karma);
-    if (karmaLedger[demoKarmaKey] === undefined) {
-      localStorage.setItem('zeromart-community-karma', JSON.stringify({ ...karmaLedger, [demoKarmaKey]: demoSellerKarma }));
-    }
-    const demoItem = normalizeProductStock({
-      id: DEMO_COMMUNITY_ITEM_ID,
-      title: 'Demo Fresh Bread',
-      category: 'Food',
-      condition: 'Fresh',
-      description: 'A demo community listing for testing the complete buyer, seller, chat, handover, and Good Karma flow.',
-      location: 'Velachery',
-      locationData,
-      coordinates,
-      distance: 'Nearby',
-      sellerName: DEMO_SELLER.name,
-      sellerId: DEMO_SELLER.userId,
-      sellerKarma: demoSellerKarma,
-      ownerMobile: DEMO_SELLER.mobile,
-      image: 'https://images.unsplash.com/photo-1509440159596-0249088772ff?auto=format&fit=crop&w=900&q=80',
-      status: 'active',
-      listingType: 'community',
-      totalQuantity: 4,
-      availableQuantity: 4,
-      reservedQuantity: 0,
-      soldQuantity: 0,
-      maxQuantityPerUserPer24h: 2,
-      expiryDate: expiry,
-      price: 0,
-      isDemo: true,
-      createdAt: new Date().toISOString(),
-    });
-    setItems((current) => (
-      current.some((item) => item.id === DEMO_COMMUNITY_ITEM_ID)
-        ? current
-        : [demoItem, ...current]
-    ));
-
-    const businessAccount = { ...DEMO_BUSINESS, locationData };
-    saveBusinessAccounts([businessAccount, ...getBusinessAccounts().filter((account) => account.id !== businessAccount.id)]);
-    const demoBusinessProduct = {
-      id: DEMO_BUSINESS_PRODUCT_ID,
-      businessId: businessAccount.id,
-      storeName: businessAccount.businessName,
-      name: 'Demo Fruit Rescue Box',
-      category: 'Food',
-      description: 'A demo business reservation listing for testing QR collection and business orders.',
-      image: 'https://images.unsplash.com/photo-1610832958506-aa56368176cf?auto=format&fit=crop&w=900&q=80',
-      quantity: 5,
-      totalQuantity: 5,
-      availableQuantity: 5,
-      reservedQuantity: 0,
-      soldQuantity: 0,
-      expiryDate: expiry,
-      expiryTime: '20:00',
-      pickupLocation: businessAccount.storeLocation,
-      locationData,
-      coordinates,
-      autoList: true,
-      nearExpiry: true,
-      status: 'Listed',
-      listingType: 'business',
-      maxQuantityPerUserPer24h: 2,
-      mrp: 0,
-      sellingPrice: 0,
-      isDemo: true,
-      createdAt: new Date().toISOString(),
-    };
-    const existingBusinessProducts = getBusinessProducts();
-    saveBusinessProducts(existingBusinessProducts.some((product) => product.id === DEMO_BUSINESS_PRODUCT_ID)
-      ? existingBusinessProducts
-      : [demoBusinessProduct, ...existingBusinessProducts]);
-    const demoBusinessItem = getBusinessMarketplaceItems()
-      .find((item) => item.businessProductId === DEMO_BUSINESS_PRODUCT_ID) || null;
-    return { businessAccount, locationData, demoItem, demoBusinessItem };
-  };
-
-  const activateDemoBuyer = (destination = 'home') => {
-    const { locationData, demoItem, demoBusinessItem } = ensureDemoData();
-    const latestSellerListing = [...items]
-      .filter((item) => (
-        (item.sellerId === DEMO_SELLER.userId || item.ownerMobile === DEMO_SELLER.mobile)
-        && item.id !== DEMO_COMMUNITY_ITEM_ID
-      ))
-      .sort((first, second) => new Date(second.createdAt || 0) - new Date(first.createdAt || 0))[0];
-    const communityDemoTarget = latestSellerListing || items.find((item) => item.id === DEMO_COMMUNITY_ITEM_ID) || demoItem;
-    const businessDemoTarget = getBusinessMarketplaceItems()
-      .filter((item) => item.businessId === DEMO_BUSINESS.id)
-      .sort((first, second) => new Date(second.createdAt || 0) - new Date(first.createdAt || 0))[0]
-      || demoBusinessItem;
-    clearBusinessSession();
-    setBusinessSession(null);
-    setUser({ ...DEMO_BUYER, location: locationData });
-    setItems((current) => current.map((item) => (
-      item.sellerId === DEMO_SELLER.userId || item.ownerMobile === DEMO_SELLER.mobile
-        ? { ...item, isOwn: false }
-        : item
-    )));
-    try {
-      const pendingBusinessKarma = JSON.parse(localStorage.getItem('zeromart-pending-business-karma'));
-      if (
-        pendingBusinessKarma?.businessId === DEMO_BUSINESS.id
-        && accountKey(pendingBusinessKarma.buyerId || DEMO_BUYER.userId) === accountKey(DEMO_BUYER.userId)
-      ) {
-        setKarmaTarget({ ...pendingBusinessKarma, type: 'business', mandatory: true, initials: 'DF' });
-        setShowKarmaPopup(true);
-      }
-    } catch {
-      localStorage.removeItem('zeromart-pending-business-karma');
-    }
-    setActiveView(destination === 'alerts' ? 'notifications' : destination === 'profile' ? 'profile' : 'home');
-    setSelectedItem(
-      destination === 'community-product'
-        ? { ...communityDemoTarget, isOwn: false }
-        : destination === 'business-product'
-          ? businessDemoTarget
-          : null
-    );
-    setShowDemoPanel(false);
-    setNotice(destination === 'community-product'
-      ? `Demo Buyer is active. Choose a quantity and request ${communityDemoTarget.title}.`
-      : destination === 'business-product'
-        ? 'Demo Buyer is active. Reserve the store product to generate a collection ID and QR.'
-        : destination === 'alerts'
-          ? 'Demo Buyer is active. Open the latest update to view collection details.'
-          : destination === 'profile'
-            ? 'Demo Buyer profile is open. Active QR passes and past orders appear here.'
-            : 'Demo Buyer is active. Browse and test the marketplace as a buyer.');
-    navigate('/');
-  };
-
-  const activateDemoSeller = (destination = 'alerts') => {
-    const { locationData } = ensureDemoData();
-    clearBusinessSession();
-    setBusinessSession(null);
-    const sellerKarma = Number(getKarmaLedger()[accountKey(DEMO_SELLER.userId)] ?? DEMO_SELLER.karma);
-    setUser({ ...DEMO_SELLER, karma: sellerKarma, location: locationData });
-    setItems((current) => current.map((item) => (
-      item.sellerId === DEMO_SELLER.userId || item.ownerMobile === DEMO_SELLER.mobile
-        ? { ...item, isOwn: true }
-        : item
-    )));
-    setActiveView(destination === 'profile' ? 'profile' : destination === 'list' ? 'home' : latestDemoRequest ? 'notifications' : 'home');
-    setSelectedItem(null);
-    setEditingItem(null);
-    setShowListingSheet(destination === 'list');
-    setShowDemoPanel(false);
-    setNotice(destination === 'list'
-      ? 'Demo Community Seller is active. Add a listing, then switch to Demo Buyer to request it.'
-      : destination === 'profile'
-        ? 'Seller profile is open. Completed collections appear under Orders received.'
-        : latestDemoRequest
-          ? 'Demo Community Seller is active. Open the pending request in Alerts.'
-          : 'Demo Community Seller is active. First create a request as Demo Buyer.');
-    navigate('/');
-  };
-
-  const activateDemoBusiness = (destination = 'dashboard') => {
-    const { businessAccount } = ensureDemoData();
-    localStorage.removeItem('zeromart-user');
-    setUser(null);
-    saveBusinessSession(businessAccount);
-    setBusinessSession(businessAccount);
-    setShowDemoPanel(false);
-    navigate(`/business/${destination}`);
-  };
-
-  const resetDemoData = () => {
-    const demoRequests = getRequests().filter((request) => (
-      request.productId === DEMO_COMMUNITY_ITEM_ID
-      || request.sellerId === DEMO_SELLER.userId
-      || request.sellerId === DEMO_SELLER.mobile
-      || request.sellerId === DEMO_SELLER.name
-    ));
-    const demoRequestIds = new Set(demoRequests.map((request) => request.requestId));
-    const demoCommunityProductIds = new Set([
-      DEMO_COMMUNITY_ITEM_ID,
-      ...items.filter((item) => item.sellerId === DEMO_SELLER.userId || item.ownerMobile === DEMO_SELLER.mobile).map((item) => item.id),
-    ]);
-    const demoBusinessProducts = getBusinessProducts().filter((product) => product.businessId === DEMO_BUSINESS.id);
-    const demoBusinessProductIds = new Set(demoBusinessProducts.map((product) => product.id));
-    const demoBusinessMarketplaceIds = new Set(demoBusinessProducts.map((product) => `business-product-${product.id}`));
-    const demoBusinessOrders = getBusinessOrders().filter((order) => order.businessId === DEMO_BUSINESS.id);
-    const demoBusinessOrderIds = new Set(demoBusinessOrders.map((order) => order.id));
-    demoRequests.forEach((request) => localStorage.removeItem(`zeromart-chat-${request.requestId}`));
-    const karmaLedger = getKarmaLedger();
-    delete karmaLedger[accountKey(DEMO_SELLER.userId)];
-    localStorage.setItem('zeromart-community-karma', JSON.stringify(karmaLedger));
-    localStorage.removeItem('zeromart-pending-business-karma');
-    localStorage.removeItem('zeromart-pending-community-karma');
-    setShowKarmaPopup(false);
-    setKarmaTarget(null);
-    saveRequests(getRequests().filter((request) => !demoRequestIds.has(request.requestId)));
-    savePurchaseHistory(getPurchaseHistory().filter((entry) => (
-      !demoCommunityProductIds.has(entry.productId)
-      && !demoRequestIds.has(entry.requestId)
-      && !demoBusinessMarketplaceIds.has(entry.productId)
-      && !demoBusinessOrderIds.has(entry.requestId)
-    )));
-    saveReservations(getReservations().filter((reservation) => (
-      reservation.businessId !== DEMO_BUSINESS.id
-      && !demoBusinessProductIds.has(reservation.businessProductId)
-    )));
-    saveBusinessOrders(getBusinessOrders().filter((order) => order.businessId !== DEMO_BUSINESS.id));
-    saveBusinessPurchases(getBusinessPurchases().filter((purchase) => purchase.businessId !== DEMO_BUSINESS.id));
-    saveBusinessProducts(getBusinessProducts().filter((product) => product.businessId !== DEMO_BUSINESS.id));
-    saveBusinessAccounts(getBusinessAccounts().filter((account) => account.id !== DEMO_BUSINESS.id));
-    setItems((current) => current.filter((item) => (
-      !demoCommunityProductIds.has(item.id)
-      && item.businessId !== DEMO_BUSINESS.id
-    )));
-    setNotifications((current) => current.filter((notification) => (
-      notification.itemId !== DEMO_COMMUNITY_ITEM_ID
-      && !demoRequests.some((request) => request.requestId === notification.requestId)
-      && !demoBusinessOrderIds.has(notification.orderId || notification.requestId)
-      && notification.recipientId !== DEMO_BUSINESS.id
-      && notification.recipientId !== DEMO_BUYER.userId
-    )));
-    setOrderHistory((current) => current.filter((order) => (
-      order.itemId !== DEMO_COMMUNITY_ITEM_ID
-      && order.businessId !== DEMO_BUSINESS.id
-      && !demoBusinessOrderIds.has(order.orderId || order.id)
-    )));
-    if (user?.isDemo) setUser(null);
-    if (businessSession?.isDemo) {
-      clearBusinessSession();
-      setBusinessSession(null);
-    }
-    setActiveView('home');
-    setShowDemoPanel(false);
-    setNotice('Demo data was removed. You can start a fresh demo anytime.');
-    navigate('/');
-  };
 
   return (
     <div className="min-h-screen overflow-x-hidden bg-[radial-gradient(circle_at_top_left,_rgba(245,158,11,0.18),_transparent_30%),radial-gradient(circle_at_top_right,_rgba(124,58,237,0.14),_transparent_28%),linear-gradient(135deg,_#fffaf2_0%,_#f7f4ff_48%,_#f8fafc_100%)] text-slate-800">
@@ -1990,9 +1729,9 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
                         {unreadNotificationCount > 99 ? '99+' : unreadNotificationCount}
                       </span>
                     )}
-                    {item.key === 'favorites' && favoriteCount > 0 && (
+                    {item.key === 'favorites' && favoriteBadgeCount > 0 && (
                       <span className="ml-auto inline-flex min-w-5 items-center justify-center rounded-full bg-rose-500 px-1.5 py-1 text-[10px] font-extrabold leading-none text-white shadow-sm">
-                        {favoriteCount > 99 ? '99+' : favoriteCount}
+                        {favoriteBadgeCount > 99 ? '99+' : favoriteBadgeCount}
                       </span>
                     )}
                   </button>
@@ -2379,9 +2118,14 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
                             </button>
                           </div>
                           <p className="mt-3 line-clamp-2 text-sm text-slate-500">{item.description || 'No description added.'}</p>
-                          <button onClick={() => setSelectedItem(item)} className="mt-4 rounded-full bg-violet-600 px-4 py-2 text-sm font-semibold text-white">
-                            View item
-                          </button>
+                          <div className="mt-4 flex flex-wrap gap-2">
+                            <button onClick={() => setSelectedItem(item)} className="rounded-full bg-violet-600 px-4 py-2 text-sm font-semibold text-white">
+                              View item
+                            </button>
+                            <button onClick={() => toggleFavorite(item)} className="rounded-full border border-rose-100 bg-rose-50 px-4 py-2 text-sm font-semibold text-rose-600">
+                              Remove
+                            </button>
+                          </div>
                         </div>
                       </article>
                     ))}
@@ -2401,7 +2145,7 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
                 onBack={handleBack}
               />
             )}
-            {activeView === 'profile' && <ProfilePage user={user} items={items} orders={visibleOrderHistory} receivedOrders={receivedOrders} onLogin={() => requireLogin('profile')} onBack={handleBack} onLogout={handleLogout} onSelectItem={setSelectedItem} onUpdateUser={(updates) => setUser((prev) => (prev ? { ...prev, ...updates } : prev))} />}
+            {activeView === 'profile' && <ProfilePage user={user} items={items} orders={visibleOrderHistory} receivedOrders={receivedOrders} onLogin={() => requireLogin('profile')} onBack={handleBack} onLogout={handleLogout} onSelectItem={setSelectedItem} onUpdateUser={handleUpdateUser} />}
           </div>
         </main>
       </div>
@@ -2438,9 +2182,9 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
                       {unreadNotificationCount > 99 ? '99+' : unreadNotificationCount}
                     </span>
                   )}
-                  {item.key === 'favorites' && favoriteCount > 0 && (
+                  {item.key === 'favorites' && favoriteBadgeCount > 0 && (
                     <span className="absolute -right-3 -top-3 inline-flex min-w-5 items-center justify-center rounded-full bg-rose-500 px-1 py-1 text-[9px] font-extrabold leading-none text-white shadow ring-2 ring-white">
-                      {favoriteCount > 99 ? '99+' : favoriteCount}
+                      {favoriteBadgeCount > 99 ? '99+' : favoriteBadgeCount}
                     </span>
                   )}
                 </span>
@@ -2454,16 +2198,6 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
           </button>
         </div>
       </nav>
-
-      {!showListingSheet && (
-        <button
-          type="button"
-          onClick={() => setShowDemoPanel(true)}
-          className="fixed bottom-24 left-4 z-50 inline-flex items-center gap-2 rounded-full border border-violet-200 bg-white px-4 py-3 text-sm font-extrabold text-violet-700 shadow-xl transition hover:-translate-y-0.5 hover:bg-violet-50 lg:bottom-6 lg:left-[21rem]"
-        >
-          <Sparkles size={17} /> Demo flow
-        </button>
-      )}
 
       {!showListingSheet && (
         <button onClick={() => setShowBotAssistant(true)} className="fixed bottom-24 right-4 z-50 flex h-14 w-14 items-center justify-center rounded-full bg-gradient-to-br from-amber-500 to-violet-600 text-white shadow-lg shadow-violet-600/25 lg:bottom-6 lg:right-6">
@@ -2591,7 +2325,7 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
       <BotAssistant
         open={showBotAssistant}
         onClose={() => setShowBotAssistant(false)}
-        items={mergeListingsById(items, localBusinessSearchItems)}
+        items={items}
         favorites={favorites}
         orders={orderHistory}
         notifications={visibleNotifications}
@@ -2610,17 +2344,6 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
           setShowBusinessAuth(false);
           navigate('/business/dashboard');
         }}
-      />
-      <DemoFlowPanel
-        open={showDemoPanel}
-        currentRole={demoRole}
-        latestRequest={latestDemoRequest}
-        latestBusinessOrder={latestDemoBusinessOrder}
-        onClose={() => setShowDemoPanel(false)}
-        onBuyer={activateDemoBuyer}
-        onSeller={activateDemoSeller}
-        onBusiness={activateDemoBusiness}
-        onReset={resetDemoData}
       />
       <OnboardingTour open={!hasSeenTour} onFinish={handleTourFinish} />
     </div>

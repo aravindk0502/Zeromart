@@ -27,8 +27,8 @@ export const watchDevicePosition = (
   if (!navigator.geolocation) throw new Error('Geolocation is not supported by this browser.');
   return navigator.geolocation.watchPosition(onPosition, onError, {
     enableHighAccuracy: true,
-    maximumAge: 15000,
-    timeout: 20000,
+    maximumAge: 30000,
+    timeout: 10000,
   });
 };
 
@@ -60,15 +60,15 @@ export const getDevicePosition = async () => {
   try {
     return await requestPosition({
       enableHighAccuracy: true,
-      timeout: 20000,
-      maximumAge: 0,
+      timeout: 6000,
+      maximumAge: 15000,
     });
   } catch (error: any) {
     if (Number(error?.code) === 1) throw error;
     return requestPosition({
       enableHighAccuracy: false,
-      timeout: 15000,
-      maximumAge: 60000,
+      timeout: 5000,
+      maximumAge: 120000,
     });
   }
 };

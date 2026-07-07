@@ -13,7 +13,7 @@ import { useLocationEngine } from '../hooks/useLocationEngine';
 import { formatShortAddress, haversineKm, locationLabel, withAddressDetails } from '../services/locationService';
 import {
   createWhatsAppLink, expireReservations, getCollectionSettings, getReservations, saveCollectionSettings, saveReservations,
-  updatePurchaseHistoryStatus,
+  savePendingKarmaAction, updatePurchaseHistoryStatus,
 } from '../services/transactionService';
 import {
   applyExpiryRules, clearBusinessSession, daysUntilExpiry, getBusinessAccounts,
@@ -515,7 +515,17 @@ function Orders({ account, orders, allOrders, setOrders, updateAccount, persistP
         orderId: id,
         mandatory: true,
       }));
-      window.dispatchEvent(new CustomEvent('zeromart-karma-pending'));
+      savePendingKarmaAction({
+        id: `business:${id}`,
+        pendingActionId: `business:${id}`,
+        businessId: account.id,
+        buyerId: changedOrder?.buyerId || changedOrder?.buyerMobile,
+        name: account.businessName,
+        orderId: id,
+        type: 'business',
+        mandatory: true,
+        createdAt: new Date().toISOString(),
+      });
     }
     if (['No Show', 'Cancelled'].includes(status)) {
       persistProducts(getBusinessProducts().map((product) => {

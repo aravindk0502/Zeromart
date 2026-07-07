@@ -111,7 +111,7 @@ export default function OtpSheet() {
                 {step === 'phone'
                   ? 'We use your number only to verify your identity. No spam.'
                   : isDemo
-                    ? 'Demo mode — enter any 6 digits to continue.'
+                    ? 'Enter any 6 digits to continue while SMS is being connected.'
                     : 'Enter the 6-digit code sent via SMS.'}
               </div>
             </div>

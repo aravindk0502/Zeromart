@@ -5,6 +5,7 @@ const STORAGE_KEYS = {
   notifications: 'zeromart-notifications',
   purchaseHistory: 'zeromart-purchase-history',
   collectionSettings: 'zeromart-business-collection-settings',
+  pendingKarmaActions: 'pendingKarmaActions',
 };
 
 export const PURCHASE_LIMIT_WINDOW_MS = 24 * 60 * 60 * 1000;
@@ -246,6 +247,25 @@ export const saveCollectionSettings = (settings) => {
     ...all.filter((entry) => entry.businessId !== settings.businessId),
   ]);
   return settings;
+};
+
+export const getPendingKarmaActions = () => read(STORAGE_KEYS.pendingKarmaActions, []);
+
+export const savePendingKarmaAction = (action) => {
+  if (!action?.id || !action?.buyerId) return getPendingKarmaActions();
+  const next = [
+    action,
+    ...getPendingKarmaActions().filter((entry) => entry.id !== action.id),
+  ];
+  write(STORAGE_KEYS.pendingKarmaActions, next);
+  window.dispatchEvent(new CustomEvent('zeromart-karma-pending', { detail: action }));
+  return next;
+};
+
+export const completePendingKarmaAction = (id) => {
+  const next = getPendingKarmaActions().filter((entry) => entry.id !== id);
+  write(STORAGE_KEYS.pendingKarmaActions, next);
+  return next;
 };
 
 export const confirmHandoff = (requestId, role) => {

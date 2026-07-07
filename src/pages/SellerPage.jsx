@@ -95,7 +95,7 @@ export default function SellerPage({ user, items, onBack, onOpenListing, onOpenK
             </div>
           ))}
         </div>
-        <button onClick={onOpenKarmaDemo} className="mt-4 w-full rounded-[1.1rem] border border-amber-200 bg-white px-4 py-3 text-sm font-semibold text-violet-700">Demo karma popup</button>
+        <button onClick={onOpenKarmaDemo} className="mt-4 w-full rounded-[1.1rem] border border-amber-200 bg-white px-4 py-3 text-sm font-semibold text-violet-700">Preview karma popup</button>
       </section>
     </div>
   );

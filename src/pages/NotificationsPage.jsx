@@ -227,14 +227,14 @@ export default function NotificationsPage({
                   </div>
                   {selectedNotification.isDemo && demoChatRequestId === selectedNotification.requestId && selectedNotification.requestStatus === 'accepted' && (
                     <div className="rounded-xl border border-violet-100 bg-violet-50/60 p-3">
-                      <p className="text-xs font-bold uppercase tracking-wide text-violet-700">Temporary demo chat</p>
+                      <p className="text-xs font-bold uppercase tracking-wide text-violet-700">Temporary chat</p>
                       <div className="mt-2 max-h-28 space-y-2 overflow-y-auto">
                         {demoChatMessages.length === 0
                           ? <p className="text-xs text-slate-500">Coordinate collection here. This chat is deleted when the handover completes.</p>
                           : demoChatMessages.map((message) => <p key={message.id} className="ml-auto w-fit max-w-[85%] rounded-xl bg-white px-3 py-2 text-xs text-slate-700 shadow-sm">{message.text}</p>)}
                       </div>
                       <div className="mt-2 flex gap-2">
-                        <input value={demoChatDraft} onChange={(event) => setDemoChatDraft(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') sendDemoChat(); }} placeholder="Type a demo message" className="min-w-0 flex-1 rounded-xl border border-violet-100 bg-white px-3 py-2 text-xs outline-none" />
+                        <input value={demoChatDraft} onChange={(event) => setDemoChatDraft(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') sendDemoChat(); }} placeholder="Type a message" className="min-w-0 flex-1 rounded-xl border border-violet-100 bg-white px-3 py-2 text-xs outline-none" />
                         <button type="button" onClick={sendDemoChat} className="rounded-xl bg-violet-600 px-3 py-2 text-xs font-bold text-white">Send</button>
                       </div>
                     </div>

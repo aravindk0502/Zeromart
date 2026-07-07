@@ -94,7 +94,7 @@ export default function BusinessAuthModal({ open = true, onClose, onSuccess, emb
         ) : (
           <form onSubmit={verifyOtp}>
             <button type="button" onClick={() => { setStep('details'); setError(''); }} className="mb-4 inline-flex items-center gap-2 text-sm font-bold text-slate-500"><ArrowLeft size={16} /> Change details</button>
-            <div className="rounded-xl bg-emerald-50 p-4 text-sm text-emerald-800">OTP sent to +91 {form.mobile}. Demo OTP: <strong>123456</strong></div>
+            <div className="rounded-xl bg-emerald-50 p-4 text-sm text-emerald-800">OTP sent to +91 {form.mobile}. Use OTP: <strong>123456</strong></div>
             <label className="mt-4 block text-sm font-semibold text-slate-700">6-digit OTP<input autoFocus value={otp} onChange={(event) => setOtp(event.target.value.replace(/\D/g, '').slice(0, 6))} inputMode="numeric" className="mt-2 w-full rounded-xl border border-slate-200 px-4 py-3 text-center text-xl font-bold tracking-[0.35em] outline-none focus:border-emerald-500" /></label>
             {error && <p className="mt-3 text-sm font-semibold text-rose-600">{error}</p>}
             <button className="mt-4 inline-flex w-full items-center justify-center gap-2 rounded-xl bg-emerald-600 px-4 py-3 font-bold text-white"><CheckCircle2 size={18} /> Verify and continue</button>

@@ -1,7 +1,9 @@
+import { useState } from 'react';
 import { ArrowLeft, MapPin, Pencil, ShieldCheck, Sparkles, Trash2, User, X } from 'lucide-react';
 import { formatExpiry, normalizeProductStock } from '../services/transactionService';
 
 export default function ItemDetailsModal({ item, onClose, onRequest, onRequireLogin, onEdit, onDelete, user }) {
+  const [previewProfileImage, setPreviewProfileImage] = useState('');
   if (!item) return null;
   const product = normalizeProductStock(item);
 
@@ -106,9 +108,15 @@ export default function ItemDetailsModal({ item, onClose, onRequest, onRequireLo
                     : 'Send a request first. If accepted, use the shared phone number to coordinate collection or your preferred courier.'}
             </div>
             <div className="mt-3 flex items-center gap-3 rounded-[1.1rem] bg-white p-3 shadow-sm">
-              <div className="flex h-11 w-11 items-center justify-center rounded-full bg-amber-100 text-violet-700">
-                <User size={18} />
-              </div>
+              <button
+                type="button"
+                disabled={!item.sellerProfileImage}
+                onClick={() => item.sellerProfileImage && setPreviewProfileImage(item.sellerProfileImage)}
+                className="flex h-11 w-11 shrink-0 items-center justify-center overflow-hidden rounded-full bg-amber-100 text-violet-700 disabled:cursor-default"
+                aria-label={item.sellerProfileImage ? `View ${item.sellerName} profile photo` : `${item.sellerName} profile`}
+              >
+                {item.sellerProfileImage ? <img src={item.sellerProfileImage} alt={item.sellerName} className="h-full w-full object-cover" /> : <User size={18} />}
+              </button>
               <div>
                 <p className="font-semibold text-slate-900">{item.sellerName}</p>
                 <p className="text-sm text-slate-500">✨ {item.sellerKarma} Good Karma</p>
@@ -161,6 +169,12 @@ export default function ItemDetailsModal({ item, onClose, onRequest, onRequireLo
           )}
         </div>
       </div>
+      {previewProfileImage && (
+        <div className="fixed inset-0 z-[260] flex items-center justify-center bg-slate-950/80 p-5 backdrop-blur-sm">
+          <button type="button" onClick={() => setPreviewProfileImage('')} className="absolute right-4 top-4 rounded-full bg-white p-3 text-slate-700 shadow-lg" aria-label="Close profile photo"><X size={20} /></button>
+          <img src={previewProfileImage} alt={`${item.sellerName} profile`} className="max-h-[82vh] max-w-full rounded-[2rem] object-contain shadow-2xl" />
+        </div>
+      )}
     </div>
   );
 }
