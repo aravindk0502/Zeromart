@@ -10,4 +10,13 @@
       "destination": "/index.html"
     }
   ]
+
+  ,"redirects": [
+    {
+      "source": "/(.*)",
+      "has": [ { "type": "host", "value": "drizn.com" } ],
+      "destination": "https://www.drizn.com/$1",
+      "statusCode": 308
+    }
+  ]
 }
