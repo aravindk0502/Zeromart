@@ -60,10 +60,24 @@ export const insertProduct = (listing, user) => post('/api/products', {
   emoji:           listing.emoji,
   condition:       listing.condition,
   description:     listing.description || '',
-  photo_url:       listing.photo || null,
+  photo_url:       listing.photo_url || listing.photo || null,
   nearby_eligible: true,
   pickup_area:     listing.area || '',
 }, true);
+
+export const uploadImage = (file) => {
+  const form = new FormData();
+  form.append('file', file);
+  return fetch(apiUrl('/api/upload'), {
+    method: 'POST',
+    headers: { ...(isLoggedIn() ? authHeaders() : {}) },
+    body: form,
+  }).then(async (r) => {
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.error || 'Upload failed');
+    return data.url;
+  });
+};
 
 export const updateProduct = (id, data) => put(`/api/products/${id}`, data);
 export const deleteProduct = (id) => fetch(apiUrl(`/api/products/${id}`), { method: 'DELETE', headers: authHeaders() }).then((r) => r.json());

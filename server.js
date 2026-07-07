@@ -7,6 +7,8 @@ import { fileURLToPath } from 'url';
 import jwt from 'jsonwebtoken';
 import Razorpay from 'razorpay';
 import pg from 'pg';
+import multer from 'multer';
+import { createClient as createSupabaseClient } from '@supabase/supabase-js';
 
 export const app = express();
 const PORT = process.env.PORT || 3001;
@@ -38,6 +40,15 @@ const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
   ssl: process.env.DATABASE_URL ? { rejectUnauthorized: false } : false,
 });
+
+// Supabase Storage client (optional)
+const SUPABASE_URL = process.env.SUPABASE_URL || '';
+const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE || process.env.SUPABASE_KEY || '';
+const supabase = (SUPABASE_URL && SUPABASE_KEY) ? createSupabaseClient(SUPABASE_URL, SUPABASE_KEY) : null;
+const SUPABASE_BUCKET = process.env.SUPABASE_STORAGE_BUCKET || 'product-images';
+
+// multer for parsing multipart form data (memory storage)
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 6 * 1024 * 1024 } });
 
 export async function initDB() {
   if (!process.env.DATABASE_URL) {
@@ -265,6 +276,36 @@ app.post('/api/products', authMiddleware, async (req, res) => {
      req.user.id, u?.name || 'You', u?.karma || 0, u?.initials || 'ME']
   );
   return res.json({ id: result.rows[0].id });
+});
+
+// Upload image: multipart/form-data 'file' field. Returns { url }
+app.post('/api/upload', authMiddleware, upload.single('file'), async (req, res) => {
+  try {
+    const file = req.file;
+    if (!file) return res.status(400).json({ error: 'No file uploaded' });
+
+    // If supabase is configured, upload to storage
+    if (supabase) {
+      const ext = (file.originalname || '').split('.').pop() || 'jpg';
+      const key = `products/${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${ext}`;
+      const { error: uploadError } = await supabase.storage.from(SUPABASE_BUCKET).upload(key, file.buffer, { contentType: file.mimetype, upsert: false });
+      if (uploadError) {
+        console.error('[UPLOAD] Supabase upload failed', uploadError.message || uploadError);
+        return res.status(500).json({ error: 'Upload failed' });
+      }
+      // Get public URL
+      const { data } = supabase.storage.from(SUPABASE_BUCKET).getPublicUrl(key);
+      return res.json({ url: data?.publicUrl || '' });
+    }
+
+    // Demo mode: return a data URL so client can persist it locally
+    const base64 = file.buffer.toString('base64');
+    const dataUrl = `data:${file.mimetype};base64,${base64}`;
+    return res.json({ url: dataUrl });
+  } catch (err) {
+    console.error('[UPLOAD] error', err.message || err);
+    return res.status(500).json({ error: 'Upload failed' });
+  }
 });
 
 // Update product

@@ -32,7 +32,7 @@ import {
   completePendingKarmaAction, getPendingKarmaActions, savePendingKarmaAction,
   getLiveListings, saveLiveListings, upsertLiveListing, removeLiveListing, normalizeLiveListing,
 } from './services/transactionService';
-import { fetchProducts, insertProduct, updateProduct, deleteProduct, fetchPersistence, isLoggedIn } from './lib/api';
+import { fetchProducts, insertProduct, updateProduct, deleteProduct, fetchPersistence, isLoggedIn, uploadImage } from './lib/api';
 
 const navItems = [
   { key: 'home', label: 'Home', icon: Home },
@@ -175,6 +175,7 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
   const [currentCoordinates, setCurrentCoordinates] = useState(locationEngine.location);
   const [showOtpModal, setShowOtpModal] = useState(false);
   const [notice, setNotice] = useState('');
+  const [showPostSuccessModal, setShowPostSuccessModal] = useState(false);
   const [favorites, setFavorites] = useState(() => {
     try {
       return JSON.parse(localStorage.getItem('zeromart-favorites') || '[]');
@@ -1099,6 +1100,8 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
     });
     setUser(nextUser);
     setNotice('Profile updated successfully');
+    // clear transient profile update notice after a short time
+    setTimeout(() => { setNotice(''); }, 4000);
   };
 
   // Migrate local listings to server when a user logs in (one-time prompt)
@@ -1113,8 +1116,15 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
         || item.isOwn === true
       ));
       if (!candidates.length) return;
-      // Ask user for confirmation once
-      if (!window.confirm(`We found ${candidates.length} local listing(s). Upload them to your account so others can see them?`)) return;
+      // Ask user for confirmation once (remember choice to avoid repeated prompts)
+      const PROMPT_KEY = 'zeromart-listing-migration-seen';
+      if (!localStorage.getItem(PROMPT_KEY)) {
+        if (!window.confirm(`We found ${candidates.length} local listing(s). Upload them to your account so others can see them?`)) {
+          localStorage.setItem(PROMPT_KEY, 'true');
+          return;
+        }
+        localStorage.setItem(PROMPT_KEY, 'true');
+      }
       (async () => {
         for (const item of candidates) {
           try {
@@ -1142,6 +1152,7 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
           }
         }
         if (migrated) setNotice('Local listings uploaded to your account.');
+        if (migrated) setTimeout(() => setNotice(''), 4000);
       })();
     } catch (err) {
       // ignore
@@ -1252,6 +1263,18 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
           nearby_eligible: true,
           pickup_area: formData.pickupArea || '',
         };
+        // If a raw File is present, upload it to server storage first
+        if (formData.photoFile) {
+          try {
+            const uploadedUrl = await uploadImage(formData.photoFile).catch(() => null);
+            if (uploadedUrl) {
+              payload.photo_url = uploadedUrl;
+              newItem.image = uploadedUrl;
+            }
+          } catch (err) {
+            // ignore upload failures and fall back to provided image
+          }
+        }
         const resp = await insertProduct(payload, user).catch(() => null);
         if (resp && resp.id) {
           newItem.id = resp.id;
@@ -1262,6 +1285,7 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
       }
     } else {
       setNotice('This listing is saved locally only. Sign up or log in to make it visible to everyone.');
+      setTimeout(() => setNotice(''), 4000);
     }
 
     upsertLiveListing(newItem);
@@ -1273,7 +1297,8 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
     setShowListingSheet(false);
     setSelectedItem(null);
     setActiveView('home');
-    setNotice('Your item is live. You can manage it from its card or your profile.');
+    // Show success modal offering to add another listing
+    setShowPostSuccessModal(true);
   };
 
   const handleEditListing = (item) => {
@@ -2503,6 +2528,18 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
           navigate('/business/dashboard');
         }}
       />
+      {showPostSuccessModal && (
+        <div className="sheet-center">
+          <div className="glass-card" style={{ maxWidth: 420, padding: 20, textAlign: 'center' }}>
+            <h3 style={{ fontSize: 18, fontWeight: 800, marginBottom: 8 }}>Product listed successfully 🎉</h3>
+            <p style={{ color: 'var(--zm-text-dim)', marginBottom: 16 }}>Your item is now live. Would you like to add another?</p>
+            <div style={{ display: 'flex', gap: 10, justifyContent: 'center' }}>
+              <button type="button" className="btn btn-ghost" onClick={() => { setShowPostSuccessModal(false); setShowListingSheet(true); }}>Add another</button>
+              <button type="button" className="btn btn-primary" onClick={() => setShowPostSuccessModal(false)}>Done</button>
+            </div>
+          </div>
+        </div>
+      )}
       <OnboardingTour open={!hasSeenTour} onFinish={handleTourFinish} />
     </div>
   );

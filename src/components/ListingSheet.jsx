@@ -21,6 +21,7 @@ const CATEGORY_EMOJIS = {
 export default function ListingSheet({ open, onClose, onSubmit, initialItem = null }) {
   const locationEngine = useLocationEngine();
   const [photo, setPhoto]       = useState(null);
+  const [photoFile, setPhotoFile] = useState(null);
   const [title, setTitle]       = useState('');
   const [desc, setDesc]         = useState('');
   const [category, setCategory] = useState('');
@@ -76,6 +77,7 @@ export default function ListingSheet({ open, onClose, onSubmit, initialItem = nu
   function handlePhoto(e) {
     const file = e.target.files[0];
     if (file) setPhoto(URL.createObjectURL(file));
+    if (file) setPhotoFile(file);
   }
 
   function canPost() {
@@ -83,7 +85,21 @@ export default function ListingSheet({ open, onClose, onSubmit, initialItem = nu
       && (category !== 'Others' || customCategory.trim());
   }
 
-  function doPost() {
+  async function doPost() {
+    let imageValue = photo || '';
+    if (photoFile) {
+      try {
+        imageValue = await new Promise((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(String(reader.result));
+          reader.onerror = reject;
+          reader.readAsDataURL(photoFile);
+        });
+      } catch (err) {
+        imageValue = photo || '';
+      }
+    }
+
     onSubmit({
       title: title.trim(),
       category: category === 'Others' ? customCategory.trim() : category,
@@ -92,7 +108,7 @@ export default function ListingSheet({ open, onClose, onSubmit, initialItem = nu
       pickupArea: area.trim(),
       coordinates,
       locationData: pickupLocation,
-      image: photo || '',
+      image: imageValue || '',
       validTill: expiry,
       expiryDate: expiry,
       expiryTime,
@@ -104,7 +120,8 @@ export default function ListingSheet({ open, onClose, onSubmit, initialItem = nu
       listingType: 'community',
       deliveryMode: 'pickup',
       allowInPersonCollection: true,
-    });
+        photoFile: photoFile || null,
+      });
     setPosted(true);
     setTimeout(() => {
       reset();

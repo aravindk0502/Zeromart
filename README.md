@@ -37,6 +37,40 @@ Open http://localhost:5173 in your browser, or use the port printed by Vite.
 3. Add `VITE_API_URL` and `VITE_GOOGLE_MAPS_API_KEY` from `.env.example`.
 4. Add the final Vercel domain to the Google Maps key HTTP-referrer restrictions.
 
+### Backend / Storage environment variables (Vercel)
+
+Add the following environment variables to your Vercel project (Settings → Environment Variables) for the backend and image storage to work correctly:
+
+- `DATABASE_URL` — your Postgres connection string (required for server persistence)
+- `JWT_SECRET` — secret for signing user JWTs (defaults to a dev value when missing)
+- `CORS_ORIGIN` — allowed origin(s) for CORS (comma-separated), e.g. `https://your-site.vercel.app`
+- `MSG91_AUTH_KEY` and `MSG91_TEMPLATE_ID` — optional SMS OTP provider keys (omit for demo mode)
+- `RAZORPAY_KEY_ID` and `RAZORPAY_KEY_SECRET` — optional Razorpay keys for payments
+- `SUPABASE_URL` — Supabase project URL (for Storage)
+- `SUPABASE_SERVICE_ROLE` or `SUPABASE_KEY` — Supabase service role key (required to upload files server-side)
+- `SUPABASE_STORAGE_BUCKET` — (optional) bucket name; defaults to `product-images`
+
+We provide a small helper script to create the Supabase storage bucket locally using the `supabase` CLI: `scripts/create_supabase_bucket.sh`
+
+Example: set env vars in Vercel and redeploy. After deployment, verify:
+
+```bash
+curl https://<your-site>/api/persistence
+curl https://<your-site>/api/products
+```
+
+Supabase storage policies
+------------------------
+
+If you prefer to manage upload permissions via Supabase policies, see `supabase_policy.sql` for recommended snippets. Summary:
+
+- Recommended: prefer server-side uploads using the service-role key (`SUPABASE_SERVICE_ROLE`) and keep the bucket private — this prevents clients from writing directly.
+- Alternative: if you allow client-side uploads, add `Allow authenticated inserts` and `Allow owners to delete their objects` policies (see `supabase_policy.sql`).
+
+File: [`supabase_policy.sql`](supabase_policy.sql)
+
+
+
 ### Backend on Railway
 
 1. Create a Railway service from the same repository.
