@@ -30,6 +30,7 @@ import {
   savePurchaseHistory, saveRequests, getRequests, saveReservations, getReservations, createWhatsAppLink,
   updatePurchaseHistoryStatus, confirmHandoff, getTransactionProducts, saveTransactionProducts,
   completePendingKarmaAction, getPendingKarmaActions, savePendingKarmaAction,
+  getLiveListings, saveLiveListings, upsertLiveListing, removeLiveListing, normalizeLiveListing,
 } from './services/transactionService';
 
 const navItems = [
@@ -99,6 +100,24 @@ const isLegacyDemoRecord = (record) => {
   ));
 };
 
+const fallbackMarketplaceListings = () => mergeListingsById(
+  getTransactionProducts(),
+  getBusinessMarketplaceItems(),
+).map(normalizeLiveListing);
+
+const stripFallbackDemoWhenLiveExists = (catalog) => {
+  const normalized = catalog.filter(Boolean).map(normalizeLiveListing);
+  const hasRealListings = normalized.some((item) => !isLegacyDemoRecord(item));
+  return hasRealListings ? normalized.filter((item) => !isLegacyDemoRecord(item)) : normalized;
+};
+
+const loadMarketplaceItems = () => {
+  const liveListings = getLiveListings();
+  const fallbackListings = fallbackMarketplaceListings();
+  const source = liveListings.length ? mergeListingsById(fallbackListings, liveListings) : fallbackListings;
+  return applyProductExpiry(stripFallbackDemoWhenLiveExists(source).map(normalizeProductStock));
+};
+
 const loadOrderHistory = () => {
   try {
     return JSON.parse(localStorage.getItem('zeromart-order-history')) || [];
@@ -137,13 +156,7 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
   const [sectionView, setSectionView] = useState('explore');
   const [user, setUser] = useState(null);
   const [businessSession, setBusinessSession] = useState(getBusinessSession);
-  const [items, setItems] = useState(() => {
-    const storedCommunityProducts = getTransactionProducts();
-    return applyProductExpiry(mergeListingsById(
-      storedCommunityProducts,
-      getBusinessMarketplaceItems(),
-    ).map(normalizeProductStock));
-  });
+  const [items, setItems] = useState(loadMarketplaceItems);
   const [selectedItem, setSelectedItem] = useState(null);
   const [selectedPublicProfile, setSelectedPublicProfile] = useState(null);
   const [homeSection, setHomeSection] = useState('b2b');
@@ -324,10 +337,7 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
     const syncMarketplaceItems = () => {
       setBusinessSession(getBusinessSession());
       skipTransactionPersistRef.current = true;
-      setItems(applyProductExpiry(mergeListingsById(
-        getTransactionProducts(),
-        getBusinessMarketplaceItems(),
-      ).map(normalizeProductStock)));
+      setItems(loadMarketplaceItems());
     };
     const syncOrderHistory = () => setOrderHistory(loadOrderHistory());
     const syncNotifications = () => setNotifications(loadNotifications());
@@ -337,6 +347,7 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
     window.addEventListener('zeromart-business-change', syncMarketplaceItems);
     window.addEventListener('zeromart-marketplace-change', syncMarketplaceItems);
     window.addEventListener('zeromart-transactions-change', syncMarketplaceItems);
+    window.addEventListener('zeromart-live-listings-change', syncMarketplaceItems);
     window.addEventListener('zeromart-business-change', syncOrderHistory);
     window.addEventListener('zeromart-transactions-change', syncOrderHistory);
     window.addEventListener('zeromart-transactions-change', syncNotifications);
@@ -347,6 +358,7 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
       window.removeEventListener('zeromart-business-change', syncMarketplaceItems);
       window.removeEventListener('zeromart-marketplace-change', syncMarketplaceItems);
       window.removeEventListener('zeromart-transactions-change', syncMarketplaceItems);
+      window.removeEventListener('zeromart-live-listings-change', syncMarketplaceItems);
       window.removeEventListener('zeromart-business-change', syncOrderHistory);
       window.removeEventListener('zeromart-transactions-change', syncOrderHistory);
       window.removeEventListener('zeromart-transactions-change', syncNotifications);
@@ -381,6 +393,10 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
       return;
     }
     saveTransactionProducts(items.filter((item) => !item.isBusinessProduct));
+    const liveItems = stripFallbackDemoWhenLiveExists(items);
+    if (getLiveListings().length || liveItems.some((item) => !isLegacyDemoRecord(item))) {
+      saveLiveListings(liveItems);
+    }
   }, [items]);
 
   useEffect(() => {
@@ -546,10 +562,7 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
       setActiveView('home');
       setSelectedNotification(null);
       setNotice('');
-      setItems(applyProductExpiry(mergeListingsById(
-        getTransactionProducts(),
-        getBusinessMarketplaceItems(),
-      ).map(normalizeProductStock)));
+      setItems(loadMarketplaceItems());
       requestAnimationFrame(() => window.scrollTo({ top: 0, behavior: 'auto' }));
       return;
     }
@@ -1072,9 +1085,13 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
         requiresDelivery: false,
         coordinates: formData.coordinates,
         locationData: formData.locationData,
+        sellerType: 'community',
+        isBusinessProduct: false,
+        updatedAt: new Date().toISOString(),
       };
       setItems((prev) => prev.map((item) => (item.id === editingItem.id ? updatedItem : item)));
       setFavorites((prev) => prev.map((item) => (item.id === editingItem.id ? updatedItem : item)));
+      upsertLiveListing(updatedItem);
       setSelectedItem(updatedItem);
       setEditingItem(null);
       setShowListingSheet(false);
@@ -1105,6 +1122,8 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
       reservedQuantity: 0,
       soldQuantity: 0,
       listingType: 'community',
+      sellerType: 'community',
+      isBusinessProduct: false,
       maxQuantityPerUserPer24h: 2,
       deliveryMode: 'pickup',
       allowInPersonCollection: true,
@@ -1112,8 +1131,10 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
       coordinates: formData.coordinates,
       locationData: formData.locationData,
       createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
     };
     setItems((prev) => [newItem, ...prev]);
+    upsertLiveListing(newItem);
     setUser((prev) => (prev ? {
       ...prev,
       listed: (Number(prev.listed) || 0) + 1,
@@ -1135,6 +1156,7 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
     if (!window.confirm(`Delete "${item.title}"? This cannot be undone.`)) return;
     setItems((prev) => prev.filter((entry) => entry.id !== item.id));
     setFavorites((prev) => prev.filter((entry) => entry.id !== item.id));
+    removeLiveListing(item.id);
     setUser((prev) => (prev ? {
       ...prev,
       listed: Math.max(0, (Number(prev.listed) || 0) - 1),

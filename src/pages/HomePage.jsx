@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef } from 'react';
 import {
   ArrowRight, Heart, MapPin, ShieldCheck, Sparkles, Star, Store, Users,
 } from 'lucide-react';
-import { formatExpiry, normalizeProductStock } from '../services/transactionService';
+import { formatExpiry, getExpiryTimestamp, normalizeProductStock } from '../services/transactionService';
 
 const getCollectionCta = (item) => (
   item?.isBusinessProduct || item?.listingType === 'business' || item?.sellerType === 'business'
@@ -125,6 +125,22 @@ export default function HomePage({
   }, [hasMoreItems, onLoadMore, loadMoreLabel]);
 
   const nearbyProducts = useMemo(() => {
+    const groupPriority = (item) => {
+      const expiryAt = getExpiryTimestamp(item);
+      const isNearExpiry = Boolean(
+        item.nearExpiryDeal
+        || item.nearExpiry
+        || (expiryAt && expiryAt > Date.now() && expiryAt - Date.now() <= 7 * 24 * 60 * 60 * 1000),
+      );
+      if (isNearExpiry) return 0;
+      if (item.isBusinessProduct || item.listingType === 'business' || item.sellerType === 'business') return 1;
+      return 2;
+    };
+    const distanceValue = (item) => (
+      Number.isFinite(Number(item.distanceKm)) ? Number(item.distanceKm) : Number.POSITIVE_INFINITY
+    );
+    const karmaValue = (item) => Number(item.sellerKarma ?? item.karma ?? 0) || 0;
+    const listedValue = (item) => new Date(item.createdAt || item.updatedAt || 0).getTime() || 0;
     const stores = businessItems.map((item) => normalizeProductStock({
       ...item,
       isBusinessProduct: true,
@@ -143,7 +159,12 @@ export default function HomePage({
       if (seen.has(key)) return false;
       seen.add(key);
       return true;
-    });
+    }).sort((a, b) => (
+      groupPriority(a) - groupPriority(b)
+      || distanceValue(a) - distanceValue(b)
+      || karmaValue(b) - karmaValue(a)
+      || listedValue(b) - listedValue(a)
+    ));
   }, [businessItems, items]);
 
   return (
@@ -288,24 +309,31 @@ export default function HomePage({
         </div>
       )}
 
-      <footer className="rounded-[1.2rem] border border-amber-100 bg-white/90 px-4 py-3 shadow-[0_12px_36px_rgba(15,23,42,0.06)]">
-        <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-xs font-semibold text-slate-500">
-          <span className="inline-flex items-center gap-1.5 font-extrabold text-amber-700">
-            <Sparkles size={15} /> ZeroMart
-          </span>
-          {['Terms', 'FAQ', 'Help', 'Contact', 'Instagram', 'LinkedIn', 'X'].map((label) => (
-            <a
-              key={label}
-              href={['Help', 'Contact'].includes(label) ? 'mailto:support@zeromart.local' : '#'}
-              onClick={(event) => {
-                if (!['Help', 'Contact'].includes(label)) event.preventDefault();
-              }}
-              className="transition hover:text-violet-700"
-            >
-              {label}
-            </a>
-          ))}
-          <span className="ml-auto text-[11px] text-slate-400">© 2026 ZeroMart</span>
+      <footer className="rounded-[1.1rem] border border-amber-100 bg-white/90 px-4 py-3 shadow-[0_12px_36px_rgba(15,23,42,0.06)]">
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+          <div className="flex flex-wrap items-center gap-2 text-xs">
+            <span className="inline-flex items-center gap-1.5 font-extrabold text-amber-700">
+              <Sparkles size={15} /> ZeroMart
+            </span>
+            <span className="font-semibold text-slate-500">₹0 local sharing</span>
+          </div>
+          <nav className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] font-semibold text-slate-500">
+            {['About', 'Help', 'Terms', 'Contact', 'Instagram', 'LinkedIn', 'WhatsApp'].map((label) => (
+              <a
+                key={label}
+                href={['Help', 'Contact'].includes(label) ? 'mailto:support@zeromart.local' : '#'}
+                onClick={(event) => {
+                  if (!['Help', 'Contact'].includes(label)) event.preventDefault();
+                }}
+                className="transition hover:text-violet-700"
+              >
+                {label}
+              </a>
+            ))}
+          </nav>
+        </div>
+        <div className="mt-2 border-t border-slate-100 pt-2 text-[11px] leading-5 text-slate-400">
+          © 2026 ZeroMart. Give what you do not need and keep useful items moving locally.
         </div>
       </footer>
     </div>

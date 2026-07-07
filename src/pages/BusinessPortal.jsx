@@ -13,13 +13,13 @@ import { useLocationEngine } from '../hooks/useLocationEngine';
 import { formatShortAddress, haversineKm, locationLabel, withAddressDetails } from '../services/locationService';
 import {
   createWhatsAppLink, expireReservations, getCollectionSettings, getReservations, saveCollectionSettings, saveReservations,
-  savePendingKarmaAction, updatePurchaseHistoryStatus,
+  savePendingKarmaAction, updatePurchaseHistoryStatus, upsertLiveListing, removeLiveListing,
 } from '../services/transactionService';
 import {
   applyExpiryRules, clearBusinessSession, daysUntilExpiry, getBusinessAccounts,
   getBusinessOrders, getBusinessProducts, getBusinessPurchases, getBusinessRules, getBusinessSession,
   saveBusinessAccounts, saveBusinessOrders, saveBusinessProducts, saveBusinessRules, saveBusinessSession,
-  updateBusinessPurchaseStatus, updateCustomerOrderStatus,
+  toMarketplaceItem, updateBusinessPurchaseStatus, updateCustomerOrderStatus,
 } from '../lib/businessStore';
 
 const links = [
@@ -110,10 +110,37 @@ export default function BusinessPortal({ path, navigate }) {
     return <BusinessAuthModal embedded onClose={() => navigate('/')} onSuccess={(nextAccount) => { setAccount(nextAccount); navigate('/business/dashboard'); }} />;
   }
 
+  const syncBusinessLiveListings = (evaluatedProducts) => {
+    const accounts = getBusinessAccounts();
+    const nextIds = new Set(evaluatedProducts.map((product) => String(product.id)));
+    products
+      .filter((product) => !nextIds.has(String(product.id)))
+      .forEach((product) => removeLiveListing(`business-product-${product.id}`));
+
+    evaluatedProducts.forEach((product) => {
+      const status = String(product.status || '').toLowerCase();
+      const availableQuantity = Number(product.availableQuantity ?? product.quantity ?? 0);
+      const expiryTimestamp = product.expiryDate
+        ? new Date(`${product.expiryDate}T${product.expiryTime || '23:59'}:00`).getTime()
+        : null;
+      const expired = expiryTimestamp && Date.now() > expiryTimestamp;
+      const liveId = `business-product-${product.id}`;
+
+      if (product.autoList === false || availableQuantity <= 0 || expired || ['expired', 'sold', 'hidden', 'completed'].includes(status)) {
+        removeLiveListing(liveId);
+        return;
+      }
+
+      const accountForProduct = accounts.find((entry) => entry.id === product.businessId) || account;
+      upsertLiveListing(toMarketplaceItem(product, accountForProduct));
+    });
+  };
+
   const persistProducts = (nextProducts) => {
     const evaluated = applyExpiryRules(nextProducts, rules);
     setProducts(evaluated);
     saveBusinessProducts(evaluated);
+    syncBusinessLiveListings(evaluated);
   };
   const persistRules = (nextRules) => {
     setRules(nextRules);
@@ -121,6 +148,7 @@ export default function BusinessPortal({ path, navigate }) {
     const evaluated = applyExpiryRules(products, nextRules);
     setProducts(evaluated);
     saveBusinessProducts(evaluated);
+    syncBusinessLiveListings(evaluated);
   };
   const logout = () => {
     clearBusinessSession();

@@ -1,4 +1,5 @@
 const STORAGE_KEYS = {
+  liveListings: 'zeromart_live_listings',
   products: 'zeromart-transaction-products',
   requests: 'zeromart-requests',
   orders: 'zeromart-reservations',
@@ -64,6 +65,89 @@ export const normalizeProductStock = (product) => {
     status: expired ? 'expired' : outOfStock ? 'sold-out' : String(product.status || 'active').toLowerCase(),
   };
 };
+
+const getLiveCoordinates = (listing) => {
+  const direct = listing?.coordinates;
+  if (direct && Number.isFinite(Number(direct.latitude)) && Number.isFinite(Number(direct.longitude))) {
+    return { latitude: Number(direct.latitude), longitude: Number(direct.longitude) };
+  }
+  const locationData = listing?.locationData;
+  if (locationData && Number.isFinite(Number(locationData.latitude)) && Number.isFinite(Number(locationData.longitude))) {
+    return { latitude: Number(locationData.latitude), longitude: Number(locationData.longitude) };
+  }
+  if (Number.isFinite(Number(listing?.latitude)) && Number.isFinite(Number(listing?.longitude))) {
+    return { latitude: Number(listing.latitude), longitude: Number(listing.longitude) };
+  }
+  return null;
+};
+
+export const normalizeLiveListing = (listing = {}) => {
+  const isBusiness = listing.isBusinessProduct || listing.listingType === 'business' || listing.sellerType === 'business';
+  const title = listing.title || listing.name || listing.productName || 'Untitled item';
+  const locationData = listing.locationData || null;
+  const coordinates = getLiveCoordinates({ ...listing, locationData });
+  const quantity = Math.max(0, Number(listing.totalQuantity ?? listing.quantity ?? listing.availableQuantity ?? 1) || 0);
+  const availableQuantity = Math.max(0, Number(listing.availableQuantity ?? listing.quantity ?? quantity) || 0);
+  const sellerName = listing.sellerName || listing.storeName || listing.businessName || (isBusiness ? 'Business Store' : 'Unknown');
+  const expiryDate = listing.expiryDate || listing.validTill || '';
+  const id = listing.id || `${isBusiness ? 'business' : 'community'}-${Date.now()}`;
+
+  return normalizeProductStock({
+    ...listing,
+    id,
+    title,
+    name: listing.name || title,
+    sellerName,
+    sellerType: isBusiness ? 'business' : (listing.sellerType || 'community'),
+    listingType: isBusiness ? 'business' : (listing.listingType || 'community'),
+    isBusinessProduct: Boolean(isBusiness || listing.isBusinessProduct),
+    sellerId: listing.sellerId || listing.ownerMobile || listing.businessId || '',
+    ownerMobile: listing.ownerMobile || listing.sellerId || listing.businessId || '',
+    location: listing.location || listing.pickupArea || locationData?.displayAddress || locationData?.formattedAddress || 'Location unavailable',
+    locationData,
+    coordinates,
+    latitude: coordinates?.latitude ?? listing.latitude ?? null,
+    longitude: coordinates?.longitude ?? listing.longitude ?? null,
+    totalQuantity: quantity,
+    quantity,
+    availableQuantity,
+    reservedQuantity: Math.max(0, Number(listing.reservedQuantity ?? 0) || 0),
+    soldQuantity: Math.max(0, Number(listing.soldQuantity ?? 0) || 0),
+    price: Number(listing.price ?? listing.sellingPrice ?? 0) || 0,
+    sellingPrice: Number(listing.sellingPrice ?? listing.price ?? 0) || 0,
+    expiryDate,
+    validTill: listing.validTill || expiryDate,
+    status: listing.status || 'Available',
+    createdAt: listing.createdAt || new Date().toISOString(),
+    updatedAt: listing.updatedAt || listing.createdAt || new Date().toISOString(),
+  });
+};
+
+export const getLiveListings = () => read(STORAGE_KEYS.liveListings).map(normalizeLiveListing);
+
+export const saveLiveListings = (listings) => {
+  const deduped = new Map();
+  listings.filter(Boolean).map(normalizeLiveListing).forEach((listing) => {
+    deduped.set(String(listing.id), listing);
+  });
+  const value = [...deduped.values()];
+  localStorage.setItem(STORAGE_KEYS.liveListings, JSON.stringify(value));
+  window.dispatchEvent(new CustomEvent('zeromart-live-listings-change', { detail: { key: STORAGE_KEYS.liveListings, value } }));
+  window.dispatchEvent(new CustomEvent('zeromart-transactions-change', { detail: { key: STORAGE_KEYS.liveListings, value } }));
+  return value;
+};
+
+export const upsertLiveListing = (listing) => {
+  const normalized = normalizeLiveListing(listing);
+  return saveLiveListings([
+    normalized,
+    ...getLiveListings().filter((item) => String(item.id) !== String(normalized.id)),
+  ]);
+};
+
+export const removeLiveListing = (id) => saveLiveListings(
+  getLiveListings().filter((item) => String(item.id) !== String(id))
+);
 
 export const applyProductExpiry = (products, now = Date.now()) => (
   products.map((product) => {
