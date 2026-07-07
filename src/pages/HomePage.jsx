@@ -75,7 +75,14 @@ export function ProductRail({
               <div className="p-3">
                 <div className="flex items-start justify-between gap-2">
                   <h3 className="line-clamp-1 min-w-0 font-extrabold text-slate-900">{item.title}</h3>
-                  <span className="shrink-0 rounded-full bg-amber-50 px-2.5 py-1 text-xs font-extrabold text-amber-800">{getPriceLabel(item)}</span>
+                  <div className="flex items-center gap-2">
+                    <span className="shrink-0 rounded-full bg-amber-50 px-2.5 py-1 text-xs font-extrabold text-amber-800">{getPriceLabel(item)}</span>
+                    {item.serverPersisted ? (
+                      <span className="shrink-0 rounded-full bg-emerald-50 px-2 py-0.5 text-[10px] font-bold text-emerald-800">Live</span>
+                    ) : (
+                      <span className="shrink-0 rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-bold text-slate-600">Local</span>
+                    )}
+                  </div>
                 </div>
                 <p className="mt-1 flex items-center gap-1 text-xs font-semibold text-emerald-700">
                   <MapPin size={12} /> {item.distance || 'Distance unavailable'}
@@ -259,7 +266,14 @@ export default function HomePage({
                         </p>
                       </div>
                     </div>
-                    <span className="shrink-0 rounded-full bg-amber-50 px-3 py-1.5 text-sm font-extrabold text-amber-800">{getPriceLabel(item)}</span>
+                    <div className="flex items-center gap-2">
+                      <span className="shrink-0 rounded-full bg-amber-50 px-3 py-1.5 text-sm font-extrabold text-amber-800">{getPriceLabel(item)}</span>
+                      {item.serverPersisted ? (
+                        <span className="shrink-0 rounded-full bg-emerald-50 px-2 py-1 text-xs font-bold text-emerald-800">Live</span>
+                      ) : (
+                        <span className="shrink-0 rounded-full bg-slate-100 px-2 py-1 text-xs font-bold text-slate-600">Local</span>
+                      )}
+                    </div>
                   </div>
 
                   <h3 className="mt-3 line-clamp-2 text-lg font-extrabold text-slate-900">{item.title}</h3>
