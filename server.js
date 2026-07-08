@@ -36,26 +36,44 @@ app.get('/api/health', (_req, res) => res.json({ status: 'ok', service: 'zeromar
 
 // ── Database ──────────────────────────────────────────────────────────────────
 
-const pool = new Pool({
-  connectionString: process.env.DATABASE_URL,
-  ssl: process.env.DATABASE_URL ? { rejectUnauthorized: false } : false,
-});
+const getEnv = (keys) => keys.map((key) => process.env[key]).find(Boolean) || '';
+const rawDatabaseUrl = getEnv(['DATABASE_URL', 'POSTGRES_URL', 'POSTGRES_URL_NON_POOLING']);
+const dbHost = process.env.POSTGRES_HOST || process.env.PGHOST || '';
+const dbUser = process.env.POSTGRES_USER || process.env.PGUSER || '';
+const dbPassword = process.env.POSTGRES_PASSWORD || process.env.PGPASSWORD || '';
+const dbName = process.env.POSTGRES_DATABASE || process.env.PGDATABASE || '';
+const dbPort = process.env.POSTGRES_PORT || process.env.PGPORT || '5432';
+
+const DATABASE_URL = rawDatabaseUrl.trim() || (
+  dbHost && dbUser && dbName && dbPassword
+    ? `postgresql://${encodeURIComponent(dbUser)}:${encodeURIComponent(dbPassword)}@${dbHost}:${dbPort}/${dbName}`
+    : ''
+);
+
+let dbEnabled = Boolean(DATABASE_URL);
+const pool = DATABASE_URL ? new Pool({
+  connectionString: DATABASE_URL,
+  ssl: { rejectUnauthorized: false },
+}) : null;
 
 // Supabase Storage client (optional)
 const SUPABASE_URL = process.env.SUPABASE_URL || '';
-const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE || process.env.SUPABASE_KEY || '';
+const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE || process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_KEY || '';
 const supabase = (SUPABASE_URL && SUPABASE_KEY) ? createSupabaseClient(SUPABASE_URL, SUPABASE_KEY) : null;
-const SUPABASE_BUCKET = process.env.SUPABASE_STORAGE_BUCKET || 'product-images';
+const SUPABASE_BUCKET = process.env.SUPABASE_STORAGE_BUCKET || 'Drizn';
 
 // multer for parsing multipart form data (memory storage)
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 6 * 1024 * 1024 } });
 
 export async function initDB() {
-  if (!process.env.DATABASE_URL) {
-    console.log('[DB] No DATABASE_URL — running without database (demo mode)');
+  if (!DATABASE_URL) {
+    console.log('[DB] No DATABASE_URL/POSTGRES connection details — running without database (demo mode)');
+    dbEnabled = false;
     return;
   }
-  await pool.query(`
+
+  try {
+    await pool.query(`
     CREATE TABLE IF NOT EXISTS users (
       id          SERIAL PRIMARY KEY,
       phone       TEXT UNIQUE NOT NULL,
@@ -113,6 +131,79 @@ export async function initDB() {
       created_at       TIMESTAMPTZ NOT NULL DEFAULT now()
     );
 
+    CREATE TABLE IF NOT EXISTS profiles (
+      id            TEXT PRIMARY KEY,
+      phone         TEXT UNIQUE,
+      name          TEXT NOT NULL DEFAULT 'Unknown',
+      account_type  TEXT NOT NULL DEFAULT 'consumer',
+      karma         INTEGER NOT NULL DEFAULT 0,
+      location_data JSONB NOT NULL DEFAULT '{}'::jsonb,
+      created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+
+    CREATE TABLE IF NOT EXISTS listings (
+      id                 TEXT PRIMARY KEY,
+      title              TEXT NOT NULL,
+      category           TEXT NOT NULL DEFAULT 'Other',
+      condition          TEXT NOT NULL DEFAULT 'Good',
+      description        TEXT,
+      image_url          TEXT,
+      seller_id          TEXT,
+      seller_name        TEXT NOT NULL DEFAULT 'Unknown',
+      seller_type        TEXT NOT NULL DEFAULT 'community',
+      business_id        TEXT,
+      store_name         TEXT,
+      karma_score        INTEGER NOT NULL DEFAULT 0,
+      quantity           INTEGER NOT NULL DEFAULT 1,
+      available_quantity INTEGER NOT NULL DEFAULT 1,
+      reserved_quantity  INTEGER NOT NULL DEFAULT 0,
+      sold_quantity      INTEGER NOT NULL DEFAULT 0,
+      price              NUMERIC(10,2) NOT NULL DEFAULT 0,
+      expiry_date        DATE,
+      expiry_time        TEXT,
+      status             TEXT NOT NULL DEFAULT 'active',
+      latitude           DOUBLE PRECISION,
+      longitude          DOUBLE PRECISION,
+      location           TEXT,
+      area               TEXT,
+      city               TEXT,
+      state              TEXT,
+      country            TEXT NOT NULL DEFAULT 'India',
+      location_data      JSONB NOT NULL DEFAULT '{}'::jsonb,
+      metadata           JSONB NOT NULL DEFAULT '{}'::jsonb,
+      created_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at         TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+
+    CREATE INDEX IF NOT EXISTS listings_status_idx ON listings (status);
+    CREATE INDEX IF NOT EXISTS listings_seller_type_idx ON listings (seller_type);
+    CREATE INDEX IF NOT EXISTS listings_expiry_date_idx ON listings (expiry_date);
+    CREATE INDEX IF NOT EXISTS listings_lat_lng_idx ON listings (latitude, longitude);
+
+    CREATE TABLE IF NOT EXISTS requests (
+      id          TEXT PRIMARY KEY,
+      listing_id  TEXT REFERENCES listings(id) ON DELETE SET NULL,
+      buyer_id    TEXT,
+      seller_id   TEXT,
+      status      TEXT NOT NULL DEFAULT 'pending',
+      quantity    INTEGER NOT NULL DEFAULT 1,
+      details     JSONB NOT NULL DEFAULT '{}'::jsonb,
+      created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+
+    CREATE TABLE IF NOT EXISTS karma_events (
+      id          TEXT PRIMARY KEY,
+      giver_id    TEXT,
+      receiver_id TEXT,
+      listing_id  TEXT,
+      order_id    TEXT,
+      points      INTEGER NOT NULL DEFAULT 1,
+      note        TEXT,
+      created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+
     -- Add pickup_area column if missing (safe to run repeatedly)
     DO $$ BEGIN
       ALTER TABLE products ADD COLUMN IF NOT EXISTS pickup_area TEXT DEFAULT '';
@@ -136,6 +227,10 @@ export async function initDB() {
     WHERE NOT EXISTS (SELECT 1 FROM products LIMIT 1);
   `);
   console.log('[DB] Tables ready');
+  } catch (err) {
+    console.error('[DB init failed]', err.message || err);
+    dbEnabled = false;
+  }
 }
 
 // ── Auth middleware ───────────────────────────────────────────────────────────
@@ -149,6 +244,145 @@ function authMiddleware(req, res, next) {
   } catch {
     return res.status(401).json({ error: 'Invalid token' });
   }
+}
+
+function optionalAuthMiddleware(req, _res, next) {
+  const header = req.headers.authorization;
+  if (!header) return next();
+  try {
+    req.user = jwt.verify(header.replace('Bearer ', ''), JWT_SECRET);
+  } catch {
+    req.user = null;
+  }
+  return next();
+}
+
+function parseJsonValue(value, fallback = {}) {
+  if (!value) return fallback;
+  if (typeof value === 'object') return value;
+  try {
+    return JSON.parse(value);
+  } catch {
+    return fallback;
+  }
+}
+
+function safeDate(value) {
+  if (!value) return null;
+  if (value instanceof Date) return value.toISOString().slice(0, 10);
+  return String(value).slice(0, 10);
+}
+
+function numberOrNull(value) {
+  const next = Number(value);
+  return Number.isFinite(next) ? next : null;
+}
+
+function listingRowToClient(row) {
+  if (!row) return null;
+  const locationData = parseJsonValue(row.location_data, {});
+  const metadata = parseJsonValue(row.metadata, {});
+  const sellerType = row.seller_type || metadata.sellerType || 'community';
+  const latitude = numberOrNull(row.latitude ?? locationData.latitude ?? locationData.lat);
+  const longitude = numberOrNull(row.longitude ?? locationData.longitude ?? locationData.lng);
+  const imageUrl = row.image_url || metadata.image || metadata.photo || '';
+  const createdAt = row.created_at instanceof Date ? row.created_at.toISOString() : row.created_at;
+  const updatedAt = row.updated_at instanceof Date ? row.updated_at.toISOString() : row.updated_at;
+
+  return {
+    id: row.id,
+    serverId: row.id,
+    serverPersisted: true,
+    title: row.title,
+    category: row.category,
+    condition: row.condition,
+    description: row.description || '',
+    image: imageUrl,
+    imageUrl,
+    photo_url: imageUrl,
+    sellerId: row.seller_id || '',
+    ownerMobile: metadata.ownerMobile || '',
+    sellerName: row.seller_name || row.store_name || 'Unknown',
+    sellerType,
+    listingType: sellerType === 'business' ? 'business' : 'community',
+    isBusinessProduct: sellerType === 'business',
+    businessId: row.business_id || metadata.businessId || '',
+    storeName: row.store_name || '',
+    sellerKarma: Number(row.karma_score || 0),
+    karma: Number(row.karma_score || 0),
+    totalQuantity: Number(row.quantity || 0),
+    quantity: Number(row.quantity || 0),
+    availableQuantity: Number(row.available_quantity || 0),
+    reservedQuantity: Number(row.reserved_quantity || 0),
+    soldQuantity: Number(row.sold_quantity || 0),
+    price: Number(row.price || 0),
+    expiryDate: safeDate(row.expiry_date),
+    expiryTime: row.expiry_time || '',
+    status: row.status === 'active' ? 'Available' : row.status,
+    location: row.location || row.area || row.city || '',
+    area: row.area || locationData.area || locationData.locality || '',
+    city: row.city || locationData.city || '',
+    state: row.state || locationData.state || '',
+    country: row.country || locationData.country || 'India',
+    latitude,
+    longitude,
+    coordinates: latitude !== null && longitude !== null ? { lat: latitude, lng: longitude } : metadata.coordinates || null,
+    locationData,
+    createdAt,
+    updatedAt,
+    metadata,
+  };
+}
+
+function listingPayloadToDb(body = {}, user = null) {
+  const locationData = body.locationData || body.location_data || {};
+  const coordinates = body.coordinates || {};
+  const sellerType = body.sellerType || body.seller_type || body.listingType || (body.isBusinessProduct ? 'business' : 'community');
+  const id = String(body.serverId || body.id || crypto.randomUUID());
+  const latitude = numberOrNull(body.latitude ?? body.lat ?? coordinates.lat ?? locationData.latitude ?? locationData.lat);
+  const longitude = numberOrNull(body.longitude ?? body.lng ?? coordinates.lng ?? locationData.longitude ?? locationData.lng);
+  const quantity = Math.max(0, Number(body.totalQuantity ?? body.quantity ?? body.availableQuantity ?? 1) || 1);
+  const availableQuantity = Math.max(0, Number(body.availableQuantity ?? body.quantity ?? quantity) || 0);
+  const imageUrl = body.imageUrl || body.image_url || body.photo_url || body.image || body.photo || '';
+  const metadata = {
+    ...(body.metadata || {}),
+    ownerMobile: body.ownerMobile || body.mobile || '',
+    originalId: body.originalId || body.id || id,
+    sellerInitials: body.sellerInitials || body.initials || '',
+    isOwn: Boolean(body.isOwn),
+  };
+
+  return {
+    id,
+    title: body.title || body.name || 'Untitled listing',
+    category: body.category || 'Other',
+    condition: body.condition || 'Good',
+    description: body.description || '',
+    imageUrl,
+    sellerId: String(user?.id || body.sellerId || body.seller_id || body.businessId || body.ownerMobile || 'guest'),
+    sellerName: body.sellerName || body.seller_name || body.storeName || body.businessName || user?.name || 'Unknown',
+    sellerType: sellerType === 'business' ? 'business' : 'community',
+    businessId: body.businessId || body.business_id || '',
+    storeName: body.storeName || body.businessName || body.store_name || '',
+    karmaScore: Number(body.sellerKarma ?? body.karmaScore ?? body.karma ?? 0) || 0,
+    quantity,
+    availableQuantity,
+    reservedQuantity: Math.max(0, Number(body.reservedQuantity ?? 0) || 0),
+    soldQuantity: Math.max(0, Number(body.soldQuantity ?? 0) || 0),
+    price: Number(body.price ?? body.sellingPrice ?? 0) || 0,
+    expiryDate: body.expiryDate || body.validTill || null,
+    expiryTime: body.expiryTime || body.expiry_time || null,
+    status: String(body.status || 'active').toLowerCase() === 'available' ? 'active' : String(body.status || 'active').toLowerCase(),
+    latitude,
+    longitude,
+    location: body.location || body.pickupArea || body.pickupLocation || locationData.displayAddress || locationData.formattedAddress || '',
+    area: body.area || locationData.area || locationData.locality || locationData.subLocality || '',
+    city: body.city || locationData.city || '',
+    state: body.state || locationData.state || '',
+    country: body.country || locationData.country || 'India',
+    locationData,
+    metadata,
+  };
 }
 
 // ── OTP store (in-memory for demo; persists in DB when available) ─────────────
@@ -213,7 +447,7 @@ app.post('/api/verify-otp', async (req, res) => {
 
   // Get or create user
   let user;
-  if (process.env.DATABASE_URL) {
+  if (dbEnabled) {
     const result = await pool.query(
       `INSERT INTO users (phone) VALUES ($1)
        ON CONFLICT (phone) DO UPDATE SET phone = EXCLUDED.phone
@@ -231,7 +465,7 @@ app.post('/api/verify-otp', async (req, res) => {
 
 // Get profile
 app.get('/api/profile', authMiddleware, async (req, res) => {
-  if (!process.env.DATABASE_URL) return res.json({ id: req.user.id, phone: req.user.phone });
+  if (!dbEnabled) return res.json({ id: req.user.id, phone: req.user.phone });
   const result = await pool.query('SELECT * FROM users WHERE id = $1', [req.user.id]);
   if (!result.rows[0]) return res.status(404).json({ error: 'User not found' });
   return res.json(result.rows[0]);
@@ -239,7 +473,7 @@ app.get('/api/profile', authMiddleware, async (req, res) => {
 
 // Update profile
 app.put('/api/profile', authMiddleware, async (req, res) => {
-  if (!process.env.DATABASE_URL) return res.json({ success: true });
+  if (!dbEnabled) return res.json({ success: true });
   const { name, initials, mode, is_buyer, karma, credits, vouchers, has_seen_tour } = req.body;
   await pool.query(
     `UPDATE users SET
@@ -255,16 +489,154 @@ app.put('/api/profile', authMiddleware, async (req, res) => {
 
 // Get products
 app.get('/api/products', async (req, res) => {
-  if (!process.env.DATABASE_URL) return res.json([]);
+  if (!dbEnabled) return res.json([]);
   const result = await pool.query(
     `SELECT * FROM products WHERE status = 'active' ORDER BY created_at DESC`
   );
   return res.json(result.rows);
 });
 
+// Get live listings from the production shared listings table.
+app.get('/api/listings', async (_req, res) => {
+  if (!dbEnabled) return res.json([]);
+  try {
+    const result = await pool.query(
+      `SELECT *
+       FROM listings
+       WHERE status IN ('active', 'available')
+         AND COALESCE(available_quantity, 0) > 0
+         AND (expiry_date IS NULL OR expiry_date >= CURRENT_DATE)
+       ORDER BY
+         CASE WHEN expiry_date IS NOT NULL AND expiry_date <= CURRENT_DATE + INTERVAL '2 days' THEN 0 ELSE 1 END,
+         CASE WHEN seller_type = 'business' THEN 0 ELSE 1 END,
+         created_at DESC`
+    );
+    return res.json(result.rows.map(listingRowToClient));
+  } catch (err) {
+    console.error('[LISTINGS] fetch failed', err.message || err);
+    return res.status(500).json({ error: 'Could not fetch listings' });
+  }
+});
+
+// Create or upsert a live listing. Auth is optional while sign-in is still being
+// completed, but authenticated users always become the source owner.
+app.post('/api/listings', optionalAuthMiddleware, async (req, res) => {
+  if (!dbEnabled) return res.json({ ...req.body, id: req.body?.id || crypto.randomUUID(), serverPersisted: false });
+  const listing = listingPayloadToDb(req.body, req.user);
+  try {
+    const result = await pool.query(
+      `INSERT INTO listings (
+        id, title, category, condition, description, image_url, seller_id, seller_name,
+        seller_type, business_id, store_name, karma_score, quantity, available_quantity,
+        reserved_quantity, sold_quantity, price, expiry_date, expiry_time, status,
+        latitude, longitude, location, area, city, state, country, location_data, metadata
+      )
+      VALUES (
+        $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,
+        $21,$22,$23,$24,$25,$26,$27,$28,$29
+      )
+      ON CONFLICT (id) DO UPDATE SET
+        title=EXCLUDED.title,
+        category=EXCLUDED.category,
+        condition=EXCLUDED.condition,
+        description=EXCLUDED.description,
+        image_url=EXCLUDED.image_url,
+        seller_id=EXCLUDED.seller_id,
+        seller_name=EXCLUDED.seller_name,
+        seller_type=EXCLUDED.seller_type,
+        business_id=EXCLUDED.business_id,
+        store_name=EXCLUDED.store_name,
+        karma_score=EXCLUDED.karma_score,
+        quantity=EXCLUDED.quantity,
+        available_quantity=EXCLUDED.available_quantity,
+        reserved_quantity=EXCLUDED.reserved_quantity,
+        sold_quantity=EXCLUDED.sold_quantity,
+        price=EXCLUDED.price,
+        expiry_date=EXCLUDED.expiry_date,
+        expiry_time=EXCLUDED.expiry_time,
+        status=EXCLUDED.status,
+        latitude=EXCLUDED.latitude,
+        longitude=EXCLUDED.longitude,
+        location=EXCLUDED.location,
+        area=EXCLUDED.area,
+        city=EXCLUDED.city,
+        state=EXCLUDED.state,
+        country=EXCLUDED.country,
+        location_data=EXCLUDED.location_data,
+        metadata=EXCLUDED.metadata,
+        updated_at=now()
+      RETURNING *`,
+      [
+        listing.id, listing.title, listing.category, listing.condition, listing.description, listing.imageUrl,
+        listing.sellerId, listing.sellerName, listing.sellerType, listing.businessId, listing.storeName,
+        listing.karmaScore, listing.quantity, listing.availableQuantity, listing.reservedQuantity,
+        listing.soldQuantity, listing.price, listing.expiryDate, listing.expiryTime, listing.status,
+        listing.latitude, listing.longitude, listing.location, listing.area, listing.city, listing.state,
+        listing.country, JSON.stringify(listing.locationData), JSON.stringify(listing.metadata),
+      ]
+    );
+    return res.json(listingRowToClient(result.rows[0]));
+  } catch (err) {
+    console.error('[LISTINGS] create failed', err.message || err);
+    return res.status(500).json({ error: 'Could not save listing' });
+  }
+});
+
+app.put('/api/listings/:id', optionalAuthMiddleware, async (req, res) => {
+  if (!dbEnabled) return res.json({ success: true, id: req.params.id });
+  const listing = listingPayloadToDb({ ...req.body, id: req.params.id }, req.user);
+  try {
+    const existing = await pool.query('SELECT seller_id FROM listings WHERE id=$1', [req.params.id]);
+    if (existing.rows.length === 0) return res.status(404).json({ error: 'Not found' });
+    if (req.user?.id && existing.rows[0].seller_id && String(existing.rows[0].seller_id) !== String(req.user.id)) {
+      return res.status(403).json({ error: 'Not allowed' });
+    }
+    const result = await pool.query(
+      `UPDATE listings SET
+        title=$2, category=$3, condition=$4, description=$5, image_url=$6,
+        seller_name=$7, seller_type=$8, business_id=$9, store_name=$10,
+        karma_score=$11, quantity=$12, available_quantity=$13,
+        reserved_quantity=$14, sold_quantity=$15, price=$16, expiry_date=$17,
+        expiry_time=$18, status=$19, latitude=$20, longitude=$21, location=$22,
+        area=$23, city=$24, state=$25, country=$26, location_data=$27,
+        metadata=$28, updated_at=now()
+       WHERE id=$1
+       RETURNING *`,
+      [
+        listing.id, listing.title, listing.category, listing.condition, listing.description, listing.imageUrl,
+        listing.sellerName, listing.sellerType, listing.businessId, listing.storeName, listing.karmaScore,
+        listing.quantity, listing.availableQuantity, listing.reservedQuantity, listing.soldQuantity,
+        listing.price, listing.expiryDate, listing.expiryTime, listing.status, listing.latitude,
+        listing.longitude, listing.location, listing.area, listing.city, listing.state, listing.country,
+        JSON.stringify(listing.locationData), JSON.stringify(listing.metadata),
+      ]
+    );
+    return res.json(listingRowToClient(result.rows[0]));
+  } catch (err) {
+    console.error('[LISTINGS] update failed', err.message || err);
+    return res.status(500).json({ error: 'Could not update listing' });
+  }
+});
+
+app.delete('/api/listings/:id', optionalAuthMiddleware, async (req, res) => {
+  if (!dbEnabled) return res.json({ success: true });
+  try {
+    const existing = await pool.query('SELECT seller_id FROM listings WHERE id=$1', [req.params.id]);
+    if (existing.rows.length === 0) return res.status(404).json({ error: 'Not found' });
+    if (req.user?.id && existing.rows[0].seller_id && String(existing.rows[0].seller_id) !== String(req.user.id)) {
+      return res.status(403).json({ error: 'Not allowed' });
+    }
+    await pool.query('UPDATE listings SET status=$2, updated_at=now() WHERE id=$1', [req.params.id, 'hidden']);
+    return res.json({ success: true });
+  } catch (err) {
+    console.error('[LISTINGS] delete failed', err.message || err);
+    return res.status(500).json({ error: 'Could not delete listing' });
+  }
+});
+
 // Create product
 app.post('/api/products', authMiddleware, async (req, res) => {
-  if (!process.env.DATABASE_URL) return res.json({ id: Date.now() });
+  if (!dbEnabled) return res.json({ id: Date.now() });
   const { title, category, emoji, condition, description, photo_url, nearby_eligible, pickup_area } = req.body;
   const profile = await pool.query('SELECT * FROM users WHERE id = $1', [req.user.id]);
   const u = profile.rows[0];
@@ -279,7 +651,7 @@ app.post('/api/products', authMiddleware, async (req, res) => {
 });
 
 // Upload image: multipart/form-data 'file' field. Returns { url }
-app.post('/api/upload', authMiddleware, upload.single('file'), async (req, res) => {
+app.post('/api/upload', optionalAuthMiddleware, upload.single('file'), async (req, res) => {
   try {
     const file = req.file;
     if (!file) return res.status(400).json({ error: 'No file uploaded' });
@@ -287,7 +659,7 @@ app.post('/api/upload', authMiddleware, upload.single('file'), async (req, res) 
     // If supabase is configured, upload to storage
     if (supabase) {
       const ext = (file.originalname || '').split('.').pop() || 'jpg';
-      const key = `products/${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${ext}`;
+      const key = `listings/${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${ext}`;
       const { error: uploadError } = await supabase.storage.from(SUPABASE_BUCKET).upload(key, file.buffer, { contentType: file.mimetype, upsert: false });
       if (uploadError) {
         console.error('[UPLOAD] Supabase upload failed', uploadError.message || uploadError);
@@ -310,7 +682,7 @@ app.post('/api/upload', authMiddleware, upload.single('file'), async (req, res) 
 
 // Update product
 app.put('/api/products/:id', authMiddleware, async (req, res) => {
-  if (!process.env.DATABASE_URL) return res.json({ success: true, id: Number(req.params.id) });
+  if (!dbEnabled) return res.json({ success: true, id: Number(req.params.id) });
   const { id } = req.params;
   const { title, category, emoji, condition, description, photo_url, nearby_eligible, pickup_area } = req.body;
   try {
@@ -329,7 +701,7 @@ app.put('/api/products/:id', authMiddleware, async (req, res) => {
 
 // Delete product
 app.delete('/api/products/:id', authMiddleware, async (req, res) => {
-  if (!process.env.DATABASE_URL) return res.json({ success: true });
+  if (!dbEnabled) return res.json({ success: true });
   const { id } = req.params;
   try {
     const existing = await pool.query('SELECT seller_id FROM products WHERE id=$1', [id]);
@@ -344,19 +716,19 @@ app.delete('/api/products/:id', authMiddleware, async (req, res) => {
 
 // Expose whether database persistence is enabled
 app.get('/api/persistence', (_req, res) => {
-  return res.json({ db: Boolean(process.env.DATABASE_URL) });
+  return res.json({ db: dbEnabled });
 });
 
 // Get favourites
 app.get('/api/favourites', authMiddleware, async (req, res) => {
-  if (!process.env.DATABASE_URL) return res.json([]);
+  if (!dbEnabled) return res.json([]);
   const result = await pool.query('SELECT product_id FROM favourites WHERE user_id = $1', [req.user.id]);
   return res.json(result.rows.map(r => r.product_id));
 });
 
 // Toggle favourite
 app.post('/api/favourites/:productId', authMiddleware, async (req, res) => {
-  if (!process.env.DATABASE_URL) return res.json({ success: true });
+  if (!dbEnabled) return res.json({ success: true });
   const { productId } = req.params;
   const existing = await pool.query('SELECT 1 FROM favourites WHERE user_id=$1 AND product_id=$2', [req.user.id, productId]);
   if (existing.rows.length > 0) {
@@ -369,7 +741,7 @@ app.post('/api/favourites/:productId', authMiddleware, async (req, res) => {
 
 // Get orders
 app.get('/api/orders', authMiddleware, async (req, res) => {
-  if (!process.env.DATABASE_URL) return res.json([]);
+  if (!dbEnabled) return res.json([]);
   const result = await pool.query('SELECT * FROM orders WHERE buyer_id=$1 ORDER BY created_at DESC', [req.user.id]);
   return res.json(result.rows);
 });
@@ -401,7 +773,7 @@ app.post('/api/verify-payment', authMiddleware, async (req, res) => {
     if (expected !== razorpay_signature) return res.status(400).json({ error: 'Payment signature mismatch' });
   }
 
-  if (process.env.DATABASE_URL) {
+  if (dbEnabled) {
     await pool.query('UPDATE users SET is_buyer=true, mode=$1 WHERE id=$2', ['buyer', req.user.id]);
   }
   return res.json({ success: true });
@@ -422,4 +794,3 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     console.error('[DB init failed]', err.message);
   });
 }
-

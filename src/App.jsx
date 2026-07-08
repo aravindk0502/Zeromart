@@ -32,7 +32,14 @@ import {
   completePendingKarmaAction, getPendingKarmaActions, savePendingKarmaAction,
   getLiveListings, saveLiveListings, upsertLiveListing, removeLiveListing, normalizeLiveListing,
 } from './services/transactionService';
-import { fetchProducts, insertProduct, updateProduct, deleteProduct, fetchPersistence, isLoggedIn, uploadImage } from './lib/api';
+import { isLoggedIn, uploadImage } from './lib/api';
+import {
+  deleteListingFromBackend,
+  saveListingToBackend,
+  subscribeToListingChanges,
+  syncListingsFromBackend,
+  updateListingInBackend,
+} from './services/liveListingService';
 
 const navItems = [
   { key: 'home', label: 'Home', icon: Home },
@@ -245,28 +252,24 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
     }
   }, []);
 
-  // Merge server-side products (if any) into local live listings so all users see server-published items
+  // Merge server-side listings into the local live cache so every user sees the same marketplace.
   useEffect(() => {
     if (typeof window === 'undefined') return;
-    fetchProducts().then((serverProducts) => {
-      if (!Array.isArray(serverProducts) || serverProducts.length === 0) return;
-      try {
-        // mark server products as persisted
-        const marked = serverProducts.map((p) => ({ ...p, serverPersisted: true, serverId: p.id }));
-        // Persist server products into the shared live listings store (deduped by id)
-        saveLiveListings([
-          ...marked,
-          ...getLiveListings(),
-        ]);
-        setItems((prev) => ([...marked.map(normalizeLiveListing), ...prev]));
-      } catch (err) {
-        // ignore
-      }
-    }).catch(() => {});
+    let mounted = true;
+    const refreshListings = () => syncListingsFromBackend()
+      .then((listings) => {
+        if (!mounted || !Array.isArray(listings)) return;
+        setItems(loadMarketplaceItems());
+      })
+      .catch(() => {});
 
-    fetchPersistence().then((resp) => {
-      setServerPersistent(Boolean(resp && resp.db));
-    }).catch(() => setServerPersistent(false));
+    refreshListings();
+    const unsubscribe = subscribeToListingChanges(refreshListings);
+
+    return () => {
+      mounted = false;
+      unsubscribe?.();
+    };
   }, []);
 
   useEffect(() => {
@@ -1128,23 +1131,13 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
       (async () => {
         for (const item of candidates) {
           try {
-            const payload = {
-              title: item.title,
-              category: item.category,
-              emoji: '',
-              condition: item.condition,
-              description: item.description || '',
-              photo_url: item.image || null,
-              nearby_eligible: true,
-              pickup_area: item.location || '',
-            };
-            const resp = await insertProduct(payload, user).catch(() => null);
+            const resp = await saveListingToBackend(item).catch(() => null);
             if (resp && resp.id) {
               // update local listing id to server id and mark persisted
               item.id = resp.id;
               item.serverPersisted = true;
               item.serverId = resp.id;
-              upsertLiveListing(item);
+              upsertLiveListing({ ...item, ...resp });
               migrated = true;
             }
           } catch (err) {
@@ -1189,23 +1182,12 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
       };
       setItems((prev) => prev.map((item) => (item.id === editingItem.id ? updatedItem : item)));
       setFavorites((prev) => prev.map((item) => (item.id === editingItem.id ? updatedItem : item)));
-      // Sync update to server if possible
-      if (isLoggedIn() && serverPersistent) {
-        try {
-          await updateProduct(updatedItem.id, {
-            title: updatedItem.title,
-            category: updatedItem.category,
-            emoji: '',
-            condition: updatedItem.condition,
-            description: updatedItem.description,
-            photo_url: updatedItem.image || null,
-            nearby_eligible: true,
-            pickup_area: updatedItem.location || '',
-          });
-          setNotice('Updated on server and locally.');
-        } catch (err) {
-          setNotice('Updated locally. Server update failed.');
-        }
+      try {
+        const saved = await updateListingInBackend(updatedItem.serverId || updatedItem.id, updatedItem);
+        Object.assign(updatedItem, saved);
+        setNotice('Your listing has been updated live.');
+      } catch (err) {
+        setNotice('Updated locally. Live sync failed.');
       }
       upsertLiveListing(updatedItem);
       setSelectedItem(updatedItem);
@@ -1250,41 +1232,23 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
       updatedAt: new Date().toISOString(),
     };
     setItems((prev) => [newItem, ...prev]);
-    // If user is authenticated, persist to server so other users can see this listing
-    if (isLoggedIn()) {
-      try {
-        const payload = {
-          title: formData.title,
-          category: formData.category,
-          emoji: '',
-          condition: formData.condition,
-          description: formData.description || '',
-          photo_url: formData.image || null,
-          nearby_eligible: true,
-          pickup_area: formData.pickupArea || '',
-        };
-        // If a raw File is present, upload it to server storage first
-        if (formData.photoFile) {
-          try {
-            const uploadedUrl = await uploadImage(formData.photoFile).catch(() => null);
-            if (uploadedUrl) {
-              payload.photo_url = uploadedUrl;
-              newItem.image = uploadedUrl;
-            }
-          } catch (err) {
-            // ignore upload failures and fall back to provided image
-          }
+    try {
+      if (formData.photoFile) {
+        const uploadedUrl = await uploadImage(formData.photoFile).catch(() => null);
+        if (uploadedUrl) {
+          newItem.image = uploadedUrl;
+          newItem.imageUrl = uploadedUrl;
+          newItem.photo_url = uploadedUrl;
         }
-        const resp = await insertProduct(payload, user).catch(() => null);
-        if (resp && resp.id) {
-          newItem.id = resp.id;
-          newItem.createdAt = new Date().toISOString();
-        }
-      } catch (err) {
-        // ignore server failures — keep local listing
       }
-    } else {
-      setNotice('This listing is saved locally only. Sign up or log in to make it visible to everyone.');
+      const optimisticId = newItem.id;
+      const saved = await saveListingToBackend(newItem);
+      Object.assign(newItem, saved);
+      setItems((prev) => prev.map((item) => (item.id === optimisticId || item.id === saved.id ? newItem : item)));
+    } catch (err) {
+      setNotice(isLoggedIn()
+        ? 'Saved locally. Live sync failed.'
+        : 'Saved on this device. Log in to make it visible to everyone.');
       setTimeout(() => setNotice(''), 4000);
     }
 
@@ -1313,9 +1277,7 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
     setFavorites((prev) => prev.filter((entry) => entry.id !== item.id));
     // Remove locally and attempt server delete if possible
     removeLiveListing(item.id);
-    if (isLoggedIn() && serverPersistent) {
-      deleteProduct(item.id).catch(() => {});
-    }
+    deleteListingFromBackend(item.serverId || item.id).catch(() => {});
     setUser((prev) => (prev ? {
       ...prev,
       listed: Math.max(0, (Number(prev.listed) || 0) - 1),

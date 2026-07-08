@@ -21,6 +21,10 @@ import {
   saveBusinessAccounts, saveBusinessOrders, saveBusinessProducts, saveBusinessRules, saveBusinessSession,
   toMarketplaceItem, updateBusinessPurchaseStatus, updateCustomerOrderStatus,
 } from '../lib/businessStore';
+import {
+  deleteListingFromBackend,
+  saveListingToBackend,
+} from '../services/liveListingService';
 
 const links = [
   { path: '/business/dashboard', label: 'Business Dashboard', icon: Home },
@@ -115,10 +119,13 @@ export default function BusinessPortal({ path, navigate }) {
       const liveId = `business-product-${product.id}`;
       if (product.autoList === false || availableQuantity <= 0 || expired || ['expired', 'sold', 'hidden', 'completed'].includes(status)) {
         removeLiveListing(liveId);
+        deleteListingFromBackend(liveId).catch(() => {});
         return;
       }
       const accountForProduct = accounts.find((entry) => entry.id === product.businessId) || account;
-      upsertLiveListing(toMarketplaceItem(product, accountForProduct));
+      const liveItem = toMarketplaceItem(product, accountForProduct);
+      upsertLiveListing(liveItem);
+      saveListingToBackend(liveItem).catch(() => {});
     });
   }, [account?.id]);
 
@@ -137,7 +144,11 @@ export default function BusinessPortal({ path, navigate }) {
     const nextIds = new Set(evaluatedProducts.map((product) => String(product.id)));
     products
       .filter((product) => !nextIds.has(String(product.id)))
-      .forEach((product) => removeLiveListing(`business-product-${product.id}`));
+      .forEach((product) => {
+        const liveId = `business-product-${product.id}`;
+        removeLiveListing(liveId);
+        deleteListingFromBackend(liveId).catch(() => {});
+      });
 
     evaluatedProducts.forEach((product) => {
       const status = String(product.status || '').toLowerCase();
@@ -150,11 +161,14 @@ export default function BusinessPortal({ path, navigate }) {
 
       if (product.autoList === false || availableQuantity <= 0 || expired || ['expired', 'sold', 'hidden', 'completed'].includes(status)) {
         removeLiveListing(liveId);
+        deleteListingFromBackend(liveId).catch(() => {});
         return;
       }
 
       const accountForProduct = accounts.find((entry) => entry.id === product.businessId) || account;
-      upsertLiveListing(toMarketplaceItem(product, accountForProduct));
+      const liveItem = toMarketplaceItem(product, accountForProduct);
+      upsertLiveListing(liveItem);
+      saveListingToBackend(liveItem).catch(() => {});
     });
   };
 

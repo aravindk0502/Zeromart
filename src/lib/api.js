@@ -83,6 +83,19 @@ export const updateProduct = (id, data) => put(`/api/products/${id}`, data);
 export const deleteProduct = (id) => fetch(apiUrl(`/api/products/${id}`), { method: 'DELETE', headers: authHeaders() }).then((r) => r.json());
 export const fetchPersistence = () => get('/api/persistence');
 
+// ── Live Listings ────────────────────────────────────────────────────────────
+export const fetchListings = () => get('/api/listings').catch(() => []);
+export const insertListing = (listing) => post('/api/listings', listing, isLoggedIn());
+export const updateListing = (id, listing) => put(`/api/listings/${encodeURIComponent(id)}`, listing);
+export const deleteListing = (id) => fetch(apiUrl(`/api/listings/${encodeURIComponent(id)}`), {
+  method: 'DELETE',
+  headers: authHeaders(),
+}).then(async (r) => {
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(data.error || 'Delete failed');
+  return data;
+});
+
 // ── Favourites ────────────────────────────────────────────────────────────────
 export const fetchFavourites  = ()   => get('/api/favourites').catch(() => []);
 export const toggleFavouriteAPI = (id) => post(`/api/favourites/${id}`, {}, true);

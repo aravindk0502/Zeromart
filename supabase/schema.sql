@@ -74,6 +74,8 @@ create table if not exists favourites (
 -- ─────────────────────────────────────
 -- ORDERS
 -- ─────────────────────────────────────
+create sequence if not exists order_seq start 1;
+
 create table if not exists orders (
   id               text primary key default ('ORD' || lpad(nextval('order_seq')::text, 6, '0')),
   buyer_id         uuid references profiles(id),
@@ -132,3 +134,151 @@ create policy "insert orders"           on orders for insert with check (auth.ui
 
 -- Notifications: user sees own
 create policy "own notifications"       on notifications for all using (auth.uid() = user_id);
+
+-- ─────────────────────────────────────
+-- DRIZN LIVE MARKETPLACE
+-- One production source of truth for community and business listings.
+-- ─────────────────────────────────────
+create extension if not exists "pgcrypto";
+
+alter table profiles
+  add column if not exists display_name text,
+  add column if not exists avatar_url text,
+  add column if not exists profile_location jsonb not null default '{}'::jsonb,
+  add column if not exists updated_at timestamptz not null default now();
+
+create table if not exists listings (
+  id                 text primary key default gen_random_uuid()::text,
+  title              text not null,
+  category           text not null default 'Other',
+  condition          text not null default 'Good',
+  description        text not null default '',
+  image_url          text,
+  seller_id          text not null,
+  seller_name        text not null default 'Unknown',
+  seller_type        text not null default 'community' check (seller_type in ('community', 'business')),
+  business_id        text,
+  store_name         text,
+  karma_score        integer not null default 0,
+  quantity           integer not null default 1,
+  available_quantity integer not null default 1,
+  reserved_quantity  integer not null default 0,
+  sold_quantity      integer not null default 0,
+  price              numeric(10, 2) not null default 0,
+  expiry_date        date,
+  expiry_time        time,
+  status             text not null default 'active' check (status in ('active', 'available', 'reserved', 'sold', 'expired', 'hidden')),
+  latitude           double precision,
+  longitude          double precision,
+  location           text,
+  area               text,
+  city               text,
+  state              text,
+  country            text not null default 'India',
+  location_data      jsonb not null default '{}'::jsonb,
+  metadata           jsonb not null default '{}'::jsonb,
+  created_at         timestamptz not null default now(),
+  updated_at         timestamptz not null default now()
+);
+
+create index if not exists listings_status_idx on listings (status);
+create index if not exists listings_seller_type_idx on listings (seller_type);
+create index if not exists listings_expiry_idx on listings (expiry_date, expiry_time);
+create index if not exists listings_location_idx on listings (latitude, longitude);
+create index if not exists listings_created_idx on listings (created_at desc);
+
+create table if not exists listing_favourites (
+  user_id    text not null,
+  listing_id text not null references listings(id) on delete cascade,
+  created_at timestamptz not null default now(),
+  primary key (user_id, listing_id)
+);
+
+create table if not exists requests (
+  id          text primary key default gen_random_uuid()::text,
+  listing_id  text not null references listings(id) on delete cascade,
+  buyer_id    text not null,
+  seller_id   text not null,
+  quantity    integer not null default 1,
+  status      text not null default 'pending' check (status in ('pending', 'confirmed', 'declined', 'handed_over', 'collected', 'completed', 'cancelled')),
+  details     jsonb not null default '{}'::jsonb,
+  created_at  timestamptz not null default now(),
+  updated_at  timestamptz not null default now()
+);
+
+alter table orders
+  add column if not exists listing_id text,
+  add column if not exists business_id text,
+  add column if not exists collection_code text,
+  add column if not exists details jsonb not null default '{}'::jsonb;
+
+create table if not exists karma_events (
+  id          text primary key default gen_random_uuid()::text,
+  giver_id    text not null,
+  receiver_id text not null,
+  listing_id  text references listings(id) on delete set null,
+  request_id  text,
+  order_id    text,
+  points      integer not null default 1,
+  note        text,
+  created_at  timestamptz not null default now()
+);
+
+insert into storage.buckets (id, name, public)
+values ('Drizn', 'Drizn', true)
+on conflict (id) do update set public = excluded.public;
+
+alter table listings enable row level security;
+alter table listing_favourites enable row level security;
+alter table requests enable row level security;
+alter table karma_events enable row level security;
+
+drop policy if exists "public read live listings" on listings;
+create policy "public read live listings"
+  on listings for select
+  using (status in ('active', 'available') and available_quantity > 0);
+
+drop policy if exists "authenticated insert live listings" on listings;
+create policy "authenticated insert live listings"
+  on listings for insert
+  with check (auth.uid() is not null);
+
+drop policy if exists "seller update live listings" on listings;
+create policy "seller update live listings"
+  on listings for update
+  using (auth.uid()::text = seller_id)
+  with check (auth.uid()::text = seller_id);
+
+drop policy if exists "own live favourites" on listing_favourites;
+create policy "own live favourites"
+  on listing_favourites for all
+  using (auth.uid()::text = user_id)
+  with check (auth.uid()::text = user_id);
+
+drop policy if exists "participant read requests" on requests;
+create policy "participant read requests"
+  on requests for select
+  using (auth.uid()::text in (buyer_id, seller_id));
+
+drop policy if exists "buyer insert requests" on requests;
+create policy "buyer insert requests"
+  on requests for insert
+  with check (auth.uid()::text = buyer_id);
+
+drop policy if exists "participant update requests" on requests;
+create policy "participant update requests"
+  on requests for update
+  using (auth.uid()::text in (buyer_id, seller_id));
+
+drop policy if exists "participant read karma" on karma_events;
+create policy "participant read karma"
+  on karma_events for select
+  using (auth.uid()::text in (giver_id, receiver_id));
+
+do $$
+begin
+  alter publication supabase_realtime add table listings;
+exception
+  when duplicate_object then null;
+  when undefined_object then null;
+end $$;
