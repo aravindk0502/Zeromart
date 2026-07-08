@@ -62,7 +62,9 @@ const pool = DATABASE_URL ? new Pool({
 }) : null;
 
 // Supabase Storage client (optional)
-const SUPABASE_URL = process.env.SUPABASE_URL || '';
+const normalizeSupabaseUrl = (value = '') => String(value || '').trim().replace(/\/rest\/v1\/?$/, '').replace(/\/$/, '');
+
+const SUPABASE_URL = normalizeSupabaseUrl(process.env.SUPABASE_URL || '');
 const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE || process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_KEY || '';
 const supabase = (SUPABASE_URL && SUPABASE_KEY) ? createSupabaseClient(SUPABASE_URL, SUPABASE_KEY) : null;
 const SUPABASE_BUCKET = process.env.SUPABASE_STORAGE_BUCKET || 'Drizn';
@@ -390,6 +392,132 @@ function listingPayloadToDb(body = {}, user = null) {
   };
 }
 
+function listingDbPayload(listing) {
+  return {
+    id: listing.id,
+    title: listing.title,
+    category: listing.category,
+    condition: listing.condition,
+    description: listing.description,
+    image_url: listing.imageUrl,
+    seller_id: listing.sellerId,
+    seller_name: listing.sellerName,
+    seller_type: listing.sellerType,
+    business_id: listing.businessId || null,
+    store_name: listing.storeName || null,
+    karma_score: listing.karmaScore,
+    quantity: listing.quantity,
+    available_quantity: listing.availableQuantity,
+    reserved_quantity: listing.reservedQuantity,
+    sold_quantity: listing.soldQuantity,
+    price: listing.price,
+    expiry_date: listing.expiryDate,
+    expiry_time: listing.expiryTime,
+    status: listing.status,
+    latitude: listing.latitude,
+    longitude: listing.longitude,
+    location: listing.location,
+    area: listing.area,
+    city: listing.city,
+    state: listing.state,
+    country: listing.country,
+    location_data: listing.locationData || {},
+    metadata: listing.metadata || {},
+  };
+}
+
+function canUseSupabaseTable() {
+  return Boolean(supabase);
+}
+
+async function fetchListingsViaSupabase() {
+  if (!canUseSupabaseTable()) return null;
+  const { data, error } = await supabase
+    .from('listings')
+    .select('*')
+    .in('status', ['active', 'available'])
+    .gt('available_quantity', 0)
+    .order('created_at', { ascending: false });
+  if (error) throw error;
+  const today = new Date().toISOString().slice(0, 10);
+  return (data || [])
+    .filter((row) => !row.expiry_date || String(row.expiry_date).slice(0, 10) >= today)
+    .sort((a, b) => {
+      const aRescue = a.expiry_date && String(a.expiry_date).slice(0, 10) <= today ? 0 : 1;
+      const bRescue = b.expiry_date && String(b.expiry_date).slice(0, 10) <= today ? 0 : 1;
+      if (aRescue !== bRescue) return aRescue - bRescue;
+      if (a.seller_type !== b.seller_type) return a.seller_type === 'business' ? -1 : 1;
+      return new Date(b.created_at || 0) - new Date(a.created_at || 0);
+    })
+    .map(listingRowToClient);
+}
+
+async function upsertListingViaSupabase(listing) {
+  if (!canUseSupabaseTable()) return null;
+  const { data, error } = await supabase
+    .from('listings')
+    .upsert(listingDbPayload(listing), { onConflict: 'id' })
+    .select()
+    .single();
+  if (error) throw error;
+  return listingRowToClient(data);
+}
+
+async function updateListingViaSupabase(id, listing, user = null) {
+  if (!canUseSupabaseTable()) return null;
+  const existing = await supabase
+    .from('listings')
+    .select('seller_id')
+    .eq('id', id)
+    .maybeSingle();
+  if (existing.error) throw existing.error;
+  if (!existing.data) {
+    const notFound = new Error('Not found');
+    notFound.status = 404;
+    throw notFound;
+  }
+  if (user?.id && existing.data.seller_id && String(existing.data.seller_id) !== String(user.id)) {
+    const forbidden = new Error('Not allowed');
+    forbidden.status = 403;
+    throw forbidden;
+  }
+
+  const { data, error } = await supabase
+    .from('listings')
+    .update({ ...listingDbPayload(listing), updated_at: new Date().toISOString() })
+    .eq('id', id)
+    .select()
+    .single();
+  if (error) throw error;
+  return listingRowToClient(data);
+}
+
+async function hideListingViaSupabase(id, user = null) {
+  if (!canUseSupabaseTable()) return null;
+  const existing = await supabase
+    .from('listings')
+    .select('seller_id')
+    .eq('id', id)
+    .maybeSingle();
+  if (existing.error) throw existing.error;
+  if (!existing.data) {
+    const notFound = new Error('Not found');
+    notFound.status = 404;
+    throw notFound;
+  }
+  if (user?.id && existing.data.seller_id && String(existing.data.seller_id) !== String(user.id)) {
+    const forbidden = new Error('Not allowed');
+    forbidden.status = 403;
+    throw forbidden;
+  }
+  const { error } = await supabase
+    .from('listings')
+    .update({ status: 'hidden', updated_at: new Date().toISOString() })
+    .eq('id', id);
+  if (error) throw error;
+  return { success: true };
+}
+
 // ── OTP store (in-memory for demo; persists in DB when available) ─────────────
 const otpStore = new Map(); // phone → { otp, expires }
 
@@ -503,7 +631,15 @@ app.get('/api/products', async (req, res) => {
 
 // Get live listings from the production shared listings table.
 app.get('/api/listings', async (_req, res) => {
-  if (!dbEnabled) return res.json([]);
+  if (!dbEnabled) {
+    try {
+      const listings = await fetchListingsViaSupabase();
+      return res.json(listings || []);
+    } catch (err) {
+      console.error('[LISTINGS] Supabase fetch failed', err.message || err);
+      return res.status(500).json({ error: 'Could not fetch listings' });
+    }
+  }
   try {
     const result = await pool.query(
       `SELECT *
@@ -526,8 +662,16 @@ app.get('/api/listings', async (_req, res) => {
 // Create or upsert a live listing. Auth is optional while sign-in is still being
 // completed, but authenticated users always become the source owner.
 app.post('/api/listings', optionalAuthMiddleware, async (req, res) => {
-  if (!dbEnabled) return res.json({ ...req.body, id: req.body?.id || crypto.randomUUID(), serverPersisted: false });
   const listing = listingPayloadToDb(req.body, req.user);
+  if (!dbEnabled) {
+    try {
+      const saved = await upsertListingViaSupabase(listing);
+      return res.json(saved || { ...req.body, id: listing.id, serverPersisted: false });
+    } catch (err) {
+      console.error('[LISTINGS] Supabase create failed', err.message || err);
+      return res.status(500).json({ error: 'Could not save listing' });
+    }
+  }
   try {
     const result = await pool.query(
       `INSERT INTO listings (
@@ -588,8 +732,18 @@ app.post('/api/listings', optionalAuthMiddleware, async (req, res) => {
 });
 
 app.put('/api/listings/:id', optionalAuthMiddleware, async (req, res) => {
-  if (!dbEnabled) return res.json({ success: true, id: req.params.id });
   const listing = listingPayloadToDb({ ...req.body, id: req.params.id }, req.user);
+  if (!dbEnabled) {
+    try {
+      const saved = await updateListingViaSupabase(req.params.id, listing, req.user);
+      return res.json(saved || { success: true, id: req.params.id });
+    } catch (err) {
+      if (err.status === 403) return res.status(403).json({ error: 'Not allowed' });
+      if (err.status === 404) return res.status(404).json({ error: 'Not found' });
+      console.error('[LISTINGS] Supabase update failed', err.message || err);
+      return res.status(500).json({ error: 'Could not update listing' });
+    }
+  }
   try {
     const existing = await pool.query('SELECT seller_id FROM listings WHERE id=$1', [req.params.id]);
     if (existing.rows.length === 0) return res.status(404).json({ error: 'Not found' });
@@ -624,7 +778,17 @@ app.put('/api/listings/:id', optionalAuthMiddleware, async (req, res) => {
 });
 
 app.delete('/api/listings/:id', optionalAuthMiddleware, async (req, res) => {
-  if (!dbEnabled) return res.json({ success: true });
+  if (!dbEnabled) {
+    try {
+      const result = await hideListingViaSupabase(req.params.id, req.user);
+      return res.json(result || { success: true });
+    } catch (err) {
+      if (err.status === 403) return res.status(403).json({ error: 'Not allowed' });
+      if (err.status === 404) return res.status(404).json({ error: 'Not found' });
+      console.error('[LISTINGS] Supabase delete failed', err.message || err);
+      return res.status(500).json({ error: 'Could not delete listing' });
+    }
+  }
   try {
     const existing = await pool.query('SELECT seller_id FROM listings WHERE id=$1', [req.params.id]);
     if (existing.rows.length === 0) return res.status(404).json({ error: 'Not found' });
