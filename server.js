@@ -8,7 +8,12 @@ import jwt from 'jsonwebtoken';
 import Razorpay from 'razorpay';
 import pg from 'pg';
 import multer from 'multer';
+import WebSocket from 'ws';
 import { createClient as createSupabaseClient } from '@supabase/supabase-js';
+
+if (!globalThis.WebSocket) {
+  globalThis.WebSocket = WebSocket;
+}
 
 export const app = express();
 const PORT = process.env.PORT || 3001;
