@@ -13,6 +13,13 @@ import {
   upsertLiveListing,
 } from './transactionService';
 
+const isProductionRuntime = import.meta.env.PROD;
+const LISTING_CACHE_TTL_MS = isProductionRuntime ? 0 : 12_000;
+
+let cachedListings = null;
+let cachedAtMs = 0;
+let inflightSyncPromise = null;
+
 const getCoordinates = (listing = {}) => {
   const coordinates = listing.coordinates || {};
   const locationData = listing.locationData || {};
@@ -38,7 +45,7 @@ export const toListingPayload = (listing = {}) => {
     imageUrl: normalized.imageUrl || normalized.image || normalized.photo_url || '',
     photo_url: normalized.photo_url || normalized.image || normalized.imageUrl || '',
     sellerId: normalized.sellerId || normalized.ownerMobile || normalized.businessId || '',
-    sellerName: normalized.sellerName || normalized.storeName || 'Unknown',
+    sellerName: normalized.sellerName || normalized.storeName || 'Drizn User',
     sellerType: isBusiness ? 'business' : 'community',
     listingType: isBusiness ? 'business' : 'community',
     isBusinessProduct: isBusiness,
@@ -80,6 +87,10 @@ export const fromServerListing = (listing = {}) => normalizeLiveListing({
 });
 
 const mergeRemoteWithLocalDrafts = (remoteListings) => {
+  if (isProductionRuntime) {
+    saveLiveListings(remoteListings);
+    return remoteListings;
+  }
   const remoteIds = new Set(remoteListings.map((listing) => String(listing.id)));
   const drafts = getLiveListings().filter((listing) => !listing.serverPersisted && !remoteIds.has(String(listing.id)));
   const nextListings = [...remoteListings, ...drafts];
@@ -88,15 +99,31 @@ const mergeRemoteWithLocalDrafts = (remoteListings) => {
 };
 
 export const syncListingsFromBackend = async () => {
-  const rows = await fetchListings();
-  if (!Array.isArray(rows)) return getLiveListings();
-  const remoteListings = rows.map(fromServerListing);
-  return mergeRemoteWithLocalDrafts(remoteListings);
+  const now = Date.now();
+  if (cachedListings && now - cachedAtMs < LISTING_CACHE_TTL_MS) return cachedListings;
+  if (inflightSyncPromise) return inflightSyncPromise;
+
+  inflightSyncPromise = fetchListings()
+    .then((rows) => {
+      if (!Array.isArray(rows)) return getLiveListings();
+      const remoteListings = rows.map(fromServerListing);
+      const merged = mergeRemoteWithLocalDrafts(remoteListings);
+      cachedListings = merged;
+      cachedAtMs = Date.now();
+      return merged;
+    })
+    .finally(() => {
+      inflightSyncPromise = null;
+    });
+
+  return inflightSyncPromise;
 };
 
 export const saveListingToBackend = async (listing) => {
   const saved = await insertListing(toListingPayload(listing));
   const normalized = fromServerListing(saved);
+  cachedListings = null;
+  cachedAtMs = 0;
   upsertLiveListing(normalized);
   return normalized;
 };
@@ -104,6 +131,8 @@ export const saveListingToBackend = async (listing) => {
 export const updateListingInBackend = async (id, listing) => {
   const saved = await updateListingApi(id, toListingPayload({ ...listing, id }));
   const normalized = fromServerListing(saved);
+  cachedListings = null;
+  cachedAtMs = 0;
   upsertLiveListing(normalized);
   return normalized;
 };
@@ -111,6 +140,8 @@ export const updateListingInBackend = async (id, listing) => {
 export const deleteListingFromBackend = async (id) => {
   if (!id) return null;
   const result = await deleteListingApi(id);
+  cachedListings = null;
+  cachedAtMs = 0;
   removeLiveListing(id);
   return result;
 };

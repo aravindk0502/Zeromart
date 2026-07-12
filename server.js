@@ -1,6 +1,7 @@
 import express from 'express';
 import cors from 'cors';
 import crypto from 'crypto';
+import dns from 'dns/promises';
 import path from 'path';
 import { existsSync } from 'fs';
 import { fileURLToPath } from 'url';
@@ -18,6 +19,16 @@ if (!globalThis.WebSocket) {
 export const app = express();
 const PORT = process.env.PORT || 3001;
 const JWT_SECRET = process.env.JWT_SECRET || 'zeromart-dev-secret-change-in-prod';
+const IS_PRODUCTION = process.env.NODE_ENV === 'production';
+const DEFAULT_SELLER_NAME = 'Drizn User';
+
+function cleanSellerName(...names) {
+  const value = names.find((name) => {
+    const trimmed = String(name || '').trim();
+    return trimmed && trimmed.toLowerCase() !== 'unknown';
+  });
+  return String(value || DEFAULT_SELLER_NAME).trim();
+}
 const { Pool } = pg;
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -55,11 +66,36 @@ const DATABASE_URL = rawDatabaseUrl.trim() || (
     : ''
 );
 
-let dbEnabled = Boolean(DATABASE_URL);
-const pool = DATABASE_URL ? new Pool({
-  connectionString: DATABASE_URL,
-  ssl: { rejectUnauthorized: false },
-}) : null;
+const IS_VERCEL_SERVERLESS = Boolean(process.env.VERCEL);
+let dbEnabled = Boolean(DATABASE_URL) && !IS_VERCEL_SERVERLESS;
+let pool = null;
+
+async function createDbPool() {
+  if (!DATABASE_URL) return null;
+  const baseConfig = {
+    connectionString: DATABASE_URL,
+    ssl: { rejectUnauthorized: false },
+  };
+
+  try {
+    const parsed = new URL(DATABASE_URL);
+    const hostname = parsed.hostname;
+    if (!hostname) return new Pool(baseConfig);
+
+    const { address } = await dns.lookup(hostname, { family: 4 });
+    return new Pool({
+      host: address,
+      port: Number(parsed.port || dbPort || 5432),
+      user: decodeURIComponent(parsed.username || dbUser || ''),
+      password: decodeURIComponent(parsed.password || dbPassword || ''),
+      database: decodeURIComponent(parsed.pathname.replace(/^\//, '') || dbName || ''),
+      ssl: { rejectUnauthorized: false, servername: hostname },
+    });
+  } catch (error) {
+    console.warn('[DB] IPv4 hostname resolution failed, falling back to default connection settings');
+    return new Pool(baseConfig);
+  }
+}
 
 // Supabase Storage client (optional)
 const normalizeSupabaseUrl = (value = '') => String(value || '').trim().replace(/\/rest\/v1\/?$/, '').replace(/\/$/, '');
@@ -69,17 +105,51 @@ const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE || process.env.SUPABASE_S
 const supabase = (SUPABASE_URL && SUPABASE_KEY) ? createSupabaseClient(SUPABASE_URL, SUPABASE_KEY) : null;
 const SUPABASE_BUCKET = process.env.SUPABASE_STORAGE_BUCKET || 'Drizn';
 
+const requiredRuntimeEnv = {
+  DATABASE_URL,
+  SUPABASE_URL,
+  SUPABASE_SERVICE_ROLE: process.env.SUPABASE_SERVICE_ROLE || process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_KEY || '',
+  SUPABASE_STORAGE_BUCKET: process.env.SUPABASE_STORAGE_BUCKET || '',
+};
+
+const getMissingRuntimeEnv = () => Object.entries(requiredRuntimeEnv)
+  .filter(([, value]) => !String(value || '').trim())
+  .map(([key]) => key);
+
+const hasSharedPersistence = () => dbEnabled || canUseSupabaseTable();
+
+const respondPersistenceNotConfigured = (res) => {
+  const missing = getMissingRuntimeEnv();
+  console.error('[PERSISTENCE] shared persistence unavailable', {
+    dbEnabled,
+    supabaseConfigured: canUseSupabaseTable(),
+    missing,
+  });
+  return res.status(503).json({ error: 'Database not configured', missing });
+};
+
 // multer for parsing multipart form data (memory storage)
-const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 6 * 1024 * 1024 } });
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 15 * 1024 * 1024 } });
 
 export async function initDB() {
+  if (IS_VERCEL_SERVERLESS) {
+    dbEnabled = false;
+    console.log('[DB] Vercel serverless runtime detected — using Supabase-backed shared persistence');
+    return;
+  }
+
   if (!DATABASE_URL) {
-    console.log('[DB] No DATABASE_URL/POSTGRES connection details — running without database (demo mode)');
+    if (IS_PRODUCTION) {
+      console.error('[DB] Database not configured: DATABASE_URL is missing');
+    } else {
+      console.log('[DB] No DATABASE_URL/POSTGRES connection details — running without database (demo mode)');
+    }
     dbEnabled = false;
     return;
   }
 
   try {
+    pool = await createDbPool();
     await pool.query(`
     CREATE TABLE IF NOT EXISTS users (
       id          SERIAL PRIMARY KEY,
@@ -309,7 +379,7 @@ function listingRowToClient(row) {
     photo_url: imageUrl,
     sellerId: row.seller_id || '',
     ownerMobile: metadata.ownerMobile || '',
-    sellerName: row.seller_name || row.store_name || 'Unknown',
+    sellerName: cleanSellerName(row.seller_name, row.store_name, metadata.sellerName, metadata.businessName),
     sellerType,
     listingType: sellerType === 'business' ? 'business' : 'community',
     isBusinessProduct: sellerType === 'business',
@@ -367,7 +437,7 @@ function listingPayloadToDb(body = {}, user = null) {
     description: body.description || '',
     imageUrl,
     sellerId: String(user?.id || body.sellerId || body.seller_id || body.businessId || body.ownerMobile || 'guest'),
-    sellerName: body.sellerName || body.seller_name || body.storeName || body.businessName || user?.name || 'Unknown',
+    sellerName: cleanSellerName(body.sellerName, body.seller_name, body.storeName, body.businessName, user?.name),
     sellerType: sellerType === 'business' ? 'business' : 'community',
     businessId: body.businessId || body.business_id || '',
     storeName: body.storeName || body.businessName || body.store_name || '',
@@ -435,7 +505,7 @@ async function fetchListingsViaSupabase() {
   const { data, error } = await supabase
     .from('listings')
     .select('*')
-    .in('status', ['active', 'available'])
+    .in('status', ['active', 'available', 'live'])
     .gt('available_quantity', 0)
     .order('created_at', { ascending: false });
   if (error) throw error;
@@ -631,6 +701,9 @@ app.get('/api/products', async (req, res) => {
 
 // Get live listings from the production shared listings table.
 app.get('/api/listings', async (_req, res) => {
+  if (!hasSharedPersistence() && IS_PRODUCTION) {
+    return respondPersistenceNotConfigured(res);
+  }
   if (!dbEnabled) {
     try {
       const listings = await fetchListingsViaSupabase();
@@ -644,7 +717,7 @@ app.get('/api/listings', async (_req, res) => {
     const result = await pool.query(
       `SELECT *
        FROM listings
-       WHERE status IN ('active', 'available')
+       WHERE status IN ('active', 'available', 'live')
          AND COALESCE(available_quantity, 0) > 0
          AND (expiry_date IS NULL OR expiry_date >= CURRENT_DATE)
        ORDER BY
@@ -662,11 +735,14 @@ app.get('/api/listings', async (_req, res) => {
 // Create or upsert a live listing. Auth is optional while sign-in is still being
 // completed, but authenticated users always become the source owner.
 app.post('/api/listings', optionalAuthMiddleware, async (req, res) => {
+  if (!hasSharedPersistence() && IS_PRODUCTION) {
+    return respondPersistenceNotConfigured(res);
+  }
   const listing = listingPayloadToDb(req.body, req.user);
   if (!dbEnabled) {
     try {
       const saved = await upsertListingViaSupabase(listing);
-      return res.json(saved || { ...req.body, id: listing.id, serverPersisted: false });
+      return res.status(201).json(saved || { ...req.body, id: listing.id, serverPersisted: false });
     } catch (err) {
       console.error('[LISTINGS] Supabase create failed', err.message || err);
       return res.status(500).json({ error: 'Could not save listing' });
@@ -724,7 +800,7 @@ app.post('/api/listings', optionalAuthMiddleware, async (req, res) => {
         listing.country, JSON.stringify(listing.locationData), JSON.stringify(listing.metadata),
       ]
     );
-    return res.json(listingRowToClient(result.rows[0]));
+    return res.status(201).json(listingRowToClient(result.rows[0]));
   } catch (err) {
     console.error('[LISTINGS] create failed', err.message || err);
     return res.status(500).json({ error: 'Could not save listing' });
@@ -732,6 +808,9 @@ app.post('/api/listings', optionalAuthMiddleware, async (req, res) => {
 });
 
 app.put('/api/listings/:id', optionalAuthMiddleware, async (req, res) => {
+  if (!hasSharedPersistence() && IS_PRODUCTION) {
+    return respondPersistenceNotConfigured(res);
+  }
   const listing = listingPayloadToDb({ ...req.body, id: req.params.id }, req.user);
   if (!dbEnabled) {
     try {
@@ -778,6 +857,9 @@ app.put('/api/listings/:id', optionalAuthMiddleware, async (req, res) => {
 });
 
 app.delete('/api/listings/:id', optionalAuthMiddleware, async (req, res) => {
+  if (!hasSharedPersistence() && IS_PRODUCTION) {
+    return respondPersistenceNotConfigured(res);
+  }
   if (!dbEnabled) {
     try {
       const result = await hideListingViaSupabase(req.params.id, req.user);
@@ -885,7 +967,7 @@ app.delete('/api/products/:id', authMiddleware, async (req, res) => {
 
 // Expose whether database persistence is enabled
 app.get('/api/persistence', (_req, res) => {
-  return res.json({ db: dbEnabled });
+  return res.json({ db: hasSharedPersistence(), missing: getMissingRuntimeEnv() });
 });
 
 // Get favourites

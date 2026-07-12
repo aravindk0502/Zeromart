@@ -3,6 +3,7 @@ import {
   ArrowRight, Heart, MapPin, ShieldCheck, Sparkles, Star, Store, Users,
 } from 'lucide-react';
 import { formatExpiry, getExpiryTimestamp, normalizeProductStock } from '../services/transactionService';
+import { isListingOwnedByUser } from '../utils/listingOwnership';
 
 const getCollectionCta = (item) => (
   item?.isBusinessProduct || item?.listingType === 'business' || item?.sellerType === 'business'
@@ -17,7 +18,7 @@ const getPriceLabel = (item) => {
 
 const getBusinessName = (item) => item?.sellerName || item?.storeName || item?.brand || 'Local store';
 
-const getInitials = (name = 'Unknown') => String(name)
+const getInitials = (name = 'Drizn User') => String(name)
   .split(' ')
   .filter(Boolean)
   .map((part) => part[0])
@@ -26,7 +27,7 @@ const getInitials = (name = 'Unknown') => String(name)
   .toUpperCase() || 'U';
 
 export function ProductRail({
-  title, eyebrow, icon: Icon, items, onSelectItem, onBuyItem, onToggleFavorite, favorites, rescue = false,
+  title, eyebrow, icon: Icon, items, onSelectItem, onBuyItem, onToggleFavorite, favorites, rescue = false, actor, onEditItem,
 }) {
   if (!items?.length) return null;
   return (
@@ -44,6 +45,7 @@ export function ProductRail({
         {items.map((item) => {
           const stock = normalizeProductStock(item);
           const requestState = item.requestState;
+          const isOwnListing = isListingOwnedByUser(item, actor);
           const isFavorite = favorites.some((entry) => entry.id === item.id);
           return (
             <article
@@ -57,7 +59,7 @@ export function ProductRail({
               className="group min-w-[245px] max-w-[245px] snap-start cursor-pointer overflow-hidden rounded-2xl border border-slate-100 bg-white shadow-sm transition hover:-translate-y-1 hover:shadow-lg focus:outline-none focus:ring-4 focus:ring-violet-100"
             >
               <div className="relative">
-                <img src={item.image} alt={item.title} className="h-32 w-full object-cover" />
+                <img src={item.image} alt={item.title} loading="lazy" decoding="async" className="h-32 w-full object-cover" />
                 {rescue && (
                   <span className={`absolute left-2 top-2 rounded-full px-2.5 py-1 text-[10px] font-extrabold uppercase tracking-wide text-white shadow ${item.hoursRemaining <= 24 ? 'bg-red-600' : item.hoursRemaining <= 48 ? 'bg-orange-500' : 'bg-amber-500'}`}>
                     {item.rescueLabel}
@@ -77,7 +79,7 @@ export function ProductRail({
                   <h3 className="line-clamp-1 min-w-0 font-extrabold text-slate-900">{item.title}</h3>
                   <div className="flex items-center gap-2">
                     <span className="shrink-0 rounded-full bg-amber-50 px-2.5 py-1 text-xs font-extrabold text-amber-800">{getPriceLabel(item)}</span>
-                    {item.serverPersisted ? (
+                    {item.serverPersisted || isOwnListing ? (
                       <span className="shrink-0 rounded-full bg-emerald-50 px-2 py-0.5 text-[10px] font-bold text-emerald-800">Live</span>
                     ) : (
                       <span className="shrink-0 rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-bold text-slate-600">Local</span>
@@ -93,15 +95,26 @@ export function ProductRail({
                 </div>
                 <button
                   type="button"
-                  disabled={requestState && !requestState.canRequest}
-                  onClick={(event) => { event.stopPropagation(); onBuyItem?.(stock); }}
+                  disabled={!isOwnListing && requestState && !requestState.canRequest}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    if (isOwnListing) {
+                      onEditItem?.(stock);
+                      return;
+                    }
+                    onBuyItem?.(stock);
+                  }}
                   className={`mt-3 w-full rounded-xl px-3 py-2 text-xs font-extrabold transition ${
                     requestState && !requestState.canRequest
                       ? 'cursor-not-allowed border border-slate-300 bg-slate-200 text-slate-800'
                       : 'bg-emerald-700 text-white hover:bg-emerald-800'
                   }`}
                 >
-                  {requestState && !requestState.canRequest ? requestState.buttonLabel : getCollectionCta(item)}
+                  {isOwnListing
+                    ? 'Edit listing'
+                    : requestState && !requestState.canRequest
+                      ? requestState.buttonLabel
+                      : getCollectionCta(item)}
                 </button>
               </div>
             </article>
@@ -202,13 +215,7 @@ export default function HomePage({
             </div>
           ) : nearbyProducts.map((item) => {
             const isBusiness = item.isBusinessProduct || item.listingType === 'business' || item.sellerType === 'business';
-            const isOwnListing = Boolean(user && (
-              item.isOwn
-              || item.ownerMobile === user.mobile
-              || item.sellerId === user.userId
-              || item.sellerName === user.name
-              || item.sellerName === 'You'
-            ));
+            const isOwnListing = isListingOwnedByUser(item, user);
             const stock = normalizeProductStock(item);
             const isFavorite = favorites.some((entry) => entry.id === item.id);
             const unavailable = !isOwnListing && item.requestState && !item.requestState.canRequest;
@@ -224,7 +231,7 @@ export default function HomePage({
                 className={`group cursor-pointer overflow-hidden rounded-[1.5rem] border bg-white shadow-[0_14px_45px_rgba(15,23,42,0.08)] transition-all duration-200 hover:-translate-y-1 hover:shadow-[0_22px_60px_rgba(15,23,42,0.12)] focus:outline-none focus:ring-4 ${isBusiness ? 'border-emerald-200 focus:ring-emerald-100' : 'border-amber-100/80 focus:ring-violet-100'}`}
               >
                 <div className="relative">
-                  <img src={item.image} alt={item.title} className="h-40 w-full object-cover transition duration-500 group-hover:scale-[1.03]" />
+                  <img src={item.image} alt={item.title} loading="lazy" decoding="async" className="h-40 w-full object-cover transition duration-500 group-hover:scale-[1.03]" />
                   {isBusiness && (
                     <div className="absolute inset-x-0 top-0 flex items-start justify-between gap-2 p-3">
                       <span className="inline-flex items-center gap-1 rounded-full border border-white/60 bg-white/90 px-2.5 py-1 text-[10px] font-extrabold text-emerald-700 shadow-sm backdrop-blur">
@@ -257,10 +264,10 @@ export default function HomePage({
                   <div className="flex items-start justify-between gap-3">
                     <div className="flex min-w-0 items-center gap-3">
                       <div className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-xl text-sm font-extrabold text-white shadow-lg ${isBusiness ? 'bg-gradient-to-br from-emerald-600 to-emerald-800 shadow-emerald-700/20' : 'bg-gradient-to-br from-amber-500 to-violet-600 shadow-violet-500/20'}`}>
-                        {getInitials(item.sellerName)}
+                        {getInitials(item.sellerName || item.storeName || 'Drizn User')}
                       </div>
                       <div className="min-w-0">
-                        <p className={`truncate font-extrabold ${isBusiness ? 'text-emerald-800' : 'text-slate-900'}`}>{item.sellerName || 'Unknown'}</p>
+                        <p className={`truncate font-extrabold ${isBusiness ? 'text-emerald-800' : 'text-slate-900'}`}>{item.sellerName || item.storeName || 'Drizn User'}</p>
                         <p className="mt-0.5 truncate text-[11px] font-semibold uppercase tracking-[0.1em] text-slate-400">
                           {isBusiness ? 'Local business partner' : 'Community listing'}
                         </p>
@@ -268,7 +275,7 @@ export default function HomePage({
                     </div>
                     <div className="flex items-center gap-2">
                       <span className="shrink-0 rounded-full bg-amber-50 px-3 py-1.5 text-sm font-extrabold text-amber-800">{getPriceLabel(item)}</span>
-                      {item.serverPersisted ? (
+                      {item.serverPersisted || isOwnListing ? (
                         <span className="shrink-0 rounded-full bg-emerald-50 px-2 py-1 text-xs font-bold text-emerald-800">Live</span>
                       ) : (
                         <span className="shrink-0 rounded-full bg-slate-100 px-2 py-1 text-xs font-bold text-slate-600">Local</span>

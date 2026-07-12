@@ -40,6 +40,7 @@ import {
   syncListingsFromBackend,
   updateListingInBackend,
 } from './services/liveListingService';
+import { isListingOwnedByUser } from './utils/listingOwnership';
 
 const navItems = [
   { key: 'home', label: 'Home', icon: Home },
@@ -68,6 +69,7 @@ const DISCOVERY_STAGES = [
 ];
 
 const platformSearchKeywords = 'drizn drizn ai good things nearby karma good karma free 0 rs ₹0 rupees local business b2b marketplace listing list item seller buyer pickup delivery in person collect product item movie movies ticket tickets food electronics books cosmetics home furniture';
+const isProductionRuntime = import.meta.env.PROD;
 
 const getItemCoordinates = (item) => item.coordinates
   || (item.locationData ? { latitude: item.locationData.latitude, longitude: item.locationData.longitude } : null)
@@ -119,11 +121,17 @@ const stripFallbackDemoWhenLiveExists = (catalog) => {
   return hasRealListings ? normalized.filter((item) => !isLegacyDemoRecord(item)) : normalized;
 };
 
-// Single source of truth: the homepage marketplace reads ONLY from drizn_live_listings.
-// No dummy/demo fallback — an empty store means an empty marketplace.
-const loadMarketplaceItems = () => (
-  applyProductExpiry(stripFallbackDemoWhenLiveExists(getLiveListings()).map(normalizeProductStock))
-);
+const normalizeListingsForMarketplace = (listings = []) => {
+  const catalog = stripFallbackDemoWhenLiveExists(listings).map(normalizeProductStock);
+  if (isProductionRuntime) {
+    return applyProductExpiry(catalog.filter((item) => item.serverPersisted && !isLegacyDemoRecord(item)));
+  }
+  return applyProductExpiry(catalog);
+};
+
+// Single source of truth: production comes from the live listing API, with local
+// memory only acting as the current-session cache after a successful fetch.
+const loadMarketplaceItems = () => normalizeListingsForMarketplace(getLiveListings());
 
 const loadOrderHistory = () => {
   try {
@@ -180,6 +188,7 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
   const [discoveryStageIndex, setDiscoveryStageIndex] = useState(0);
   const [leaderboardScope, setLeaderboardScope] = useState('area');
   const [currentCoordinates, setCurrentCoordinates] = useState(locationEngine.location);
+  const [debouncedCoordinates, setDebouncedCoordinates] = useState(locationEngine.location);
   const [showOtpModal, setShowOtpModal] = useState(false);
   const [notice, setNotice] = useState('');
   const [showPostSuccessModal, setShowPostSuccessModal] = useState(false);
@@ -229,16 +238,7 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
       return next;
     });
   };
-  const isOwnedByActiveAccount = (item) => Boolean(
-    (user && (
-      item?.isOwn
-      || (user.userId && item?.sellerId === user.userId)
-      || item?.ownerMobile === user.mobile
-      || item?.sellerName === user.name
-      || item?.sellerName === 'You'
-    ))
-    || (businessSession && item?.businessId === businessSession.id)
-  );
+  const isOwnedByActiveAccount = (item) => isListingOwnedByUser(item, activeBuyer);
 
   useEffect(() => {
     const timer = window.setInterval(() => setRequestClock(Date.now()), 1000);
@@ -259,15 +259,28 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
     const refreshListings = () => syncListingsFromBackend()
       .then((listings) => {
         if (!mounted || !Array.isArray(listings)) return;
-        setItems(loadMarketplaceItems());
+        setItems(normalizeListingsForMarketplace(listings));
+        setNotice((current) => (current === 'Live listings are temporarily unavailable' ? '' : current));
       })
-      .catch(() => {});
+      .catch(() => {
+        if (!mounted) return;
+        const cached = loadMarketplaceItems();
+        setItems(cached);
+        setNotice(cached.length ? '' : 'Live listings are temporarily unavailable');
+      });
 
     refreshListings();
     const unsubscribe = subscribeToListingChanges(refreshListings);
+    const refreshWhenVisible = () => {
+      if (document.visibilityState === 'visible') refreshListings();
+    };
+    window.addEventListener('focus', refreshListings);
+    document.addEventListener('visibilitychange', refreshWhenVisible);
 
     return () => {
       mounted = false;
+      window.removeEventListener('focus', refreshListings);
+      document.removeEventListener('visibilitychange', refreshWhenVisible);
       unsubscribe?.();
     };
   }, []);
@@ -474,6 +487,11 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
     );
     setCurrentCoordinates(locationEngine.location);
   }, [locationEngine.label, locationEngine.location, locationEngine.status]);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => setDebouncedCoordinates(currentCoordinates), 300);
+    return () => window.clearTimeout(timer);
+  }, [currentCoordinates?.latitude, currentCoordinates?.longitude]);
 
   useEffect(() => {
     setDiscoveryStageIndex(0);
@@ -751,22 +769,7 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
     setOrderSuccess(historyEntry);
     setQuantityItem(null);
     setSelectedItem(null);
-    setNotice('Request sent. Chat and contact sharing will unlock only after the seller accepts.');
-    if (requestRecord.sellerPhone) {
-      const sellerMessage = [
-        'Hello,',
-        '',
-        `${historyEntry.buyerName} from ${requestRecord.buyerLocation} requested to collect your product:`,
-        '',
-        historyEntry.title,
-        '',
-        `Quantity: ${quantity}`,
-        '',
-        'Please confirm here:',
-        requestUrl,
-      ].join('\n');
-      window.open(createWhatsAppLink(requestRecord.sellerPhone, sellerMessage), '_blank', 'noopener,noreferrer');
-    }
+    setNotice('Request sent. The seller can confirm it from Alerts.');
   };
 
   const handleQuantityConfirm = ({ quantity, collectionWindow }) => {
@@ -985,7 +988,6 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
         ));
         return [acceptedNotification, ...sellerUpdate.filter((entry) => entry.id !== acceptedNotification.id)];
       });
-      if (notification.buyerPhone) window.open(buyerWhatsappLink, '_blank', 'noopener,noreferrer');
     } else {
       const declinedNotification = {
         id: `declined-${notification.requestId}`,
@@ -1087,7 +1089,7 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
     const applyProfile = (item) => ownsListing(item)
       ? {
           ...item,
-          sellerName: nextUser.name || 'Unknown',
+          sellerName: nextUser.name || 'Drizn User',
           sellerProfileImage: nextUser.profileImage || '',
         }
       : item;
@@ -1107,52 +1109,8 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
     setTimeout(() => { setNotice(''); }, 4000);
   };
 
-  // Migrate local listings to server when a user logs in (one-time prompt)
-  useEffect(() => {
-    let migrated = false;
-    if (!user) return;
-    try {
-      const local = getLiveListings();
-      const candidates = local.filter((item) => (
-        String(item.ownerMobile || '').startsWith('guest')
-        || String(item.sellerId || '').startsWith('guest')
-        || item.isOwn === true
-      ));
-      if (!candidates.length) return;
-      // Ask user for confirmation once (remember choice to avoid repeated prompts)
-      const PROMPT_KEY = 'zeromart-listing-migration-seen';
-      if (!localStorage.getItem(PROMPT_KEY)) {
-        if (!window.confirm(`We found ${candidates.length} local listing(s). Upload them to your account so others can see them?`)) {
-          localStorage.setItem(PROMPT_KEY, 'true');
-          return;
-        }
-        localStorage.setItem(PROMPT_KEY, 'true');
-      }
-      (async () => {
-        for (const item of candidates) {
-          try {
-            const resp = await saveListingToBackend(item).catch(() => null);
-            if (resp && resp.id) {
-              // update local listing id to server id and mark persisted
-              item.id = resp.id;
-              item.serverPersisted = true;
-              item.serverId = resp.id;
-              upsertLiveListing({ ...item, ...resp });
-              migrated = true;
-            }
-          } catch (err) {
-            // skip failures
-          }
-        }
-        if (migrated) setNotice('Local listings uploaded to your account.');
-        if (migrated) setTimeout(() => setNotice(''), 4000);
-      })();
-    } catch (err) {
-      // ignore
-    }
-  }, [user?.userId, user?.mobile]);
-
   const handleListingSubmit = async (formData) => {
+    console.log('[listing-submit] submit started', formData);
     if (editingItem) {
       const updatedItem = {
         ...editingItem,
@@ -1180,21 +1138,30 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
         isBusinessProduct: false,
         updatedAt: new Date().toISOString(),
       };
-      setItems((prev) => prev.map((item) => (item.id === editingItem.id ? updatedItem : item)));
-      setFavorites((prev) => prev.map((item) => (item.id === editingItem.id ? updatedItem : item)));
+      if (!isProductionRuntime) {
+        setItems((prev) => prev.map((item) => (item.id === editingItem.id ? updatedItem : item)));
+        setFavorites((prev) => prev.map((item) => (item.id === editingItem.id ? updatedItem : item)));
+      }
       try {
         const saved = await updateListingInBackend(updatedItem.serverId || updatedItem.id, updatedItem);
+        console.log('[listing-submit] API response', saved);
         Object.assign(updatedItem, saved);
+        setItems((prev) => prev.map((item) => (item.id === editingItem.id ? updatedItem : item)));
+        setFavorites((prev) => prev.map((item) => (item.id === editingItem.id ? updatedItem : item)));
         setNotice('Your listing has been updated live.');
       } catch (err) {
-        setNotice('Updated locally. Live sync failed.');
+        console.error('[listing-submit] submit failed reason', err);
+        setNotice(isProductionRuntime ? 'Live listings are temporarily unavailable' : 'Updated locally. Live sync failed.');
+        if (!isProductionRuntime) {
+          setItems((prev) => prev.map((item) => (item.id === editingItem.id ? updatedItem : item)));
+          setFavorites((prev) => prev.map((item) => (item.id === editingItem.id ? updatedItem : item)));
+        }
       }
-      upsertLiveListing(updatedItem);
+      if (!isProductionRuntime) upsertLiveListing(updatedItem);
       setSelectedItem(updatedItem);
       setEditingItem(null);
       setShowListingSheet(false);
-      setNotice('Your listing has been updated.');
-      return;
+      return true;
     }
     const newItem = {
       id: Date.now(),
@@ -1231,7 +1198,8 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     };
-    setItems((prev) => [newItem, ...prev]);
+    const optimisticId = newItem.id;
+    setItems((prev) => [newItem, ...prev.filter((item) => String(item.id) !== String(optimisticId))]);
     try {
       if (formData.photoFile) {
         const uploadedUrl = await uploadImage(formData.photoFile).catch(() => null);
@@ -1241,15 +1209,36 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
           newItem.photo_url = uploadedUrl;
         }
       }
-      const optimisticId = newItem.id;
       const saved = await saveListingToBackend(newItem);
+      console.log('[listing-submit] API response', saved);
       Object.assign(newItem, saved);
       setItems((prev) => prev.map((item) => (item.id === optimisticId || item.id === saved.id ? newItem : item)));
     } catch (err) {
-      setNotice(isLoggedIn()
-        ? 'Saved locally. Live sync failed.'
-        : 'Saved on this device. Log in to make it visible to everyone.');
+      console.error('[listing-submit] submit failed reason', err);
+      setItems((prev) => prev.filter((item) => String(item.id) !== String(optimisticId)));
+      if (isProductionRuntime) {
+        setNotice('Listing could not be published live. Please retry.');
+      } else {
+        const fallbackItem = { ...newItem, serverPersisted: false };
+        setItems((prev) => [fallbackItem, ...prev.filter((item) => String(item.id) !== String(fallbackItem.id))]);
+        upsertLiveListing(fallbackItem);
+        setNotice(isLoggedIn()
+          ? 'Saved locally. Live sync failed.'
+          : 'Saved on this device. Log in to make it visible to everyone.');
+      }
       setTimeout(() => setNotice(''), 4000);
+      if (!isProductionRuntime) {
+        setUser((prev) => (prev ? {
+          ...prev,
+          listed: (Number(prev.listed) || 0) + 1,
+          activeListings: (Number(prev.activeListings) || 0) + 1,
+        } : prev));
+        setShowListingSheet(false);
+        setSelectedItem(null);
+        setActiveView('home');
+        setShowPostSuccessModal(true);
+      }
+      return true;
     }
 
     upsertLiveListing(newItem);
@@ -1263,6 +1252,7 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
     setActiveView('home');
     // Show success modal offering to add another listing
     setShowPostSuccessModal(true);
+    return true;
   };
 
   const handleEditListing = (item) => {
@@ -1576,8 +1566,7 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
   const hasActiveSearch = Boolean(searchQuery || categoryFilter !== 'All' || conditionFilter !== 'All');
   const rankedItems = useMemo(() => {
     const query = searchQuery.trim().toLowerCase();
-    const activeLocation = currentCoordinates;
-    if (!activeLocation) return [];
+    const activeLocation = debouncedCoordinates;
     const catalogItems = hasActiveSearch
       ? items
       : items;
@@ -1642,7 +1631,7 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
       if (secondAvailable !== firstAvailable) return secondAvailable - firstAvailable;
       return new Date(second.createdAt || 0).getTime() - new Date(first.createdAt || 0).getTime();
     });
-  }, [activeAccountId, categoryFilter, conditionFilter, currentCoordinates, hasActiveSearch, items, radiusKm, requestClock, searchQuery]);
+  }, [activeAccountId, categoryFilter, conditionFilter, debouncedCoordinates, hasActiveSearch, items, radiusKm, requestClock, searchQuery]);
 
   const rescueItems = useMemo(() => rankedItems
     .filter((item) => item.nearExpiry)
@@ -1672,20 +1661,13 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
 
   const activeDiscoveryStage = DISCOVERY_STAGES[discoveryStageIndex] || DISCOVERY_STAGES.at(-1);
   const activeFeedRadius = radiusKm === 'all' ? activeDiscoveryStage.radiusKm : Number(radiusKm);
-  const filteredItems = useMemo(() => rankedItems.filter((item) => (
-    !currentCoordinates || item.distanceKm === null || item.distanceKm <= activeFeedRadius
-  )), [activeFeedRadius, currentCoordinates, rankedItems]);
-  const communityFeedItems = useMemo(() => communityRankedItems.filter((item) => (
-    !currentCoordinates || item.distanceKm === null || item.distanceKm <= activeFeedRadius
-  )), [activeFeedRadius, communityRankedItems, currentCoordinates]);
+  const filteredItems = useMemo(() => rankedItems, [rankedItems]);
+  const communityFeedItems = useMemo(() => communityRankedItems, [communityRankedItems]);
   const hasMoreDiscoveryItems = radiusKm === 'all'
     && discoveryStageIndex < DISCOVERY_STAGES.length - 1
     && communityFeedItems.length < communityRankedItems.length;
   const businessDealsNearby = rankedItems
-    .filter((item) => (
-      item.isBusinessProduct
-      && (item.distanceKm === null || item.distanceKm <= 25)
-    ))
+    .filter((item) => item.isBusinessProduct)
     .sort((first, second) => (
       (first.distanceKm ?? Infinity) - (second.distanceKm ?? Infinity)
       || (second.sellerKarma || 0) - (first.sellerKarma || 0)
@@ -1717,7 +1699,7 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
     ? `Top Good Karma within ${leaderboardLocation}`
     : `Top Good Karma in ${leaderboardLocation}`;
   const karmaLeaderboard = useMemo(() => {
-    const localCoordinates = currentCoordinates;
+    const localCoordinates = debouncedCoordinates;
     const activeScopeValue = leaderboardScope.startsWith('near')
       ? ''
       : getLocationScopeValue(locationEngine.location, leaderboardScope).toLowerCase();
@@ -1809,7 +1791,7 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
       || b.karma - a.karma
       || b.completed - a.completed
     )).slice(0, 5);
-  }, [currentCoordinates, items, leaderboardScope, locationEngine.location, locationLabel, radiusKm, user]);
+  }, [debouncedCoordinates, items, leaderboardScope, locationEngine.location, locationLabel, radiusKm, user]);
   const selectedPublicProfileItems = useMemo(() => {
     if (!selectedPublicProfile) return [];
     return items.filter((item) => (item.sellerName || item.brand) === selectedPublicProfile.name);
@@ -1822,13 +1804,10 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
       <div className="mx-auto flex min-h-screen max-w-6xl flex-col lg:flex-row">
         <aside className="hidden w-80 flex-col justify-between rounded-r-[2rem] border border-amber-100/80 bg-white/75 p-8 shadow-[0_20px_65px_rgba(15,23,42,0.08)] backdrop-blur lg:flex">
           <div>
-            <div className="flex items-center gap-3">
-              <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-gradient-to-br from-amber-500 to-violet-600 text-xl text-white shadow-lg shadow-violet-500/20">✨</div>
-              <div>
-                <p className="text-2xl font-semibold text-slate-900">Drizn</p>
-                <p className="text-sm text-slate-500">Good Things. Nearby.</p>
-              </div>
+            <div className="drizn-logo-card mb-6 max-w-[220px]">
+              <img src="/assets/drizn-logo.png" alt="Drizn logo" className="drizn-logo-image h-[56px] max-w-full" />
             </div>
+            <p className="text-sm font-semibold text-slate-950">Good Things. Nearby.</p>
             <nav className="mt-8 space-y-2">
               <div>
                 <button
@@ -1998,8 +1977,10 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
                   eyebrow="Help reduce waste before these expire"
                   icon={Flame}
                   items={rescueItems}
+                  actor={activeBuyer}
                   onSelectItem={setSelectedItem}
                   onBuyItem={handleBuyNow}
+                  onEditItem={handleEditListing}
                   onToggleFavorite={toggleFavorite}
                   favorites={favorites}
                   rescue
@@ -2178,7 +2159,7 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
                             onClick={() => setSelectedItem(item)}
                             className="flex min-w-0 items-center gap-3 rounded-2xl border border-white/80 bg-white p-2 text-left shadow-sm transition hover:-translate-y-0.5 hover:shadow-md"
                           >
-                            <img src={item.image} alt={item.title} className="h-14 w-14 shrink-0 rounded-xl object-cover" />
+                            <img src={item.image} alt={item.title} loading="lazy" decoding="async" className="h-14 w-14 shrink-0 rounded-xl object-cover" />
                             <div className="min-w-0">
                               <p className="truncate text-sm font-bold text-slate-900">{item.title}</p>
                               <p className="truncate text-xs text-slate-500">{item.category} · {item.location} · {item.distance}</p>
@@ -2201,7 +2182,7 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
 
             {activeView === 'home' && (
               <HomePage
-                user={user}
+                user={activeBuyer}
                 businessSession={businessSession}
                 items={communityFeedItems}
                 businessItems={businessDealsNearby}
@@ -2236,6 +2217,8 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
                 onBuyItem={handleBuyNow}
                 onToggleFavorite={toggleFavorite}
                 favorites={favorites}
+                actor={activeBuyer}
+                onEditItem={handleEditListing}
               />
             )}
             {activeView === 'favorites' && (
@@ -2251,7 +2234,7 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
                   <div className="grid gap-3 sm:grid-cols-2">
                     {favorites.map((item) => (
                       <article key={item.id} className="overflow-hidden rounded-[1.5rem] border border-amber-100 bg-white shadow-sm">
-                        <img src={item.image} alt={item.title} className="h-36 w-full object-cover" />
+                        <img src={item.image} alt={item.title} loading="lazy" decoding="async" className="h-36 w-full object-cover" />
                         <div className="p-4">
                           <div className="flex items-start justify-between gap-2">
                             <div>
@@ -2422,7 +2405,7 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
                       }}
                       className="flex w-full items-center gap-3 rounded-2xl border border-slate-100 bg-slate-50 p-2 text-left transition hover:bg-violet-50"
                     >
-                      <img src={item.image} alt={item.title} className="h-12 w-12 shrink-0 rounded-xl object-cover" />
+                        <img src={item.image} alt={item.title} loading="lazy" decoding="async" className="h-12 w-12 shrink-0 rounded-xl object-cover" />
                       <div className="min-w-0 flex-1">
                         <p className="truncate text-sm font-semibold text-slate-900">{item.title}</p>
                         <p className="truncate text-xs text-slate-500">{item.category} · {item.condition} · {item.distance}</p>

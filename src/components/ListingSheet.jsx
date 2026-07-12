@@ -18,6 +18,42 @@ const CATEGORY_EMOJIS = {
   Others: '✨',
 };
 
+const compressImageFile = async (file, maxWidth = 1600, maxHeight = 1600, quality = 0.82) => {
+  if (!file || !file.type?.startsWith('image/')) return file;
+  const imageUrl = URL.createObjectURL(file);
+  try {
+    const image = await new Promise((resolve, reject) => {
+      const img = new Image();
+      img.onload = () => resolve(img);
+      img.onerror = reject;
+      img.src = imageUrl;
+    });
+
+    const widthRatio = maxWidth / image.width;
+    const heightRatio = maxHeight / image.height;
+    const ratio = Math.min(1, widthRatio, heightRatio);
+    const targetWidth = Math.max(1, Math.round(image.width * ratio));
+    const targetHeight = Math.max(1, Math.round(image.height * ratio));
+
+    const canvas = document.createElement('canvas');
+    canvas.width = targetWidth;
+    canvas.height = targetHeight;
+    const context = canvas.getContext('2d');
+    if (!context) return file;
+    context.drawImage(image, 0, 0, targetWidth, targetHeight);
+
+    const blob = await new Promise((resolve) => {
+      canvas.toBlob(resolve, 'image/jpeg', quality);
+    });
+    if (!blob || blob.size >= file.size) return file;
+    return new File([blob], file.name.replace(/\.[^.]+$/, '.jpg'), { type: 'image/jpeg' });
+  } catch {
+    return file;
+  } finally {
+    URL.revokeObjectURL(imageUrl);
+  }
+};
+
 export default function ListingSheet({ open, onClose, onSubmit, initialItem = null }) {
   const locationEngine = useLocationEngine();
   const [photo, setPhoto]       = useState(null);
@@ -36,6 +72,8 @@ export default function ListingSheet({ open, onClose, onSubmit, initialItem = nu
   const [pickupLocation, setPickupLocation] = useState(null);
   const [showLocationPicker, setShowLocationPicker] = useState(false);
   const [posted, setPosted]       = useState(false);
+  const [submitHint, setSubmitHint] = useState('');
+  const [isSubmitting, setIsSubmitting] = useState(false);
   const fileRef    = useRef(null);
   const cameraRef = useRef(null);
 
@@ -71,7 +109,7 @@ export default function ListingSheet({ open, onClose, onSubmit, initialItem = nu
   function reset() {
     setPhoto(null); setTitle(''); setDesc('');
     setCategory(''); setCustomCategory(''); setCondition('Good'); setExpiry(''); setExpiryTime(''); setTotalQuantity('1');
-    setArea(''); setCoordinates(null); setPickupLocation(null); setPosted(false);
+    setArea(''); setCoordinates(null); setPickupLocation(null); setPosted(false); setSubmitHint(''); setIsSubmitting(false);
   }
 
   function handlePhoto(e) {
@@ -80,27 +118,38 @@ export default function ListingSheet({ open, onClose, onSubmit, initialItem = nu
     if (file) setPhotoFile(file);
   }
 
+  function getValidationErrors() {
+    const errors = [];
+    if (!title.trim()) errors.push('Please add item name');
+    if (!category) errors.push('Please select category');
+    if (category === 'Others' && !customCategory.trim()) errors.push('Please enter category name');
+    if (!Number.isFinite(Number(totalQuantity)) || Number(totalQuantity) < 1) errors.push('Please add quantity');
+    if (!pickupLocation) errors.push('Please add pickup location');
+    return errors;
+  }
+
   function canPost() {
-    return photo && title.trim() && category && pickupLocation
-      && (category !== 'Others' || customCategory.trim());
+    return getValidationErrors().length === 0 && !isSubmitting;
   }
 
   async function doPost() {
+    setIsSubmitting(true);
+    const optimizedPhotoFile = await compressImageFile(photoFile);
     let imageValue = photo || '';
-    if (photoFile) {
+    if (optimizedPhotoFile) {
       try {
         imageValue = await new Promise((resolve, reject) => {
           const reader = new FileReader();
           reader.onload = () => resolve(String(reader.result));
           reader.onerror = reject;
-          reader.readAsDataURL(photoFile);
+          reader.readAsDataURL(optimizedPhotoFile);
         });
       } catch (err) {
         imageValue = photo || '';
       }
     }
 
-    onSubmit({
+    const payload = {
       title: title.trim(),
       category: category === 'Others' ? customCategory.trim() : category,
       condition,
@@ -120,23 +169,54 @@ export default function ListingSheet({ open, onClose, onSubmit, initialItem = nu
       listingType: 'community',
       deliveryMode: 'pickup',
       allowInPersonCollection: true,
-        photoFile: photoFile || null,
-      });
-    setPosted(true);
-    setTimeout(() => {
-      reset();
-      onClose();
-    }, 1400);
+      photoFile: optimizedPhotoFile || null,
+    };
+
+    console.log('[listing-form] submit started', { editing: Boolean(initialItem), payload });
+
+    try {
+      const success = await onSubmit(payload);
+      console.log('[listing-form] API response', { success });
+      if (!success) {
+        setIsSubmitting(false);
+        return;
+      }
+      setPosted(true);
+      setTimeout(() => {
+        reset();
+        onClose();
+      }, 1400);
+    } catch (error) {
+      console.error('[listing-form] submit failed reason', error);
+      setSubmitHint(error?.message || 'Could not post listing');
+      setIsSubmitting(false);
+    }
   }
 
-  function post() { if (!canPost()) return; doPost(); }
+  function post() {
+    const errors = getValidationErrors();
+    console.log('[listing-form] validation result', { valid: errors.length === 0, missingFields: errors });
+    if (errors.length > 0) {
+      setSubmitHint(errors[0]);
+      return;
+    }
+    setSubmitHint('');
+    return doPost();
+  }
+
+  async function handleSubmit(event) {
+    event.preventDefault();
+    if (isSubmitting) return;
+    await post();
+  }
+
   function close() { reset(); onClose(); }
 
   const cats = CATEGORIES;
 
   return (
     <div className="overlay">
-      <div className="sheet" style={{ maxHeight: '92vh', overflowY: 'auto' }}>
+      <form className="sheet" style={{ maxHeight: '92vh', overflow: 'hidden', display: 'flex', flexDirection: 'column' }} onSubmit={handleSubmit}>
         <div style={{ width: 40, height: 4, borderRadius: 999, background: 'var(--zm-border)', margin: '0 auto 16px' }} />
 
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 20 }}>
@@ -144,7 +224,7 @@ export default function ListingSheet({ open, onClose, onSubmit, initialItem = nu
             <div style={{ fontSize: 18, fontWeight: 700, fontFamily: 'Sora, sans-serif' }}>{initialItem ? 'Edit listing' : 'List for free'}</div>
             <div style={{ fontSize: 12, color: 'var(--zm-text-dim)' }}>{initialItem ? 'Update your product details' : 'Photo · details · live instantly'}</div>
           </div>
-          <button onClick={close} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--zm-text-muted)' }}>
+          <button type="button" onClick={close} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--zm-text-muted)' }}>
             <X size={20} />
           </button>
         </div>
@@ -161,6 +241,7 @@ export default function ListingSheet({ open, onClose, onSubmit, initialItem = nu
           </div>
         ) : (
           <>
+            <div className="min-h-0 flex-1 overflow-y-auto px-0 pb-4">
             {/* Photo */}
             <div onClick={() => fileRef.current?.click()} style={{ height: 140, borderRadius: 16, border: `2px dashed ${photo ? 'var(--zm-accent)' : 'var(--zm-border)'}`, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', marginBottom: 10, overflow: 'hidden', background: photo ? 'transparent' : 'var(--zm-surface2)', cursor: 'pointer' }}>
               {photo ? (
@@ -169,8 +250,8 @@ export default function ListingSheet({ open, onClose, onSubmit, initialItem = nu
                 <>
                   <Camera size={28} color="var(--zm-text-dim)" style={{ marginBottom: 6 }} />
                   <span style={{ fontSize: 13, color: 'var(--zm-text-muted)' }}>Add product photo</span>
-                  <span className="hidden sm:inline" style={{ fontSize: 11, color: 'var(--zm-text-dim)', marginTop: 2 }}>Click to upload · Required</span>
-                  <span className="sm:hidden" style={{ fontSize: 11, color: 'var(--zm-text-dim)', marginTop: 2 }}>Use camera or gallery · Required</span>
+                  <span className="hidden sm:inline" style={{ fontSize: 11, color: 'var(--zm-text-dim)', marginTop: 2 }}>Click to upload · Optional</span>
+                  <span className="sm:hidden" style={{ fontSize: 11, color: 'var(--zm-text-dim)', marginTop: 2 }}>Use camera or gallery · Optional</span>
                 </>
               )}
             </div>
@@ -203,6 +284,7 @@ export default function ListingSheet({ open, onClose, onSubmit, initialItem = nu
                 {cats.map(cat => (
                   <button
                     key={cat}
+                    type="button"
                     onClick={() => setCategory(cat)}
                     style={{
                       padding: '5px 12px', borderRadius: 999, fontSize: 12, cursor: 'pointer', fontFamily: 'Inter, sans-serif',
@@ -234,6 +316,7 @@ export default function ListingSheet({ open, onClose, onSubmit, initialItem = nu
                 {CONDITIONS.map(c => (
                   <button
                     key={c}
+                    type="button"
                     onClick={() => setCondition(c)}
                     style={{
                       flex: 1, padding: '6px 4px', borderRadius: 8, fontSize: 11, cursor: 'pointer', fontFamily: 'Inter, sans-serif',
@@ -323,23 +406,23 @@ export default function ListingSheet({ open, onClose, onSubmit, initialItem = nu
               <span style={{ fontSize: 13, color: 'var(--zm-text-muted)' }}>Listing price</span>
               <span style={{ fontSize: 16, fontWeight: 700, color: 'var(--zm-green)' }}>₹0</span>
             </div>
-
-            <button
-              className="btn btn-primary btn-full"
-              style={{ fontSize: 15, padding: '14px' }}
-              onClick={post}
-              disabled={!canPost()}
-            >
-              {!photo ? 'Add a photo to continue'
-                : !title.trim() ? 'Add a title to continue'
-                : !category ? 'Pick a category to continue'
-                : !pickupLocation ? 'Choose pickup location'
-                : category === 'Others' && !customCategory.trim() ? 'Enter category to continue'
-                : initialItem ? 'Save changes' : "Post listing — it's free"}
-            </button>
+            </div>
+            <div className="shrink-0 border-t border-white/70 bg-[linear-gradient(180deg,rgba(255,253,248,0.84)_0%,rgba(255,253,248,1)_32%,rgba(255,253,248,1)_100%)] px-0 pb-[calc(14px+env(safe-area-inset-bottom))] pt-3 sm:border-0 sm:bg-transparent sm:pb-0 sm:pt-0">
+              <button
+                type="submit"
+                className="btn btn-primary btn-full"
+                style={{ fontSize: 15, padding: '14px', touchAction: 'manipulation', WebkitTapHighlightColor: 'transparent' }}
+                disabled={isSubmitting}
+              >
+                {isSubmitting ? 'Posting...' : initialItem ? 'Save changes' : "Post listing — it's free"}
+              </button>
+              {submitHint && (
+                <p className="mt-3 text-center text-sm font-medium text-amber-700">{submitHint}</p>
+              )}
+            </div>
           </>
         )}
-      </div>
+      </form>
       <LocationPicker
         open={showLocationPicker}
         onClose={() => setShowLocationPicker(false)}

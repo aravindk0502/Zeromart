@@ -81,7 +81,7 @@ export default function LocationPicker({
       }
     } catch (error) {
       const message = Number(error?.code) === 1
-        ? 'Location access is blocked. Enable it in browser settings or search manually.'
+        ? 'Enable location from browser settings, or choose address manually.'
         : Number(error?.code) === 2 || Number(error?.code) === 3
           ? 'Current location is unavailable after two attempts. Search for an address manually.'
           : error?.message || 'Current location could not be detected. Search for an address manually.';

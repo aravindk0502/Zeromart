@@ -23,6 +23,10 @@ export function LocationProvider({ children }) {
 
   useEffect(() => {
     locationService.initialize().then((snapshot) => {
+      if (snapshot.location) {
+        setShowPermission(false);
+        refreshLists();
+      }
       if (getLocationMode() === 'manual' && snapshot.location) {
         setShowPermission(false);
         return;
@@ -30,6 +34,7 @@ export function LocationProvider({ children }) {
       if (snapshot.permission === 'denied') {
         setShowPermission(false);
         if (!snapshot.location) setPickerOpen(true);
+        return;
       } else if (!autoGpsStarted.current) {
         autoGpsStarted.current = true;
         locationService.detectCurrentPosition().then(() => {

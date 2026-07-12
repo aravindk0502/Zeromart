@@ -80,7 +80,7 @@ export default function LocationMap({
 
   return (
     <div className="relative overflow-hidden rounded-2xl border border-emerald-100 bg-emerald-50" style={{ height }}>
-      <div ref={containerRef} className="h-full w-full" aria-label={`Map showing ${title}`} />
+      <div ref={containerRef} className={`h-full w-full ${interactive ? '' : 'pointer-events-none'}`} aria-label={`Map showing ${title}`} />
       {status === 'loading' && (
         <div className="absolute inset-0 flex items-center justify-center bg-emerald-50 text-emerald-700">
           <Loader2 size={22} className="animate-spin" />

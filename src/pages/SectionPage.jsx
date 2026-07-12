@@ -1,5 +1,6 @@
 import { ArrowLeft, Heart, MapPin, ShieldCheck, Sparkles, Star } from 'lucide-react';
 import { formatExpiry, normalizeProductStock } from '../services/transactionService';
+import { isListingOwnedByUser } from '../utils/listingOwnership';
 
 const areaCoordinates = {
   Koramangala: { latitude: 12.9352, longitude: 77.6245 },
@@ -101,7 +102,7 @@ const sectionData = {
   },
 };
 
-export default function SectionPage({ section, businessItems = [], onBack, locationLabel = 'Your area', radiusKm = 'all', onSelectItem, onBuyItem, onToggleFavorite, favorites = [] }) {
+export default function SectionPage({ section, businessItems = [], onBack, locationLabel = 'Your area', radiusKm = 'all', onSelectItem, onBuyItem, onToggleFavorite, favorites = [], actor, onEditItem }) {
   const data = sectionData[section] || sectionData.explore;
   const sourceItems = section === 'b2b'
     ? businessItems.map((item) => ({
@@ -146,6 +147,7 @@ export default function SectionPage({ section, businessItems = [], onBack, locat
         <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
           {visibleItems.map((item) => {
             const isFavorite = favorites.some((entry) => entry.id === item.id);
+            const isOwnListing = isListingOwnedByUser(item, actor);
             const stock = normalizeProductStock({ ...item, listingType: section === 'b2b' ? 'business' : item.listingType });
             return (
               <article
@@ -158,7 +160,7 @@ export default function SectionPage({ section, businessItems = [], onBack, locat
                 }}
                 className="group min-w-0 cursor-pointer overflow-hidden rounded-[1.5rem] border border-emerald-100 bg-white shadow-[0_14px_45px_rgba(15,23,42,0.08)] transition hover:-translate-y-1 hover:shadow-[0_22px_60px_rgba(15,23,42,0.12)] focus:outline-none focus:ring-4 focus:ring-emerald-100"
               >
-                {item.image && <img src={item.image} alt={item.title} className="h-40 w-full object-cover sm:h-44" />}
+                {item.image && <img src={item.image} alt={item.title} loading="lazy" decoding="async" className="h-40 w-full object-cover sm:h-44" />}
                 <div className="p-4">
                   {item.isBusinessProduct && (
                     <div className="mb-3 flex flex-wrap items-center gap-2">
@@ -199,19 +201,28 @@ export default function SectionPage({ section, businessItems = [], onBack, locat
                       </div>
                     </div>
                     <button
-                      disabled={item.requestState && !item.requestState.canRequest}
-                      onClick={(event) => { event.stopPropagation(); onBuyItem?.(stock); }}
+                      disabled={!isOwnListing && item.requestState && !item.requestState.canRequest}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        if (isOwnListing) {
+                          onEditItem?.(stock);
+                          return;
+                        }
+                        onBuyItem?.(stock);
+                      }}
                       className={`shrink-0 rounded-full px-4 py-2 text-sm font-semibold ${
-                        item.requestState && !item.requestState.canRequest
+                        !isOwnListing && item.requestState && !item.requestState.canRequest
                           ? 'cursor-not-allowed border border-slate-300 bg-slate-200 text-slate-700 shadow-none'
                           : 'bg-gradient-to-r from-amber-500 to-violet-600 text-white shadow-lg shadow-violet-500/15'
                       }`}
                     >
-                      {item.requestState && !item.requestState.canRequest
-                        ? item.requestState.buttonLabel
-                        : item.isBusinessProduct || item.listingType === 'business' || item.sellerType === 'business'
-                          ? 'Reserve & Collect'
-                          : 'Request to Collect'}
+                      {isOwnListing
+                        ? 'Edit listing'
+                        : item.requestState && !item.requestState.canRequest
+                          ? item.requestState.buttonLabel
+                          : item.isBusinessProduct || item.listingType === 'business' || item.sellerType === 'business'
+                            ? 'Reserve & Collect'
+                            : 'Request to Collect'}
                     </button>
                   </div>
                 </div>

@@ -66,13 +66,25 @@
   --zm-border: #eadcff;
   --zm-accent: #7c3aed;
   --zm-accent-soft: #f3e8ff;
-  --zm-green: #7c3aed;
-  --zm-green-soft: #f3e8ff;
+  --zm-green: #22c55e;
+  --zm-green-soft: #ecfdf5;
   --zm-amber: #d97706;
   --zm-amber-soft: #fef3c7;
   --zm-red: #dc2626;
   --zm-red-soft: #fee2e2;
   --zm-radius: 14px;
+
+  --drizn-black: #0f172a;
+  --drizn-white: #ffffff;
+  --drizn-brand-dark: #0f172a;
+  --drizn-brand-light: #ffffff;
+  --drizn-brand-alt: #111827;
+  --drizn-brand-text-dark: #ffffff;
+  --drizn-brand-text-light: #0f172a;
+  --drizn-brand-accent: #22c55e;
+  --drizn-brand-accent-soft: #ecfdf5;
+  --drizn-brand-muted: #94a3b8;
+
   font-family: Inter, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
   line-height: 1.5;
   font-weight: 400;
@@ -93,9 +105,9 @@ body {
   overflow-x: hidden;
   overscroll-behavior-x: none;
   background:
-    radial-gradient(circle at top left, rgba(245, 158, 11, 0.16), transparent 30%),
-    radial-gradient(circle at top right, rgba(124, 58, 237, 0.14), transparent 30%),
-    linear-gradient(180deg, #fffaf2 0%, #f7f4ff 58%, #f8fafc 100%);
+    radial-gradient(circle at top left, rgba(255, 255, 255, 0.18), transparent 25%),
+    radial-gradient(circle at top right, rgba(15, 23, 42, 0.14), transparent 25%),
+    linear-gradient(180deg, #ffffff 0%, #f8fafc 56%, #0f172a 100%);
 }
 
 html,
@@ -142,6 +154,70 @@ textarea {
 
   .soft-pill {
     @apply rounded-full border border-amber-100 bg-amber-50 px-3 py-2 text-sm font-medium text-amber-800 transition-all duration-200 hover:-translate-y-0.5 hover:bg-amber-100;
+  }
+
+  .drizn-surface-dark {
+    background-color: var(--drizn-brand-dark);
+    color: var(--drizn-brand-text-dark);
+  }
+
+  .drizn-surface-light {
+    background-color: var(--drizn-brand-light);
+    color: var(--drizn-brand-text-light);
+  }
+
+  .drizn-border-dark {
+    border-color: rgba(255,255,255,0.12);
+  }
+
+  .drizn-border-light {
+    border-color: rgba(15,23,42,0.08);
+  }
+
+  .drizn-button-dark {
+    background-color: var(--drizn-brand-dark);
+    color: var(--drizn-brand-text-dark);
+    border: 1px solid rgba(255,255,255,0.12);
+  }
+
+  .drizn-button-light {
+    background-color: var(--drizn-brand-light);
+    color: var(--drizn-brand-text-light);
+    border: 1px solid rgba(15,23,42,0.08);
+  }
+
+  .drizn-logo-card {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 1.75rem;
+    background: linear-gradient(135deg, rgba(255,250,237,0.96), rgba(255,243,224,0.88));
+    border: 1px solid rgba(251,191,36,0.22);
+    box-shadow: 0 28px 60px rgba(15,23,42,0.08);
+    padding: 1rem 1.25rem;
+    max-width: 100%;
+    backdrop-filter: blur(10px);
+  }
+
+  .drizn-logo-image {
+    display: block;
+    width: auto;
+    max-width: 280px;
+    height: auto;
+    max-height: 72px;
+    object-fit: contain;
+  }
+
+  .drizn-logo-mark {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 56px;
+    height: 56px;
+    border-radius: 1rem;
+    background: rgba(255,255,255,0.92);
+    border: 1px solid rgba(15,23,42,0.08);
+    box-shadow: 0 16px 32px rgba(15,23,42,0.08);
   }
 }
 

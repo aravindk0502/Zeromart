@@ -2,7 +2,9 @@
 // JWT is stored in localStorage and sent with every authenticated request.
 
 const BASE = String(import.meta.env.VITE_API_URL || '').replace(/\/$/, '');
-const apiUrl = (path) => `${BASE}${path}`;
+const IS_PRODUCTION = import.meta.env.PROD;
+
+const apiUrl = (path, base = BASE) => `${String(base || '').replace(/\/$/, '')}${path}`;
 
 function getToken() { return localStorage.getItem('zm_token'); }
 export function setToken(t) { localStorage.setItem('zm_token', t); }
@@ -14,33 +16,131 @@ function authHeaders() {
   return t ? { Authorization: `Bearer ${t}` } : {};
 }
 
+const isCorsLikeError = (error) => {
+  const message = String(error?.message || error || '');
+  return /failed to fetch|networkerror|load failed|cors|err_name_not_resolved/i.test(message);
+};
+
+const getCandidateBases = () => {
+  const bases = [];
+  // In production, always prefer the configured API base for shared persistence.
+  if (IS_PRODUCTION && BASE) return [BASE];
+
+  if (BASE) bases.push(BASE);
+  if (typeof window !== 'undefined' && window.location?.origin) bases.push(window.location.origin);
+  return [...new Set(bases.map((value) => String(value || '').replace(/\/$/, '')).filter(Boolean))];
+};
+
+async function requestJson(path, options = {}) {
+  const {
+    method = 'GET',
+    body,
+    auth = false,
+    headers = {},
+  } = options;
+
+  const bases = getCandidateBases();
+  let lastError = null;
+
+  for (const base of bases) {
+    const url = apiUrl(path, base);
+    try {
+      const res = await fetch(url, {
+        method,
+        headers: {
+          ...(body !== undefined ? { 'Content-Type': 'application/json' } : {}),
+          ...(auth ? authHeaders() : {}),
+          ...headers,
+        },
+        ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
+      });
+
+      const raw = await res.text();
+      let data;
+      try {
+        data = raw ? JSON.parse(raw) : {};
+      } catch {
+        data = { raw };
+      }
+
+      if (!res.ok) {
+        console.error('[api] request failed', { url, status: res.status, responseBody: data });
+        lastError = new Error(data?.error?.message || data?.error || `Request failed (${res.status})`);
+        continue;
+      }
+
+      if (base !== BASE) {
+        console.warn('[api] fallback base used', { base, path });
+      }
+      return data;
+    } catch (error) {
+      console.error('[api] request error', {
+        url,
+        error: String(error?.message || error),
+        possibleCorsError: isCorsLikeError(error),
+      });
+      lastError = error;
+    }
+  }
+
+  throw lastError || new Error('Request failed');
+}
+
+async function requestUpload(path, file) {
+  const bases = getCandidateBases();
+  let lastError = null;
+
+  for (const base of bases) {
+    const url = apiUrl(path, base);
+    try {
+      const form = new FormData();
+      form.append('file', file);
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: { ...(isLoggedIn() ? authHeaders() : {}) },
+        body: form,
+      });
+      const raw = await res.text();
+      let data;
+      try {
+        data = raw ? JSON.parse(raw) : {};
+      } catch {
+        data = { raw };
+      }
+
+      if (!res.ok) {
+        console.error('[api] upload failed', { url, status: res.status, responseBody: data });
+        lastError = new Error(data?.error || `Upload failed (${res.status})`);
+        continue;
+      }
+
+      if (base !== BASE) {
+        console.warn('[api] fallback base used', { base, path });
+      }
+      return data?.url;
+    } catch (error) {
+      console.error('[api] upload error', {
+        url,
+        error: String(error?.message || error),
+        possibleCorsError: isCorsLikeError(error),
+      });
+      lastError = error;
+    }
+  }
+
+  throw lastError || new Error('Upload failed');
+}
+
 async function post(path, body, auth = false) {
-  const res = await fetch(apiUrl(path), {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', ...(auth ? authHeaders() : {}) },
-    body: JSON.stringify(body),
-  });
-  const data = await res.json();
-  if (!res.ok) throw new Error(data.error || 'Request failed');
-  return data;
+  return requestJson(path, { method: 'POST', body, auth });
 }
 
 async function get(path) {
-  const res = await fetch(apiUrl(path), { headers: authHeaders() });
-  const data = await res.json();
-  if (!res.ok) throw new Error(data.error || 'Request failed');
-  return data;
+  return requestJson(path, { method: 'GET', auth: true });
 }
 
 async function put(path, body) {
-  const res = await fetch(apiUrl(path), {
-    method: 'PUT',
-    headers: { 'Content-Type': 'application/json', ...authHeaders() },
-    body: JSON.stringify(body),
-  });
-  const data = await res.json();
-  if (!res.ok) throw new Error(data.error || 'Request failed');
-  return data;
+  return requestJson(path, { method: 'PUT', body, auth: true });
 }
 
 // ── Auth ──────────────────────────────────────────────────────────────────────
@@ -66,35 +166,18 @@ export const insertProduct = (listing, user) => post('/api/products', {
 }, true);
 
 export const uploadImage = (file) => {
-  const form = new FormData();
-  form.append('file', file);
-  return fetch(apiUrl('/api/upload'), {
-    method: 'POST',
-    headers: { ...(isLoggedIn() ? authHeaders() : {}) },
-    body: form,
-  }).then(async (r) => {
-    const data = await r.json();
-    if (!r.ok) throw new Error(data.error || 'Upload failed');
-    return data.url;
-  });
+  return requestUpload('/api/upload', file);
 };
 
 export const updateProduct = (id, data) => put(`/api/products/${id}`, data);
-export const deleteProduct = (id) => fetch(apiUrl(`/api/products/${id}`), { method: 'DELETE', headers: authHeaders() }).then((r) => r.json());
+export const deleteProduct = (id) => requestJson(`/api/products/${id}`, { method: 'DELETE', auth: true });
 export const fetchPersistence = () => get('/api/persistence');
 
 // ── Live Listings ────────────────────────────────────────────────────────────
-export const fetchListings = () => get('/api/listings').catch(() => []);
+export const fetchListings = () => requestJson('/api/listings', { method: 'GET', auth: false });
 export const insertListing = (listing) => post('/api/listings', listing, isLoggedIn());
 export const updateListing = (id, listing) => put(`/api/listings/${encodeURIComponent(id)}`, listing);
-export const deleteListing = (id) => fetch(apiUrl(`/api/listings/${encodeURIComponent(id)}`), {
-  method: 'DELETE',
-  headers: authHeaders(),
-}).then(async (r) => {
-  const data = await r.json().catch(() => ({}));
-  if (!r.ok) throw new Error(data.error || 'Delete failed');
-  return data;
-});
+export const deleteListing = (id) => requestJson(`/api/listings/${encodeURIComponent(id)}`, { method: 'DELETE', auth: true });
 
 // ── Favourites ────────────────────────────────────────────────────────────────
 export const fetchFavourites  = ()   => get('/api/favourites').catch(() => []);

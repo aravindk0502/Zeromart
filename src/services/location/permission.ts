@@ -1,5 +1,15 @@
 import type { LocationPermissionState } from './types';
 
+const isIPhoneLikeBrowser = () => {
+  if (typeof navigator === 'undefined') return false;
+  return /iphone|ipad|ipod/i.test(String(navigator.userAgent || ''));
+};
+
+export const getLocationBlockedHelpText = () => {
+  if (isIPhoneLikeBrowser()) return 'Enable location from browser settings, or choose address manually.';
+  return 'Location access is blocked. Enable it in browser settings or choose an address manually.';
+};
+
 export const getLocationPermission = async (): Promise<LocationPermissionState> => {
   if (!navigator.geolocation) return 'unsupported';
   if (!navigator.permissions?.query) return 'unknown';
@@ -13,7 +23,7 @@ export const getLocationPermission = async (): Promise<LocationPermissionState> 
 
 export const locationErrorMessage = (error: GeolocationPositionError | any) => {
   const messages: Record<number, string> = {
-    1: 'Location access is blocked. Enable it in browser settings or choose an address manually.',
+    1: getLocationBlockedHelpText(),
     2: 'GPS signal is unavailable. Check your connection or choose an address manually.',
     3: 'GPS is taking too long. Move near a window or choose an address manually.',
   };

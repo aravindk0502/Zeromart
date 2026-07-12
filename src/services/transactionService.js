@@ -9,6 +9,8 @@ const STORAGE_KEYS = {
   pendingKarmaActions: 'pendingKarmaActions',
 };
 
+let liveListingsMemory = [];
+
 export const PURCHASE_LIMIT_WINDOW_MS = 24 * 60 * 60 * 1000;
 
 const read = (key, fallback = []) => {
@@ -88,7 +90,7 @@ export const normalizeLiveListing = (listing = {}) => {
   const coordinates = getLiveCoordinates({ ...listing, locationData });
   const quantity = Math.max(0, Number(listing.totalQuantity ?? listing.quantity ?? listing.availableQuantity ?? 1) || 0);
   const availableQuantity = Math.max(0, Number(listing.availableQuantity ?? listing.quantity ?? quantity) || 0);
-  const sellerName = listing.sellerName || listing.storeName || listing.businessName || (isBusiness ? 'Business Store' : 'Unknown');
+  const sellerName = listing.sellerName || listing.storeName || listing.businessName || (isBusiness ? 'Business Store' : 'Drizn User');
   const expiryDate = listing.expiryDate || listing.validTill || '';
   const id = listing.id || `${isBusiness ? 'business' : 'community'}-${Date.now()}`;
   const serverPersisted = Boolean(listing.serverPersisted || listing.serverId || listing._server === true);
@@ -127,7 +129,9 @@ export const normalizeLiveListing = (listing = {}) => {
   });
 };
 
-export const getLiveListings = () => read(STORAGE_KEYS.liveListings).map(normalizeLiveListing);
+export const getLiveListings = () => {
+  return liveListingsMemory.map(normalizeLiveListing);
+};
 
 export const saveLiveListings = (listings) => {
   const deduped = new Map();
@@ -135,11 +139,13 @@ export const saveLiveListings = (listings) => {
     deduped.set(String(listing.id), listing);
   });
   const value = [...deduped.values()];
-  localStorage.setItem(STORAGE_KEYS.liveListings, JSON.stringify(value));
-  window.dispatchEvent(new CustomEvent('zeromart-live-listings-change', { detail: { key: STORAGE_KEYS.liveListings, value } }));
-  window.dispatchEvent(new CustomEvent('zeromart-transactions-change', { detail: { key: STORAGE_KEYS.liveListings, value } }));
-  // Single public signal that any live-listing write happened (same-tab live refresh).
-  window.dispatchEvent(new Event('drizn_listings_updated'));
+  liveListingsMemory = value;
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent('zeromart-live-listings-change', { detail: { key: STORAGE_KEYS.liveListings, value } }));
+    window.dispatchEvent(new CustomEvent('zeromart-transactions-change', { detail: { key: STORAGE_KEYS.liveListings, value } }));
+    // Single public signal that any live-listing write happened (same-tab live refresh).
+    window.dispatchEvent(new Event('drizn_listings_updated'));
+  }
   return value;
 };
 

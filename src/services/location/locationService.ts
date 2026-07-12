@@ -1,6 +1,13 @@
 import { formatDistance, haversineKm, sortByNearest } from './distance';
 import { getAutocompleteSuggestions, getPlaceDetails } from './geocode';
-import { getDevicePosition, getLocationPermission, locationErrorMessage, stopWatchingPosition, watchDevicePosition } from './permission';
+import {
+  getDevicePosition,
+  getLocationBlockedHelpText,
+  getLocationPermission,
+  locationErrorMessage,
+  stopWatchingPosition,
+  watchDevicePosition,
+} from './permission';
 import { reverseGeocodeCoordinates } from './reverseGeocode';
 import type {
   Coordinates, LiveLocationSnapshot, LocationPermissionState, PlaceSuggestion, StructuredLocation,
@@ -418,7 +425,7 @@ class ZeroMartLocationService {
     const permission = await getLocationPermission();
     this.publish({ permission, status: this.snapshot.location ? 'watching' : 'starting', error: '', notice: '' });
     if (permission === 'denied') {
-      const error = new Error('Location access is blocked. Enable it in browser settings or search manually.');
+      const error = new Error(getLocationBlockedHelpText());
       (error as any).code = 1;
       this.publish({ status: 'error', error: error.message });
       throw error;
@@ -455,7 +462,7 @@ class ZeroMartLocationService {
       || null;
     this.publish({ permission, status: 'starting', error: '', notice: '' });
     if (permission === 'denied') {
-      const error = new Error('Location access is blocked. Enable it in browser settings or choose an address manually.');
+      const error = new Error(getLocationBlockedHelpText());
       (error as any).code = 1;
       this.publish({ status: 'error', error: error.message });
       throw error;

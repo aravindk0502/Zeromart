@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { ArrowLeft, MapPin, Pencil, ShieldCheck, Sparkles, Trash2, User, X } from 'lucide-react';
 import { formatExpiry, normalizeProductStock } from '../services/transactionService';
+import { isListingOwnedByUser } from '../utils/listingOwnership';
 
 export default function ItemDetailsModal({ item, onClose, onRequest, onRequireLogin, onEdit, onDelete, user }) {
   const [previewProfileImage, setPreviewProfileImage] = useState('');
@@ -34,13 +35,7 @@ export default function ItemDetailsModal({ item, onClose, onRequest, onRequireLo
               : distanceKm <= 50
                 ? 'Within 50 km'
                 : 'More than 50 km away';
-  const isOwnListing = Boolean(user && (
-    item.isOwn
-    || item.ownerMobile === user.mobile
-    || (user.businessId && item.businessId === user.businessId)
-    || item.sellerName === user.name
-    || item.sellerName === 'You'
-  ));
+  const isOwnListing = isListingOwnedByUser(item, user);
 
   const handlePrimary = () => {
     if (!user) {
@@ -77,7 +72,7 @@ export default function ItemDetailsModal({ item, onClose, onRequest, onRequireLo
             </div>
           </div>
 
-          <img src={item.image} alt={item.title} className="mt-4 h-56 w-full rounded-[1.5rem] object-cover" />
+          <img src={item.image} alt={item.title} loading="lazy" decoding="async" className="mt-4 h-56 w-full rounded-[1.5rem] object-cover" />
 
           <div className="mt-4 flex flex-wrap gap-2 text-sm">
             <span className="rounded-full bg-amber-50 px-3 py-1 font-medium text-violet-700">{item.condition}</span>

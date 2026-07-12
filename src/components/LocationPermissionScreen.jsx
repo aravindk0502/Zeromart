@@ -26,9 +26,14 @@ export default function LocationPermissionScreen() {
         </div>
         <h1 className="mt-6 text-3xl font-extrabold text-slate-900">Enable Location</h1>
         <p className="mx-auto mt-3 max-w-sm text-sm leading-6 text-slate-600">We use your location to show nearby products, local businesses and accurate pickup distances.</p>
+        {engine.permissionStatus === 'denied' && (
+          <p className="mx-auto mt-3 max-w-sm rounded-xl bg-amber-50 px-3 py-2 text-sm font-semibold text-amber-800">
+            Enable location from browser settings, or choose address manually.
+          </p>
+        )}
         {engine.error && <p className="mt-4 rounded-xl bg-rose-50 px-3 py-2 text-sm font-semibold text-rose-700">{engine.error}</p>}
         <button onClick={detectAndCompleteAddress} disabled={engine.status === 'locating'} className="mt-6 inline-flex w-full items-center justify-center gap-2 rounded-2xl bg-emerald-700 px-4 py-3.5 font-bold text-white shadow-lg shadow-emerald-700/20 disabled:opacity-60"><LocateFixed size={19} />{engine.status === 'locating' ? 'Detecting location...' : 'Allow Location'}</button>
-        <button onClick={engine.chooseManually} className="mt-3 w-full rounded-2xl border border-emerald-200 bg-white px-4 py-3.5 font-bold text-emerald-800">Choose Location Manually</button>
+        <button onClick={engine.chooseManually} className="mt-3 w-full rounded-2xl border border-emerald-200 bg-white px-4 py-3.5 font-bold text-emerald-800">Open manual search</button>
         <p className="mt-4 text-xs leading-5 text-slate-400">Coordinates power distance and collection eligibility. Your precise address is only used for location features.</p>
       </section>
     </div>
