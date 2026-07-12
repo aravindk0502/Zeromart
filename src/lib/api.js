@@ -1,8 +1,17 @@
 // All API calls go to our Express server.
 // JWT is stored in localStorage and sent with every authenticated request.
 
-const BASE = String(import.meta.env.VITE_API_URL || '').replace(/\/$/, '');
+const normalizeApiBase = (value = '') => {
+  const raw = String(value || '').trim();
+  const match = raw.match(/https?:\/\/[^\]\s)]+/i);
+  return String(match ? match[0] : raw)
+    .replace(/\/+$/, '')
+    .replace(/\/api$/i, '');
+};
+
+const BASE = normalizeApiBase(import.meta.env.VITE_API_URL);
 const IS_PRODUCTION = import.meta.env.PROD;
+const PROD_API_FALLBACK = 'https://api.drizn.com';
 
 const apiUrl = (path, base = BASE) => `${String(base || '').replace(/\/$/, '')}${path}`;
 
@@ -23,11 +32,21 @@ const isCorsLikeError = (error) => {
 
 const getCandidateBases = () => {
   const bases = [];
-  // In production, always prefer the configured API base for shared persistence.
-  if (IS_PRODUCTION && BASE) return [BASE];
+  const currentOrigin = typeof window !== 'undefined' && window.location?.origin
+    ? window.location.origin
+    : '';
+
+  // In production, always prefer the configured shared API, then try the
+  // deployed same-origin API before giving up. Never fall back to localStorage.
+  if (IS_PRODUCTION) {
+    if (BASE) bases.push(BASE);
+    if (currentOrigin) bases.push(currentOrigin);
+    if (!BASE) bases.push(PROD_API_FALLBACK);
+    return [...new Set(bases.map((value) => String(value || '').replace(/\/$/, '')).filter(Boolean))];
+  }
 
   if (BASE) bases.push(BASE);
-  if (typeof window !== 'undefined' && window.location?.origin) bases.push(window.location.origin);
+  if (currentOrigin) bases.push(currentOrigin);
   return [...new Set(bases.map((value) => String(value || '').replace(/\/$/, '')).filter(Boolean))];
 };
 
@@ -41,6 +60,7 @@ async function requestJson(path, options = {}) {
 
   const bases = getCandidateBases();
   let lastError = null;
+  const isGet = String(method).toUpperCase() === 'GET';
 
   for (const base of bases) {
     const url = apiUrl(path, base);
@@ -49,9 +69,11 @@ async function requestJson(path, options = {}) {
         method,
         headers: {
           ...(body !== undefined ? { 'Content-Type': 'application/json' } : {}),
+          ...(isGet ? { 'Cache-Control': 'no-store', Pragma: 'no-cache' } : {}),
           ...(auth ? authHeaders() : {}),
           ...headers,
         },
+        cache: isGet ? 'no-store' : 'default',
         ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
       });
 

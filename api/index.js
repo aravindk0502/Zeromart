@@ -2,21 +2,29 @@ import serverless from 'serverless-http';
 
 let appHandler;
 
-const SUPABASE_URL = String(process.env.SUPABASE_URL || '')
-  .trim()
-  .replace(/\/rest\/v1\/?$/, '')
-  .replace(/\/$/, '');
-const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE
+function normalizeEnvUrl(value = '') {
+  const raw = String(value || '').trim();
+  const match = raw.match(/https?:\/\/[^\]\s)]+/i);
+  return String(match ? match[0] : raw)
+    .replace(/\/rest\/v1\/?$/i, '')
+    .replace(/\/+$/, '');
+}
+
+const SUPABASE_URL = normalizeEnvUrl(process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || '');
+const SUPABASE_KEY = String(process.env.SUPABASE_SERVICE_ROLE
   || process.env.SUPABASE_SERVICE_ROLE_KEY
   || process.env.SUPABASE_KEY
   || process.env.VITE_SUPABASE_ANON_KEY
-  || '';
+  || '').trim();
 
 const jsonHeaders = {
   'Content-Type': 'application/json',
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Methods': 'GET,POST,PUT,DELETE,OPTIONS',
   'Access-Control-Allow-Headers': 'Content-Type,Authorization',
+  'Cache-Control': 'no-store, max-age=0',
+  Pragma: 'no-cache',
+  Vary: 'Origin',
 };
 
 const DEFAULT_SELLER_NAME = 'Drizn User';
@@ -62,7 +70,7 @@ function supabaseHeaders(extra = {}) {
   return {
     apikey: SUPABASE_KEY,
     Authorization: `Bearer ${SUPABASE_KEY}`,
-    ...jsonHeaders,
+    'Content-Type': 'application/json',
     ...extra,
   };
 }
@@ -166,12 +174,18 @@ function safeDate(value) {
 function listingRowToClient(row) {
   const locationData = parseJsonValue(row.location_data, {});
   const metadata = parseJsonValue(row.metadata, {});
-  const sellerType = row.seller_type || metadata.sellerType || 'community';
-  const latitude = numberOrNull(row.latitude ?? locationData.latitude ?? locationData.lat);
-  const longitude = numberOrNull(row.longitude ?? locationData.longitude ?? locationData.lng);
-  const imageUrl = row.image_url || metadata.image || metadata.photo || '';
-  const sellerName = cleanSellerName(row.seller_name, row.store_name, metadata.sellerName, metadata.businessName);
+  const sellerTypeRaw = row.seller_type || row.listing_type || metadata.sellerType || metadata.listingType || 'community';
+  const sellerTypeValue = String(sellerTypeRaw).toLowerCase();
+  const sellerType = sellerTypeValue === 'business' || sellerTypeValue === 'store' ? 'business' : 'community';
+  const latitude = numberOrNull(row.latitude ?? locationData.latitude ?? locationData.lat ?? metadata.latitude ?? metadata.lat);
+  const longitude = numberOrNull(row.longitude ?? locationData.longitude ?? locationData.lng ?? metadata.longitude ?? metadata.lng);
+  const imageUrl = row.image_url || row.photo_url || row.image || metadata.imageUrl || metadata.photoUrl || metadata.image || metadata.photo || '';
+  const sellerName = cleanSellerName(row.seller_name, row.store_name, metadata.sellerName, metadata.businessName, metadata.storeName);
   const sellerAvatar = metadata.sellerAvatar || metadata.profileImage || metadata.avatarUrl || metadata.logoUrl || '';
+  const quantity = Math.max(0, Number(row.quantity ?? metadata.quantity ?? row.available_quantity ?? metadata.availableQuantity ?? 1) || 0);
+  const availableQuantity = Math.max(0, Number(row.available_quantity ?? metadata.availableQuantity ?? row.quantity ?? metadata.quantity ?? quantity) || 0);
+  const karma = Number(row.karma_score ?? metadata.sellerKarma ?? metadata.karma ?? 0) || 0;
+  const status = String(row.status || metadata.status || 'active').toLowerCase();
 
   return {
     id: row.id,
@@ -195,17 +209,17 @@ function listingRowToClient(row) {
     isBusinessProduct: sellerType === 'business',
     businessId: row.business_id || metadata.businessId || '',
     storeName: row.store_name || '',
-    sellerKarma: Number(row.karma_score || 0),
-    karma: Number(row.karma_score || 0),
-    totalQuantity: Number(row.quantity || 0),
-    quantity: Number(row.quantity || 0),
-    availableQuantity: Number(row.available_quantity || 0),
+    sellerKarma: karma,
+    karma,
+    totalQuantity: quantity,
+    quantity,
+    availableQuantity,
     reservedQuantity: Number(row.reserved_quantity || 0),
     soldQuantity: Number(row.sold_quantity || 0),
-    price: Number(row.price || 0),
-    expiryDate: safeDate(row.expiry_date),
+    price: Number(row.price ?? metadata.price ?? 0) || 0,
+    expiryDate: safeDate(row.expiry_date || row.expiry || metadata.expiryDate || metadata.validTill),
     expiryTime: row.expiry_time || '',
-    status: row.status === 'active' ? 'Available' : row.status,
+    status: status === 'active' || status === 'available' || status === 'live' || status === 'published' ? 'Available' : status,
     location: row.location || row.area || row.city || '',
     area: row.area || locationData.area || locationData.locality || '',
     city: row.city || locationData.city || '',
@@ -219,6 +233,92 @@ function listingRowToClient(row) {
     updatedAt: row.updated_at,
     metadata,
   };
+}
+
+const CLOSED_LISTING_STATUSES = new Set([
+  'sold',
+  'sold_out',
+  'sold-out',
+  'completed',
+  'collected',
+  'expired',
+  'deleted',
+  'removed',
+  'hidden',
+  'inactive',
+  'cancelled',
+  'canceled',
+]);
+const PUBLIC_LISTING_STATUSES = new Set(['', 'active', 'available', 'live', 'published', 'reserved']);
+
+function listingStatusValue(row = {}) {
+  const metadata = parseJsonValue(row.metadata, {});
+  return String(row.status ?? metadata.status ?? 'active').trim().toLowerCase();
+}
+
+function listingAvailableQuantity(row = {}) {
+  const metadata = parseJsonValue(row.metadata, {});
+  const raw = row.available_quantity
+    ?? metadata.availableQuantity
+    ?? row.available
+    ?? metadata.available
+    ?? row.quantity
+    ?? metadata.quantity;
+  if (raw === undefined || raw === null || raw === '') return 1;
+  return Math.max(0, Number(raw) || 0);
+}
+
+function listingExpiryMs(row = {}) {
+  const metadata = parseJsonValue(row.metadata, {});
+  const expiry = row.expiry_date
+    || row.expiry
+    || row.expires_at
+    || metadata.expiryDate
+    || metadata.expiry
+    || metadata.expiresAt
+    || metadata.validTill;
+  if (!expiry) return Infinity;
+  const ms = Date.parse(expiry);
+  return Number.isFinite(ms) ? ms : Infinity;
+}
+
+function isPublicListingRow(row = {}) {
+  const status = listingStatusValue(row);
+  if (CLOSED_LISTING_STATUSES.has(status)) return false;
+  if (status && !PUBLIC_LISTING_STATUSES.has(status)) return false;
+  if (listingAvailableQuantity(row) <= 0) return false;
+  const expiryMs = listingExpiryMs(row);
+  if (Number.isFinite(expiryMs) && expiryMs < Date.now()) return false;
+  return true;
+}
+
+function isBusinessListingRow(row = {}) {
+  const metadata = parseJsonValue(row.metadata, {});
+  const type = String(row.seller_type || row.listing_type || metadata.sellerType || metadata.listingType || '').toLowerCase();
+  return type.includes('business') || type.includes('store');
+}
+
+function rescuePriorityMs(row = {}) {
+  const expiryMs = listingExpiryMs(row);
+  if (!Number.isFinite(expiryMs)) return Infinity;
+  const remaining = expiryMs - Date.now();
+  if (remaining < 0) return Infinity;
+  return remaining <= 5 * 24 * 60 * 60 * 1000 ? remaining : Infinity;
+}
+
+function sortPublicListingRows(a, b) {
+  const aRescue = rescuePriorityMs(a);
+  const bRescue = rescuePriorityMs(b);
+  const aIsRescue = Number.isFinite(aRescue);
+  const bIsRescue = Number.isFinite(bRescue);
+  if (aIsRescue !== bIsRescue) return aIsRescue ? -1 : 1;
+  if (aIsRescue && bIsRescue && aRescue !== bRescue) return aRescue - bRescue;
+
+  const aBiz = isBusinessListingRow(a);
+  const bBiz = isBusinessListingRow(b);
+  if (aBiz !== bBiz) return aBiz ? -1 : 1;
+
+  return new Date(b.created_at || 0) - new Date(a.created_at || 0);
 }
 
 async function readRequestJson(req) {
@@ -391,7 +491,7 @@ async function handleListings(req, res) {
   const restUrl = normalizeSupabaseRestUrl();
 
   if (req.method === 'GET' || req.method === 'HEAD') {
-    const url = `${restUrl}/listings?select=*&status=in.(active,available,live)&available_quantity=gt.0&order=created_at.desc`;
+    const url = `${restUrl}/listings?select=*&order=created_at.desc&limit=1000`;
     const response = await fetch(url, {
       headers: supabaseHeaders(),
       signal: AbortSignal.timeout(12000),
@@ -400,16 +500,11 @@ async function handleListings(req, res) {
     if (!response.ok) {
       return sendJson(res, response.status, { error: 'Could not fetch listings', details: text.slice(0, 200) });
     }
-    const today = new Date().toISOString().slice(0, 10);
-    const rows = await attachListingProfiles(JSON.parse(text || '[]')
-      .filter((row) => !row.expiry_date || String(row.expiry_date).slice(0, 10) >= today)
-      .sort((a, b) => {
-        const aRescue = a.expiry_date && String(a.expiry_date).slice(0, 10) <= today ? 0 : 1;
-        const bRescue = b.expiry_date && String(b.expiry_date).slice(0, 10) <= today ? 0 : 1;
-        if (aRescue !== bRescue) return aRescue - bRescue;
-        if (a.seller_type !== b.seller_type) return a.seller_type === 'business' ? -1 : 1;
-        return new Date(b.created_at || 0) - new Date(a.created_at || 0);
-      }));
+    const parsedRows = JSON.parse(text || '[]');
+    const publicRows = (Array.isArray(parsedRows) ? parsedRows : [])
+      .filter(isPublicListingRow)
+      .sort(sortPublicListingRows);
+    const rows = await attachListingProfiles(publicRows);
     return sendJson(res, 200, rows.map(listingRowToClient));
   }
 

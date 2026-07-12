@@ -98,6 +98,8 @@ const mergeRemoteWithLocalDrafts = (remoteListings) => {
   return nextListings;
 };
 
+const getSyncFallbackListings = () => (isProductionRuntime ? [] : getLiveListings());
+
 export const syncListingsFromBackend = async () => {
   const now = Date.now();
   if (cachedListings && now - cachedAtMs < LISTING_CACHE_TTL_MS) return cachedListings;
@@ -105,12 +107,24 @@ export const syncListingsFromBackend = async () => {
 
   inflightSyncPromise = fetchListings()
     .then((rows) => {
-      if (!Array.isArray(rows)) return getLiveListings();
+      if (!Array.isArray(rows)) {
+        const fallback = getSyncFallbackListings();
+        cachedListings = fallback;
+        cachedAtMs = Date.now();
+        return fallback;
+      }
       const remoteListings = rows.map(fromServerListing);
       const merged = mergeRemoteWithLocalDrafts(remoteListings);
       cachedListings = merged;
       cachedAtMs = Date.now();
       return merged;
+    })
+    .catch((error) => {
+      console.error('[liveListingService] sync failed', error);
+      const fallback = getSyncFallbackListings();
+      cachedListings = fallback;
+      cachedAtMs = Date.now();
+      return fallback;
     })
     .finally(() => {
       inflightSyncPromise = null;

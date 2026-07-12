@@ -1,9 +1,18 @@
 import { createClient } from '@supabase/supabase-js';
 
-const supabaseUrl = import.meta.env.VITE_SUPABASE_URL || '';
-const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY || '';
+const normalizeSupabaseUrl = (value = '') => {
+  const raw = String(value || '').trim();
+  const match = raw.match(/https?:\/\/[^\]\s)]+/i);
+  return String(match ? match[0] : raw)
+    .replace(/\/rest\/v1\/?$/i, '')
+    .replace(/\/+$/, '');
+};
 
-export const isSupabaseConfigured = Boolean(supabaseUrl && supabaseAnonKey);
+const supabaseUrl = normalizeSupabaseUrl(import.meta.env.VITE_SUPABASE_URL);
+const supabaseAnonKey = String(import.meta.env.VITE_SUPABASE_ANON_KEY || '').trim();
+const hasPublicAnonKey = Boolean(supabaseAnonKey && !supabaseAnonKey.startsWith('sb_secret_'));
+
+export const isSupabaseConfigured = Boolean(supabaseUrl && hasPublicAnonKey);
 
 export const supabase = isSupabaseConfigured
   ? createClient(supabaseUrl, supabaseAnonKey, {
