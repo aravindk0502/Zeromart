@@ -103,11 +103,27 @@ const isLegacyDemoRecord = (record) => {
     record.recipientId,
     record.requestId,
   ].filter(Boolean).map((value) => String(value).toLowerCase());
-  return identifiers.some((value) => (
+  const searchableText = [
+    record.title,
+    record.description,
+    record.sellerName,
+    record.storeName,
+    record.brand,
+    record.category,
+    record.subtitle,
+    ...identifiers,
+  ].filter(Boolean).map((value) => String(value).toLowerCase());
+  return searchableText.some((value) => (
     value.startsWith('demo_')
     || value.startsWith('demo-')
     || value.startsWith('chennai-')
     || value.startsWith('business-product-demo-')
+    || value.includes(' e2e ')
+    || value.includes('e2e')
+    || value.includes('codex')
+    || value.includes('verification item')
+    || value.includes('dummy')
+    || value.includes('test item')
   ));
 };
 

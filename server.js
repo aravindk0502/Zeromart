@@ -496,6 +496,35 @@ function listingDbPayload(listing) {
   };
 }
 
+function isTestListingRow(row = {}) {
+  const metadata = parseJsonValue(row.metadata, {});
+  const searchable = [
+    row.id,
+    row.title,
+    row.description,
+    row.seller_id,
+    row.seller_name,
+    row.store_name,
+    row.business_id,
+    row.category,
+    row.location,
+    metadata.sellerName,
+    metadata.storeName,
+    metadata.businessName,
+    metadata.originalId,
+    metadata.ownerName,
+  ].filter(Boolean).map((value) => String(value).toLowerCase());
+  return searchable.some((value) => (
+    value.includes('e2e')
+    || value.includes('codex')
+    || value.includes('dummy')
+    || value.includes('test item')
+    || value.includes('verification item')
+    || value.startsWith('demo-')
+    || value.startsWith('demo_')
+  ));
+}
+
 function canUseSupabaseTable() {
   return Boolean(supabase);
 }
@@ -511,6 +540,7 @@ async function fetchListingsViaSupabase() {
   if (error) throw error;
   const today = new Date().toISOString().slice(0, 10);
   return (data || [])
+    .filter((row) => !isTestListingRow(row))
     .filter((row) => !row.expiry_date || String(row.expiry_date).slice(0, 10) >= today)
     .sort((a, b) => {
       const aRescue = a.expiry_date && String(a.expiry_date).slice(0, 10) <= today ? 0 : 1;
@@ -725,7 +755,7 @@ app.get('/api/listings', async (_req, res) => {
          CASE WHEN seller_type = 'business' THEN 0 ELSE 1 END,
          created_at DESC`
     );
-    return res.json(result.rows.map(listingRowToClient));
+    return res.json(result.rows.filter((row) => !isTestListingRow(row)).map(listingRowToClient));
   } catch (err) {
     console.error('[LISTINGS] fetch failed', err.message || err);
     return res.status(500).json({ error: 'Could not fetch listings' });

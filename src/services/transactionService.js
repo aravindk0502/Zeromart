@@ -190,12 +190,30 @@ const toFiniteNumber = (value, fallback = 0) => {
   return Number.isFinite(parsed) ? parsed : fallback;
 };
 
+const isBusinessListing = (product = {}) => {
+  const type = String(product?.listingType || product?.sellerType || '').toLowerCase();
+  return Boolean(product?.isBusinessProduct || type === 'business' || type === 'store');
+};
+
+const getNearExpiryClasses = (product = {}) => (
+  isBusinessListing(product)
+    ? {
+        rescueClassName: 'bg-orange-500',
+        statusClassName: 'bg-orange-100 text-orange-800',
+      }
+    : {
+        rescueClassName: 'bg-violet-600',
+        statusClassName: 'bg-violet-100 text-violet-800',
+      }
+);
+
 export const getExpiryBadgeState = (product, now = Date.now()) => {
   const expiryTimestamp = getExpiryTimestamp(product);
   const hasExpiry = expiryTimestamp !== null;
   const rescueWindowDays = Math.max(1, toFiniteNumber(product?.expiryWindowDays ?? product?.listBeforeExpiryDays, 5));
   const fallbackNearExpiry = Boolean(product?.nearExpiryDeal || product?.nearExpiry);
   const fallbackExpired = String(product?.status || '').toLowerCase() === 'expired';
+  const nearExpiryClasses = getNearExpiryClasses(product);
 
   if (!hasExpiry) {
     if (fallbackExpired) {
@@ -224,9 +242,9 @@ export const getExpiryBadgeState = (product, now = Date.now()) => {
         nearExpiry: true,
         showPublic: true,
         rescueLabel: 'Near Expiry',
-        rescueClassName: 'bg-amber-600',
+        rescueClassName: nearExpiryClasses.rescueClassName,
         statusLabel: 'Near Expiry',
-        statusClassName: 'bg-amber-100 text-amber-800',
+        statusClassName: nearExpiryClasses.statusClassName,
         formattedExpiry: '',
       };
     }
@@ -279,9 +297,9 @@ export const getExpiryBadgeState = (product, now = Date.now()) => {
       nearExpiry: true,
       showPublic: true,
       rescueLabel: 'Rescue Now',
-      rescueClassName: 'bg-red-600',
+      rescueClassName: nearExpiryClasses.rescueClassName,
       statusLabel: 'Expires Today',
-      statusClassName: 'bg-rose-100 text-rose-800',
+      statusClassName: nearExpiryClasses.statusClassName,
       formattedExpiry,
     };
   }
@@ -296,9 +314,9 @@ export const getExpiryBadgeState = (product, now = Date.now()) => {
       nearExpiry: true,
       showPublic: true,
       rescueLabel: 'Expires Today',
-      rescueClassName: 'bg-red-600',
+      rescueClassName: nearExpiryClasses.rescueClassName,
       statusLabel: 'Expires Today',
-      statusClassName: 'bg-rose-100 text-rose-800',
+      statusClassName: nearExpiryClasses.statusClassName,
       formattedExpiry,
     };
   }
@@ -313,9 +331,9 @@ export const getExpiryBadgeState = (product, now = Date.now()) => {
       nearExpiry: true,
       showPublic: true,
       rescueLabel: 'Expires Tomorrow',
-      rescueClassName: 'bg-orange-500',
+      rescueClassName: nearExpiryClasses.rescueClassName,
       statusLabel: 'Expires Tomorrow',
-      statusClassName: 'bg-orange-100 text-orange-800',
+      statusClassName: nearExpiryClasses.statusClassName,
       formattedExpiry,
     };
   }
@@ -332,9 +350,9 @@ export const getExpiryBadgeState = (product, now = Date.now()) => {
       nearExpiry,
       showPublic: true,
       rescueLabel,
-      rescueClassName: 'bg-amber-500',
+      rescueClassName: nearExpiryClasses.rescueClassName,
       statusLabel,
-      statusClassName: 'bg-amber-100 text-amber-800',
+      statusClassName: nearExpiryClasses.statusClassName,
       formattedExpiry,
     };
   }

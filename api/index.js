@@ -324,7 +324,37 @@ function listingExpiryMs(row = {}) {
   return Number.isFinite(ms) ? ms : Infinity;
 }
 
+function isTestListingRow(row = {}) {
+  const metadata = parseJsonValue(row.metadata, {});
+  const searchable = [
+    row.id,
+    row.title,
+    row.description,
+    row.seller_id,
+    row.seller_name,
+    row.store_name,
+    row.business_id,
+    row.category,
+    row.location,
+    metadata.sellerName,
+    metadata.storeName,
+    metadata.businessName,
+    metadata.originalId,
+    metadata.ownerName,
+  ].filter(Boolean).map((value) => String(value).toLowerCase());
+  return searchable.some((value) => (
+    value.includes('e2e')
+    || value.includes('codex')
+    || value.includes('dummy')
+    || value.includes('test item')
+    || value.includes('verification item')
+    || value.startsWith('demo-')
+    || value.startsWith('demo_')
+  ));
+}
+
 function isPublicListingRow(row = {}) {
+  if (isTestListingRow(row)) return false;
   const status = listingStatusValue(row);
   if (CLOSED_LISTING_STATUSES.has(status)) return false;
   if (status && !PUBLIC_LISTING_STATUSES.has(status)) return false;

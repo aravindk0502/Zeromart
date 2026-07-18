@@ -130,7 +130,7 @@ export function ProductRail({
                   </button>
                   <span className="shrink-0 font-bold text-amber-600">★ {item.sellerKarma || 0}</span>
                 </div>
-                {expiryBadge.statusLabel && (
+                {expiryBadge.statusLabel && !expiryBadge.nearExpiry && (
                   <div className="mt-2 text-xs font-bold">
                     <span className={`rounded-full px-2.5 py-1 ${expiryBadge.statusClassName}`}>{expiryBadge.statusLabel}</span>
                   </div>
@@ -281,7 +281,7 @@ export default function HomePage({
                         <ShieldCheck size={12} /> Drizn Partner
                       </span>
                       <span className="rounded-full bg-emerald-700/90 px-2.5 py-1 text-[10px] font-bold text-white shadow-sm backdrop-blur">
-                        {expiryBadge.nearExpiry ? expiryBadge.statusLabel || 'Near Expiry' : 'Verified'}
+                        Verified
                       </span>
                     </div>
                   )}
@@ -348,7 +348,7 @@ export default function HomePage({
                   <h3 className="mt-3 line-clamp-2 text-lg font-extrabold text-slate-900">{item.title}</h3>
                   <div className="mt-2 flex flex-wrap gap-1.5 text-[11px] font-bold">
                     <span className="rounded-full bg-emerald-50 px-2.5 py-1 text-emerald-800">{item.requestState?.stockLabel || (stock.availableQuantity === 1 ? 'Only 1 left' : `${stock.availableQuantity} left`)}</span>
-                    {expiryBadge.statusLabel && <span className={`rounded-full px-2.5 py-1 ${expiryBadge.statusClassName}`}>{expiryBadge.statusLabel}</span>}
+                    {expiryBadge.statusLabel && !expiryBadge.nearExpiry && <span className={`rounded-full px-2.5 py-1 ${expiryBadge.statusClassName}`}>{expiryBadge.statusLabel}</span>}
                   </div>
                   <div className="mt-3 flex items-center justify-between gap-2">
                     <p className="min-w-0 truncate text-sm text-slate-500">{item.condition || item.category || 'Available'} · {item.distance || 'nearby'}</p>

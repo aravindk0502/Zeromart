@@ -221,7 +221,7 @@ export default function SectionPage({ section, businessItems = [], onBack, locat
                   </div>
                   <div className="mt-2 flex flex-wrap gap-1.5 text-xs font-semibold">
                     <span className="rounded-full bg-emerald-50 px-2.5 py-1 text-emerald-700">{item.requestState?.stockLabel || (stock.availableQuantity === 1 ? 'Only 1 left' : `${stock.availableQuantity} available`)}</span>
-                    {expiryBadge.statusLabel && <span className={`rounded-full px-2.5 py-1 ${expiryBadge.statusClassName}`}>{expiryBadge.statusLabel}</span>}
+                    {expiryBadge.statusLabel && !expiryBadge.nearExpiry && <span className={`rounded-full px-2.5 py-1 ${expiryBadge.statusClassName}`}>{expiryBadge.statusLabel}</span>}
                   </div>
                   <div className="mt-4 flex items-center justify-between gap-3 rounded-[1rem] bg-slate-50 px-3 py-3">
                     <div className="min-w-0">
