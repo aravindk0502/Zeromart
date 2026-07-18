@@ -2517,7 +2517,14 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
             <div className="flex items-start justify-between gap-3">
               <div className="flex items-center gap-3">
                 <div className="flex h-16 w-16 items-center justify-center overflow-hidden rounded-full bg-gradient-to-br from-amber-100 to-violet-100 text-lg font-bold text-violet-700">
-                  <img src={selectedPublicProfile.image || buildFallbackAvatarImage(selectedPublicProfile.name)} alt={selectedPublicProfile.name} className="h-full w-full object-cover" />
+                  <img
+                    src={selectedPublicProfile.image || buildFallbackAvatarImage(selectedPublicProfile.name)}
+                    alt={selectedPublicProfile.name}
+                    className="h-full w-full object-cover"
+                    onError={(event) => {
+                      event.currentTarget.src = buildFallbackAvatarImage(selectedPublicProfile.name);
+                    }}
+                  />
                 </div>
                 <div>
                   <p className="text-sm font-semibold text-violet-600">Good karma profile</p>

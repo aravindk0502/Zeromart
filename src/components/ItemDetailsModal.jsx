@@ -130,7 +130,14 @@ export default function ItemDetailsModal({ item, onClose, onRequest, onRequireLo
                 className="flex h-11 w-11 shrink-0 items-center justify-center overflow-hidden rounded-full bg-amber-100 text-violet-700"
                 aria-label={`Open ${sellerName} profile`}
               >
-                <img src={sellerAvatar} alt={sellerName} className="h-full w-full object-cover" />
+                <img
+                  src={sellerAvatar}
+                  alt={sellerName}
+                  className="h-full w-full object-cover"
+                  onError={(event) => {
+                    event.currentTarget.src = getFallbackAvatarImage(sellerName);
+                  }}
+                />
               </button>
               <div>
                 <button type="button" onClick={() => onOpenSellerProfile?.(item)} className="font-semibold text-slate-900 hover:text-violet-700">

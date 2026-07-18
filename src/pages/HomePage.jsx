@@ -128,7 +128,14 @@ export function ProductRail({
                     className="flex min-w-0 items-center gap-2 text-slate-500 hover:text-violet-700"
                   >
                     <span className="flex h-6 w-6 shrink-0 items-center justify-center overflow-hidden rounded-full bg-amber-100 text-[10px] font-extrabold text-violet-700">
-                      <img src={sellerAvatar} alt={sellerName} className="h-full w-full object-cover" />
+                      <img
+                        src={sellerAvatar}
+                        alt={sellerName}
+                        className="h-full w-full object-cover"
+                        onError={(event) => {
+                          event.currentTarget.src = getFallbackAvatarImage(sellerName);
+                        }}
+                      />
                     </span>
                     <span className="truncate">{sellerName}</span>
                   </button>
@@ -319,7 +326,14 @@ export default function HomePage({
                         className={`flex h-11 w-11 shrink-0 items-center justify-center overflow-hidden rounded-xl text-sm font-extrabold text-white shadow-lg ${isBusiness ? 'bg-gradient-to-br from-emerald-600 to-emerald-800 shadow-emerald-700/20' : 'bg-gradient-to-br from-amber-500 to-violet-600 shadow-violet-500/20'}`}
                         aria-label={`Open ${sellerName} profile`}
                       >
-                        <img src={sellerAvatar} alt={sellerName} className="h-full w-full object-cover" />
+                        <img
+                          src={sellerAvatar}
+                          alt={sellerName}
+                          className="h-full w-full object-cover"
+                          onError={(event) => {
+                            event.currentTarget.src = getFallbackAvatarImage(sellerName);
+                          }}
+                        />
                       </button>
                       <div className="min-w-0">
                         <button

@@ -240,7 +240,14 @@ export default function SectionPage({ section, businessItems = [], onBack, locat
                         className="flex min-w-0 items-center gap-2 text-sm font-semibold text-slate-800 hover:text-violet-700"
                       >
                         <span className="flex h-7 w-7 shrink-0 items-center justify-center overflow-hidden rounded-full bg-amber-100 text-[10px] font-extrabold text-violet-700">
-                          <img src={sellerAvatar} alt={sellerName} className="h-full w-full object-cover" />
+                          <img
+                            src={sellerAvatar}
+                            alt={sellerName}
+                            className="h-full w-full object-cover"
+                            onError={(event) => {
+                              event.currentTarget.src = getFallbackAvatarImage(sellerName);
+                            }}
+                          />
                         </span>
                         <span className="truncate">{sellerName}</span>
                       </button>
