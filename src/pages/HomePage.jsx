@@ -246,9 +246,9 @@ export default function HomePage({
           </div>
         </div>
 
-        <div className="grid gap-3 p-4 md:grid-cols-2 sm:p-5 xl:grid-cols-3">
+        <div className="grid gap-3 p-4 sm:p-5 md:grid-cols-2 xl:grid-cols-3 [@media(min-width:1800px)]:grid-cols-4">
           {nearbyProducts.length === 0 ? (
-            <div className="rounded-[1.5rem] border border-dashed border-slate-200 bg-white/80 p-6 text-center sm:col-span-2 xl:col-span-3">
+            <div className="rounded-[1.5rem] border border-dashed border-slate-200 bg-white/80 p-6 text-center sm:col-span-2 xl:col-span-3 [@media(min-width:1800px)]:col-span-4">
               <p className="text-base font-bold text-slate-700">No live listings yet.</p>
               <p className="mt-1 text-sm text-slate-500">List an item and it will appear here instantly.</p>
             </div>
@@ -271,7 +271,7 @@ export default function HomePage({
                 onKeyDown={(event) => {
                   if (event.key === 'Enter' || event.key === ' ') onSelectItem?.(stock);
                 }}
-                className={`group cursor-pointer overflow-hidden rounded-[1.5rem] border bg-white ring-1 shadow-[0_14px_45px_rgba(15,23,42,0.08)] transition-all duration-200 hover:-translate-y-1 hover:shadow-[0_22px_60px_rgba(15,23,42,0.12)] focus:outline-none focus:ring-4 ${isBusiness ? 'border-emerald-200 ring-emerald-100/90 focus:ring-emerald-100' : 'border-amber-200/90 ring-amber-100/90 focus:ring-violet-100'}`}
+                className={`group flex h-full min-w-0 cursor-pointer flex-col overflow-hidden rounded-[1.5rem] border bg-white ring-1 shadow-[0_14px_45px_rgba(15,23,42,0.08)] transition-all duration-200 hover:-translate-y-1 hover:shadow-[0_22px_60px_rgba(15,23,42,0.12)] focus:outline-none focus:ring-4 ${isBusiness ? 'border-emerald-200 ring-emerald-100/90 focus:ring-emerald-100' : 'border-amber-200/90 ring-amber-100/90 focus:ring-violet-100'}`}
               >
                 <div className="relative">
                   <img src={item.image} alt={item.title} loading="lazy" decoding="async" className="h-40 w-full object-cover transition duration-500 group-hover:scale-[1.03]" />
@@ -303,9 +303,9 @@ export default function HomePage({
                   </button>
                 </div>
 
-                <div className="p-4">
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="flex min-w-0 items-center gap-3">
+                <div className="flex flex-1 flex-col p-4">
+                  <div className="flex flex-wrap items-start gap-3">
+                    <div className="flex min-w-0 flex-1 items-center gap-3">
                       <button
                         type="button"
                         onClick={(event) => {
@@ -330,12 +330,12 @@ export default function HomePage({
                         >
                           {sellerName}
                         </button>
-                        <p className="mt-0.5 truncate text-[11px] font-semibold uppercase tracking-[0.1em] text-slate-400">
+                        <p className="mt-0.5 text-[11px] font-semibold uppercase tracking-[0.1em] text-slate-400">
                           {isBusiness ? 'Local business partner' : 'Community listing'}
                         </p>
                       </div>
                     </div>
-                    <div className="flex items-center gap-2">
+                    <div className="ml-auto flex shrink-0 flex-wrap items-center justify-end gap-2">
                       <span className="shrink-0 rounded-full bg-amber-50 px-3 py-1.5 text-sm font-extrabold text-amber-800">{getPriceLabel(item)}</span>
                       {item.serverPersisted || isOwnListing ? (
                         <span className="shrink-0 rounded-full bg-emerald-50 px-2 py-1 text-xs font-bold text-emerald-800">Live</span>
@@ -350,10 +350,10 @@ export default function HomePage({
                     <span className="rounded-full bg-emerald-50 px-2.5 py-1 text-emerald-800">{item.requestState?.stockLabel || (stock.availableQuantity === 1 ? 'Only 1 left' : `${stock.availableQuantity} left`)}</span>
                     {expiryBadge.statusLabel && !expiryBadge.nearExpiry && <span className={`rounded-full px-2.5 py-1 ${expiryBadge.statusClassName}`}>{expiryBadge.statusLabel}</span>}
                   </div>
-                  <div className="mt-3 flex items-center justify-between gap-2">
-                    <p className="min-w-0 truncate text-sm text-slate-500">{item.condition || item.category || 'Available'} · {item.distance || 'nearby'}</p>
+                  <div className="mt-3">
+                    <p className="min-w-0 text-sm text-slate-500">{item.condition || item.category || 'Available'} · {item.distance || 'nearby'}</p>
                   </div>
-                  <div className="mt-4 flex flex-wrap items-center justify-between gap-2 border-t border-slate-100 pt-3">
+                  <div className="mt-auto flex flex-wrap items-center gap-2 border-t border-slate-100 pt-3">
                     <span className={`inline-flex max-w-full items-center gap-1.5 rounded-full px-3 py-2 text-xs font-bold ${isBusiness ? 'bg-emerald-50 text-emerald-800' : 'bg-gradient-to-r from-amber-50 to-violet-50 text-amber-700'}`}>
                       <Star size={13} fill="currentColor" />
                       <span className="truncate">{item.sellerKarma || 0} {isBusiness ? 'Store Karma' : 'karma'}</span>
@@ -364,7 +364,7 @@ export default function HomePage({
                         event.stopPropagation();
                         isOwnListing ? onEditItem?.(item) : onBuyItem?.(stock);
                       }}
-                      className={`w-full shrink-0 rounded-full px-4 py-2 text-sm font-bold transition sm:w-auto ${
+                      className={`w-full shrink-0 rounded-full px-4 py-2 text-sm font-bold transition ${
                         unavailable
                           ? 'cursor-not-allowed border border-slate-300 bg-slate-200 text-slate-800 shadow-none'
                           : isBusiness
