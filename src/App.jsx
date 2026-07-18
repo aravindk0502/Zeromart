@@ -35,6 +35,7 @@ import {
 import { isLoggedIn, uploadImage } from './lib/api';
 import {
   deleteListingFromBackend,
+  invalidateListingCache,
   saveListingToBackend,
   subscribeToListingChanges,
   syncListingsFromBackend,
@@ -258,7 +259,7 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
   useEffect(() => {
     if (typeof window === 'undefined') return;
     let mounted = true;
-    const refreshListings = () => syncListingsFromBackend()
+    const refreshListings = (options = {}) => syncListingsFromBackend(options)
       .then((listings) => {
         if (!mounted || !Array.isArray(listings)) return;
         setItems(normalizeListingsForMarketplace(listings));
@@ -271,18 +272,25 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
         setNotice(cached.length ? '' : 'Live listings are temporarily unavailable');
       });
 
-    refreshListings();
-    const unsubscribe = subscribeToListingChanges(refreshListings);
+    refreshListings({ force: true });
+    const unsubscribe = subscribeToListingChanges(() => refreshListings({ force: true }));
     const refreshWhenVisible = () => {
-      if (document.visibilityState === 'visible') refreshListings();
+      if (document.visibilityState === 'visible') refreshListings({ force: true });
     };
-    window.addEventListener('focus', refreshListings);
+    const refreshOnLocalWrite = () => {
+      invalidateListingCache();
+      refreshListings({ force: true });
+    };
+    const refreshOnFocus = () => refreshListings({ force: true });
+    window.addEventListener('focus', refreshOnFocus);
     document.addEventListener('visibilitychange', refreshWhenVisible);
+    window.addEventListener('drizn_listings_updated', refreshOnLocalWrite);
 
     return () => {
       mounted = false;
-      window.removeEventListener('focus', refreshListings);
+      window.removeEventListener('focus', refreshOnFocus);
       document.removeEventListener('visibilitychange', refreshWhenVisible);
+      window.removeEventListener('drizn_listings_updated', refreshOnLocalWrite);
       unsubscribe?.();
     };
   }, []);

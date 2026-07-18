@@ -20,6 +20,11 @@ let cachedListings = null;
 let cachedAtMs = 0;
 let inflightSyncPromise = null;
 
+const resetListingCache = () => {
+  cachedListings = null;
+  cachedAtMs = 0;
+};
+
 const getCoordinates = (listing = {}) => {
   const coordinates = listing.coordinates || {};
   const locationData = listing.locationData || {};
@@ -98,11 +103,16 @@ const mergeRemoteWithLocalDrafts = (remoteListings) => {
   return nextListings;
 };
 
-const getSyncFallbackListings = () => (isProductionRuntime ? [] : getLiveListings());
+const getSyncFallbackListings = () => {
+  if (Array.isArray(cachedListings) && cachedListings.length) return cachedListings;
+  const localListings = getLiveListings();
+  if (!isProductionRuntime) return localListings;
+  return localListings.filter((listing) => listing.serverPersisted);
+};
 
-export const syncListingsFromBackend = async () => {
+export const syncListingsFromBackend = async ({ force = false } = {}) => {
   const now = Date.now();
-  if (cachedListings && now - cachedAtMs < LISTING_CACHE_TTL_MS) return cachedListings;
+  if (!force && cachedListings && now - cachedAtMs < LISTING_CACHE_TTL_MS) return cachedListings;
   if (inflightSyncPromise) return inflightSyncPromise;
 
   inflightSyncPromise = fetchListings()
@@ -136,8 +146,7 @@ export const syncListingsFromBackend = async () => {
 export const saveListingToBackend = async (listing) => {
   const saved = await insertListing(toListingPayload(listing));
   const normalized = fromServerListing(saved);
-  cachedListings = null;
-  cachedAtMs = 0;
+  resetListingCache();
   upsertLiveListing(normalized);
   return normalized;
 };
@@ -145,8 +154,7 @@ export const saveListingToBackend = async (listing) => {
 export const updateListingInBackend = async (id, listing) => {
   const saved = await updateListingApi(id, toListingPayload({ ...listing, id }));
   const normalized = fromServerListing(saved);
-  cachedListings = null;
-  cachedAtMs = 0;
+  resetListingCache();
   upsertLiveListing(normalized);
   return normalized;
 };
@@ -154,10 +162,13 @@ export const updateListingInBackend = async (id, listing) => {
 export const deleteListingFromBackend = async (id) => {
   if (!id) return null;
   const result = await deleteListingApi(id);
-  cachedListings = null;
-  cachedAtMs = 0;
+  resetListingCache();
   removeLiveListing(id);
   return result;
+};
+
+export const invalidateListingCache = () => {
+  resetListingCache();
 };
 
 export const subscribeToListingChanges = (onChange) => {
@@ -165,6 +176,7 @@ export const subscribeToListingChanges = (onChange) => {
   const channel = supabase
     .channel('drizn-live-listings')
     .on('postgres_changes', { event: '*', schema: 'public', table: 'listings' }, () => {
+      resetListingCache();
       onChange?.();
     })
     .subscribe();
