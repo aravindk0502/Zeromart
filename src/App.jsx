@@ -2077,7 +2077,14 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
                   <button className="ml-auto flex h-[58px] w-[62px] shrink-0 flex-col items-center justify-center gap-1 rounded-xl border border-white/80 bg-white/95 px-1.5 py-1 text-[10px] font-bold leading-none text-violet-700 shadow-sm transition-all duration-200 hover:-translate-y-0.5 hover:bg-white lg:ml-0 lg:h-[42px] lg:w-[58px] lg:flex-row lg:rounded-xl" onClick={() => handleNav('profile')} aria-label="Open profile">
                     <span className="flex h-8 w-8 shrink-0 items-center justify-center overflow-hidden rounded-full bg-violet-50 lg:h-7 lg:w-7">
                       {user.profileImage ? (
-                        <img src={user.profileImage} alt={user.name} className="h-full w-full object-cover" />
+                        <img
+                          src={user.profileImage}
+                          alt={user.name}
+                          className="h-full w-full object-cover"
+                          onError={(event) => {
+                            event.currentTarget.src = buildFallbackAvatarImage(user.name || 'Profile');
+                          }}
+                        />
                       ) : (
                         user.name?.split(' ').map((part) => part[0]).join('').slice(0, 2).toUpperCase() || <User size={18} />
                       )}
@@ -2183,7 +2190,14 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
                             </div>
                             <div className="flex items-start gap-3">
                               <div className="relative flex h-12 w-12 shrink-0 items-center justify-center overflow-hidden rounded-full border-2 border-white bg-gradient-to-br from-amber-100 to-violet-100 text-sm font-extrabold text-violet-700 shadow-md">
-                                {profile.image ? <img src={profile.image} alt={profile.name} className="h-full w-full object-cover" /> : initials}
+                                <img
+                                  src={profile.image || buildFallbackAvatarImage(profile.name)}
+                                  alt={profile.name}
+                                  className="h-full w-full object-cover"
+                                  onError={(event) => {
+                                    event.currentTarget.src = buildFallbackAvatarImage(profile.name);
+                                  }}
+                                />
                               </div>
                               <div className="min-w-0 flex-1">
                                 <p className="truncate text-sm font-extrabold text-slate-900">{profile.name}</p>
