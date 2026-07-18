@@ -1,17 +1,33 @@
-import { ArrowLeft, MapPin, Pencil, ShieldCheck, Sparkles, Trash2, User, X } from 'lucide-react';
+import { ArrowLeft, MapPin, Pencil, ShieldCheck, Sparkles, Trash2, X } from 'lucide-react';
 import { getExpiryBadgeState, normalizeProductStock } from '../services/transactionService';
 import { isListingOwnedByUser } from '../utils/listingOwnership';
+
+const getInitials = (name = 'Drizn User') => String(name)
+  .split(' ')
+  .filter(Boolean)
+  .map((part) => part[0])
+  .join('')
+  .slice(0, 2)
+  .toUpperCase() || 'DU';
+
+const getFallbackAvatarImage = (name = 'Drizn User') => {
+  const initials = getInitials(name);
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="96" height="96" viewBox="0 0 96 96"><defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stop-color="#f59e0b"/><stop offset="100%" stop-color="#7c3aed"/></linearGradient></defs><rect width="96" height="96" rx="48" fill="url(#g)"/><text x="50%" y="54%" text-anchor="middle" dominant-baseline="middle" font-family="Inter,Arial,sans-serif" font-size="34" font-weight="700" fill="#ffffff">${initials}</text></svg>`;
+  return `data:image/svg+xml;utf8,${encodeURIComponent(svg)}`;
+};
 
 export default function ItemDetailsModal({ item, onClose, onRequest, onRequireLogin, onEdit, onDelete, user, onOpenSellerProfile }) {
   if (!item) return null;
   const product = normalizeProductStock(item);
   const expiryBadge = item.expiryBadge || getExpiryBadgeState(product);
+  const sellerName = item.sellerName || item.sellerProfile?.name || 'Drizn User';
   const sellerAvatar = item.sellerProfileImage
     || item.sellerAvatar
     || item.avatarUrl
     || item.sellerProfile?.avatarUrl
     || item.sellerProfile?.logoUrl
-    || (isListingOwnedByUser(item, user) ? user?.profileImage || '' : '');
+    || (isListingOwnedByUser(item, user) ? user?.profileImage || '' : '')
+    || getFallbackAvatarImage(sellerName);
 
   const parsedDistance = Number.parseFloat(String(item.distance || '').replace(/[^\d.]/g, ''));
   const distanceKm = Number.isFinite(item.distanceKm)
@@ -112,11 +128,9 @@ export default function ItemDetailsModal({ item, onClose, onRequest, onRequireLo
                 type="button"
                 onClick={() => onOpenSellerProfile?.(item)}
                 className="flex h-11 w-11 shrink-0 items-center justify-center overflow-hidden rounded-full bg-amber-100 text-violet-700"
-                aria-label={`Open ${item.sellerName} profile`}
+                aria-label={`Open ${sellerName} profile`}
               >
-                {sellerAvatar
-                  ? <img src={sellerAvatar} alt={item.sellerName} className="h-full w-full object-cover" />
-                  : (item.sellerInitials || item.sellerProfile?.initials || <User size={18} />)}
+                <img src={sellerAvatar} alt={sellerName} className="h-full w-full object-cover" />
               </button>
               <div>
                 <button type="button" onClick={() => onOpenSellerProfile?.(item)} className="font-semibold text-slate-900 hover:text-violet-700">

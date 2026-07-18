@@ -175,6 +175,17 @@ const formatJoinedDate = (value) => {
   if (Number.isNaN(next.getTime())) return '';
   return next.toLocaleDateString([], { month: 'short', year: 'numeric' });
 };
+const buildFallbackAvatarImage = (name = 'Drizn User') => {
+  const initials = String(name)
+    .split(' ')
+    .filter(Boolean)
+    .map((part) => part[0])
+    .join('')
+    .slice(0, 2)
+    .toUpperCase() || 'DU';
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128"><defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stop-color="#f59e0b"/><stop offset="100%" stop-color="#7c3aed"/></linearGradient></defs><rect width="128" height="128" rx="64" fill="url(#g)"/><text x="50%" y="54%" text-anchor="middle" dominant-baseline="middle" font-family="Inter,Arial,sans-serif" font-size="44" font-weight="700" fill="#ffffff">${initials}</text></svg>`;
+  return `data:image/svg+xml;utf8,${encodeURIComponent(svg)}`;
+};
 
 const loadNotifications = () => {
   try {
@@ -1885,7 +1896,13 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
       || item.sellerInitials
       || 'Drizn User';
     const initials = (sellerProfile.initials || item.sellerInitials || name.split(' ').map((part) => part[0]).join('').slice(0, 2).toUpperCase() || 'DU').slice(0, 2).toUpperCase();
-    const image = sellerProfile.logoUrl || sellerProfile.avatarUrl || item.sellerProfileImage || item.sellerAvatar || item.avatarUrl || '';
+    const image = sellerProfile.logoUrl
+      || sellerProfile.avatarUrl
+      || item.sellerProfileImage
+      || item.sellerAvatar
+      || item.avatarUrl
+      || (isOwnedByActiveAccount(item) ? user?.profileImage || '' : '')
+      || buildFallbackAvatarImage(name);
     const accountTypeRaw = String(sellerProfile.accountType || item.sellerType || (item.isBusinessProduct ? 'business' : 'community')).toLowerCase();
     const accountType = accountTypeRaw === 'business' || accountTypeRaw === 'store' ? 'business' : 'community';
     const listingCount = items.filter((entry) => {
@@ -2500,13 +2517,7 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
             <div className="flex items-start justify-between gap-3">
               <div className="flex items-center gap-3">
                 <div className="flex h-16 w-16 items-center justify-center overflow-hidden rounded-full bg-gradient-to-br from-amber-100 to-violet-100 text-lg font-bold text-violet-700">
-                  {selectedPublicProfile.image ? (
-                    <img src={selectedPublicProfile.image} alt={selectedPublicProfile.name} className="h-full w-full object-cover" />
-                  ) : (
-                    selectedPublicProfile.initials
-                    || selectedPublicProfile.name.split(' ').map((part) => part[0]).join('').slice(0, 2).toUpperCase()
-                    || 'DU'
-                  )}
+                  <img src={selectedPublicProfile.image || buildFallbackAvatarImage(selectedPublicProfile.name)} alt={selectedPublicProfile.name} className="h-full w-full object-cover" />
                 </div>
                 <div>
                   <p className="text-sm font-semibold text-violet-600">Good karma profile</p>

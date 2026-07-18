@@ -45,6 +45,12 @@ const getInitials = (name = 'Drizn User') => String(name)
   .slice(0, 2)
   .toUpperCase() || 'U';
 
+const getFallbackAvatarImage = (name = 'Drizn User') => {
+  const initials = getInitials(name);
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="96" height="96" viewBox="0 0 96 96"><defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stop-color="#f59e0b"/><stop offset="100%" stop-color="#7c3aed"/></linearGradient></defs><rect width="96" height="96" rx="48" fill="url(#g)"/><text x="50%" y="54%" text-anchor="middle" dominant-baseline="middle" font-family="Inter,Arial,sans-serif" font-size="34" font-weight="700" fill="#ffffff">${initials}</text></svg>`;
+  return `data:image/svg+xml;utf8,${encodeURIComponent(svg)}`;
+};
+
 export function ProductRail({
   title, eyebrow, icon: Icon, items, onSelectItem, onBuyItem, onToggleFavorite, favorites, rescue = false, actor, onEditItem, onOpenSellerProfile,
 }) {
@@ -68,7 +74,7 @@ export function ProductRail({
           const isOwnListing = isListingOwnedByUser(item, actor);
           const isFavorite = favorites.some((entry) => entry.id === item.id);
           const sellerName = getSellerName(item);
-          const sellerAvatar = getSellerAvatar(item) || (isOwnListing ? actor?.profileImage || '' : '');
+          const sellerAvatar = getSellerAvatar(item) || (isOwnListing ? actor?.profileImage || '' : '') || getFallbackAvatarImage(sellerName);
           const sellerInitials = String(item?.sellerInitials || item?.sellerProfile?.initials || getInitials(sellerName) || 'DU').slice(0, 2).toUpperCase();
           return (
             <article
@@ -122,9 +128,7 @@ export function ProductRail({
                     className="flex min-w-0 items-center gap-2 text-slate-500 hover:text-violet-700"
                   >
                     <span className="flex h-6 w-6 shrink-0 items-center justify-center overflow-hidden rounded-full bg-amber-100 text-[10px] font-extrabold text-violet-700">
-                      {sellerAvatar
-                        ? <img src={sellerAvatar} alt={sellerName} className="h-full w-full object-cover" />
-                        : sellerInitials || 'DU'}
+                      <img src={sellerAvatar} alt={sellerName} className="h-full w-full object-cover" />
                     </span>
                     <span className="truncate">{sellerName}</span>
                   </button>
@@ -260,7 +264,7 @@ export default function HomePage({
             const isFavorite = favorites.some((entry) => entry.id === item.id);
             const unavailable = !isOwnListing && item.requestState && !item.requestState.canRequest;
             const sellerName = getSellerName(item);
-            const sellerAvatar = getSellerAvatar(item) || (isOwnListing ? user?.profileImage || '' : '');
+            const sellerAvatar = getSellerAvatar(item) || (isOwnListing ? user?.profileImage || '' : '') || getFallbackAvatarImage(sellerName);
             const sellerInitials = String(item?.sellerInitials || item?.sellerProfile?.initials || getInitials(sellerName) || 'DU').slice(0, 2).toUpperCase();
             return (
               <article
@@ -315,9 +319,7 @@ export default function HomePage({
                         className={`flex h-11 w-11 shrink-0 items-center justify-center overflow-hidden rounded-xl text-sm font-extrabold text-white shadow-lg ${isBusiness ? 'bg-gradient-to-br from-emerald-600 to-emerald-800 shadow-emerald-700/20' : 'bg-gradient-to-br from-amber-500 to-violet-600 shadow-violet-500/20'}`}
                         aria-label={`Open ${sellerName} profile`}
                       >
-                        {sellerAvatar
-                          ? <img src={sellerAvatar} alt={sellerName} className="h-full w-full object-cover" />
-                          : sellerInitials || 'DU'}
+                        <img src={sellerAvatar} alt={sellerName} className="h-full w-full object-cover" />
                       </button>
                       <div className="min-w-0">
                         <button
