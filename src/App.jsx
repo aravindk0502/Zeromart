@@ -41,6 +41,7 @@ import {
   syncListingsFromBackend,
   updateListingInBackend,
 } from './services/liveListingService';
+import { listenForForegroundMessages, requestPushPermission } from './lib/firebaseMessaging';
 import { isListingOwnedByUser } from './utils/listingOwnership';
 
 const navItems = [
@@ -71,6 +72,7 @@ const DISCOVERY_STAGES = [
 
 const platformSearchKeywords = 'drizn drizn ai good things nearby karma good karma free 0 rs ₹0 rupees local business b2b marketplace listing list item seller buyer pickup delivery in person collect product item movie movies ticket tickets food electronics books cosmetics home furniture';
 const isProductionRuntime = import.meta.env.PROD;
+const FCM_TOKEN_STORAGE_KEY = 'drizn-fcm-token';
 
 const getItemCoordinates = (item) => item.coordinates
   || (item.locationData ? { latitude: item.locationData.latitude, longitude: item.locationData.longitude } : null)
@@ -269,6 +271,58 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
     });
   };
   const isOwnedByActiveAccount = (item) => isListingOwnedByUser(item, activeBuyer);
+
+  const requestPushAccessForAccount = async (accountId) => {
+    if (!accountId) return;
+    const push = await requestPushPermission();
+    if (!push.supported) {
+      console.info('[fcm] push not supported in this browser/runtime');
+      return;
+    }
+    if (push.permission !== 'granted') {
+      console.info('[fcm] notification permission not granted', { permission: push.permission });
+      return;
+    }
+    if (push.token) {
+      localStorage.setItem(FCM_TOKEN_STORAGE_KEY, JSON.stringify({ accountId: String(accountId), token: push.token }));
+    }
+    if (push.error) console.warn('[fcm] token fetch warning', push.error);
+  };
+
+  useEffect(() => {
+    let unsubscribe = () => {};
+    let cancelled = false;
+
+    const enableForegroundListener = async () => {
+      unsubscribe = await listenForForegroundMessages((payload) => {
+        if (cancelled) return;
+        const title = payload?.notification?.title || payload?.data?.title || 'New alert';
+        const body = payload?.notification?.body || payload?.data?.body || 'You received a new update.';
+        const itemId = payload?.data?.itemId || payload?.data?.listingId || '';
+        commitNotifications((current) => ([
+          {
+            id: `fcm-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+            type: 'platform',
+            title,
+            body,
+            itemId,
+            time: 'Just now',
+            read: false,
+            recipientId: activeAccountId || '',
+          },
+          ...current,
+        ]));
+        setNotice(title);
+      });
+    };
+
+    enableForegroundListener();
+
+    return () => {
+      cancelled = true;
+      unsubscribe?.();
+    };
+  }, [activeAccountId]);
 
   useEffect(() => {
     const timer = window.setInterval(() => setRequestClock(Date.now()), 1000);
@@ -641,6 +695,7 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
 
   const handleLogin = (mobile) => {
     const savedKarma = getKarmaLedger()[accountKey(mobile)];
+    const nextAccountId = mobile;
     setUser({
       name: 'Unknown',
       mobile,
@@ -655,6 +710,7 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
     });
     setShowOtpModal(false);
     setNotice('Welcome! You can list for free and buy anything for ₹0 with a ₹29 yearly platform fee for buyer access.');
+    requestPushAccessForAccount(nextAccountId);
   };
 
   const handleNav = (view) => {
@@ -2663,6 +2719,7 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
           setUser(null);
           setBusinessSession(account);
           setShowBusinessAuth(false);
+          requestPushAccessForAccount(account?.userId || account?.id || account?.mobile || account?.businessName || '');
           navigate('/business/dashboard');
         }}
       />
