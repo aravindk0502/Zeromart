@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { ArrowLeft, BookmarkPlus, Check, LocateFixed, Loader2, MapPin, X } from 'lucide-react';
+import { ArrowLeft, BookmarkPlus, Check, ChevronDown, ChevronUp, LocateFixed, Loader2, MapPin, X } from 'lucide-react';
 import { useLocationEngine } from '../hooks/useLocationEngine';
 import {
   formatFullAddress, formatShortAddress, getKnownLocationSuggestions, INDIA_ONLY_ERROR,
@@ -33,6 +33,7 @@ export default function LocationPicker({
     landmark: '',
     addressType: addressTypeDefault,
   });
+  const [showAddressDetails, setShowAddressDetails] = useState(false);
 
   useEffect(() => {
     if (!open) return;
@@ -46,6 +47,7 @@ export default function LocationPicker({
     });
     setSearchError('');
     setGpsPending(false);
+    setShowAddressDetails(Boolean(requireAddressDetails || requiredDetails.length));
   }, [engine.location, open, addressTypeDefault]);
 
   const recentLocations = useMemo(() => {
@@ -272,49 +274,60 @@ export default function LocationPicker({
             <div className="rounded-2xl border border-slate-200 bg-white p-4">
               <div className="flex items-start justify-between gap-3">
                 <div>
-                  <p className="font-extrabold text-slate-900">Pickup details (optional)</p>
-                  <p className="mt-1 text-xs leading-5 text-slate-500">Your selected map location is enough. Add these details only when they are useful.</p>
+                  <p className="font-extrabold text-slate-900">Address details</p>
+                  <p className="mt-1 text-xs leading-5 text-slate-500">The map pin is enough for normal flow. Add door/building details only if needed.</p>
                 </div>
-                <span className="rounded-full bg-slate-100 px-2.5 py-1 text-[10px] font-extrabold uppercase tracking-wider text-slate-500">Optional</span>
+                <button
+                  type="button"
+                  onClick={() => setShowAddressDetails((current) => !current)}
+                  className="inline-flex items-center gap-1 rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-[10px] font-extrabold uppercase tracking-wider text-slate-600"
+                >
+                  {showAddressDetails ? 'Hide' : 'Add'}
+                  {showAddressDetails ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
+                </button>
               </div>
-              <div className="mt-4 grid gap-3 sm:grid-cols-2">
-                <AddressField
-                  label="Door / Flat No. (optional)"
-                  value={addressDetails.doorNo}
-                  required={requiredDetails.includes('doorNo')}
-                  onChange={(value) => setAddressDetails((current) => ({ ...current, doorNo: value }))}
-                />
-                <AddressField
-                  label="Building / Apartment Name (optional)"
-                  value={addressDetails.buildingName}
-                  required={requiredDetails.includes('buildingName')}
-                  onChange={(value) => setAddressDetails((current) => ({ ...current, buildingName: value }))}
-                />
-                <AddressField
-                  label="Floor (optional)"
-                  value={addressDetails.floor}
-                  onChange={(value) => setAddressDetails((current) => ({ ...current, floor: value }))}
-                />
-                <AddressField
-                  label="Landmark (optional)"
-                  value={addressDetails.landmark}
-                  required={requiredDetails.includes('landmark')}
-                  onChange={(value) => setAddressDetails((current) => ({ ...current, landmark: value }))}
-                />
-              </div>
-              <p className="mb-2 mt-4 text-xs font-extrabold uppercase tracking-[0.12em] text-slate-400">Address type</p>
-              <div className="grid grid-cols-4 gap-2">
-                {ADDRESS_TYPES.map((type) => (
-                  <button
-                    key={type}
-                    type="button"
-                    onClick={() => setAddressDetails((current) => ({ ...current, addressType: type }))}
-                    className={`rounded-xl border px-2 py-2.5 text-xs font-bold transition ${addressDetails.addressType === type ? 'border-emerald-600 bg-emerald-700 text-white' : 'border-slate-200 bg-white text-slate-600 hover:border-emerald-300'}`}
-                  >
-                    {type}
-                  </button>
-                ))}
-              </div>
+              {showAddressDetails && (
+                <>
+                  <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                    <AddressField
+                      label="Door / Flat No. (optional)"
+                      value={addressDetails.doorNo}
+                      required={requiredDetails.includes('doorNo')}
+                      onChange={(value) => setAddressDetails((current) => ({ ...current, doorNo: value }))}
+                    />
+                    <AddressField
+                      label="Building / Apartment Name (optional)"
+                      value={addressDetails.buildingName}
+                      required={requiredDetails.includes('buildingName')}
+                      onChange={(value) => setAddressDetails((current) => ({ ...current, buildingName: value }))}
+                    />
+                    <AddressField
+                      label="Floor (optional)"
+                      value={addressDetails.floor}
+                      onChange={(value) => setAddressDetails((current) => ({ ...current, floor: value }))}
+                    />
+                    <AddressField
+                      label="Landmark (optional)"
+                      value={addressDetails.landmark}
+                      required={requiredDetails.includes('landmark')}
+                      onChange={(value) => setAddressDetails((current) => ({ ...current, landmark: value }))}
+                    />
+                  </div>
+                  <p className="mb-2 mt-4 text-xs font-extrabold uppercase tracking-[0.12em] text-slate-400">Address type</p>
+                  <div className="grid grid-cols-4 gap-2">
+                    {ADDRESS_TYPES.map((type) => (
+                      <button
+                        key={type}
+                        type="button"
+                        onClick={() => setAddressDetails((current) => ({ ...current, addressType: type }))}
+                        className={`rounded-xl border px-2 py-2.5 text-xs font-bold transition ${addressDetails.addressType === type ? 'border-emerald-600 bg-emerald-700 text-white' : 'border-slate-200 bg-white text-slate-600 hover:border-emerald-300'}`}
+                      >
+                        {type}
+                      </button>
+                    ))}
+                  </div>
+                </>
+              )}
             </div>
           )}
 

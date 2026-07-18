@@ -55,7 +55,7 @@ const requestPosition = (options: PositionOptions) => {
       const error = new Error('Location request timed out.');
       (error as any).code = 3;
       finish(reject, error);
-    }, Number(options.timeout || 15000) + 1000);
+    }, Number(options.timeout || 8000) + 400);
 
     navigator.geolocation.getCurrentPosition(
       (position) => finish(resolve, position),
@@ -70,14 +70,14 @@ export const getDevicePosition = async () => {
   try {
     return await requestPosition({
       enableHighAccuracy: true,
-      timeout: 6000,
-      maximumAge: 15000,
+      timeout: 4500,
+      maximumAge: 12000,
     });
   } catch (error: any) {
     if (Number(error?.code) === 1) throw error;
     return requestPosition({
       enableHighAccuracy: false,
-      timeout: 5000,
+      timeout: 3000,
       maximumAge: 120000,
     });
   }

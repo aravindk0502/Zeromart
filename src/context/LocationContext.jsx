@@ -33,7 +33,6 @@ export function LocationProvider({ children }) {
       }
       if (snapshot.permission === 'denied') {
         setShowPermission(false);
-        if (!snapshot.location) setPickerOpen(true);
         return;
       } else if (!autoGpsStarted.current) {
         autoGpsStarted.current = true;
@@ -43,7 +42,6 @@ export function LocationProvider({ children }) {
           refreshLists();
         }).catch(() => {
           setShowPermission(false);
-          if (!locationService.getSnapshot().location) setPickerOpen(true);
         });
       }
     }).catch(() => {});
@@ -69,7 +67,6 @@ export function LocationProvider({ children }) {
       if (error?.code === 1) {
         localStorage.setItem(PROMPT_KEY, 'true');
         setShowPermission(false);
-        setPickerOpen(true);
       }
       throw error;
     }

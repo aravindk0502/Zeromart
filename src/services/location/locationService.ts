@@ -442,7 +442,7 @@ class ZeroMartLocationService {
         unsubscribe();
         if (this.snapshot.location) resolve(this.snapshot.location);
         else reject(new Error(this.snapshot.error || 'Live GPS did not return a location.'));
-      }, 20000);
+      }, 8000);
       const unsubscribe = this.subscribe(() => {
         if (!this.snapshot.location || !this.snapshot.lastGpsAt
           || !hasUsableAddress(this.snapshot.location) || !isIndiaLocation(this.snapshot.location)) return;
@@ -591,6 +591,23 @@ class ZeroMartLocationService {
       cacheAddress(location);
       return this.publishLocation(location);
     } catch (error) {
+      const coordinateFallback = normalizeLocation({
+        ...this.snapshot.location,
+        ...coordinates,
+        source,
+        updatedAt: new Date().toISOString(),
+        displayAddress: this.snapshot.location?.displayAddress || 'Current GPS location',
+        shortName: this.snapshot.location?.shortName || 'Current GPS location',
+      });
+      if (coordinateFallback && isIndiaLocation(coordinateFallback)) {
+        this.publish({
+          location: coordinateFallback,
+          status: navigator.onLine ? 'watching' : 'offline',
+          error: '',
+          notice: 'Location found. Address details are still loading; you can continue.',
+        });
+        return coordinateFallback;
+      }
       this.publish({ status: 'error', error: error instanceof Error ? error.message : 'The GPS address could not be verified.' });
       throw error;
     }
