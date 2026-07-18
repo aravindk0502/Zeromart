@@ -38,7 +38,28 @@ export const toListingPayload = (listing = {}) => {
   const normalized = normalizeLiveListing(listing);
   const coordinateData = getCoordinates(normalized);
   const isBusiness = normalized.listingType === 'business' || normalized.sellerType === 'business' || normalized.isBusinessProduct;
-  const sellerAvatar = normalized.sellerAvatar || normalized.sellerProfileImage || normalized.avatarUrl || '';
+  const sellerProfile = normalized.sellerProfile || {};
+  const sellerAvatar = normalized.sellerAvatar
+    || normalized.sellerProfileImage
+    || normalized.avatarUrl
+    || sellerProfile.avatarUrl
+    || sellerProfile.logoUrl
+    || '';
+  const sellerProfilePayload = {
+    id: String(sellerProfile.id || normalized.sellerId || normalized.businessId || '').trim(),
+    name: sellerProfile.name || normalized.sellerName || normalized.storeName || 'Drizn User',
+    initials: sellerProfile.initials || normalized.sellerInitials || normalized.initials || '',
+    avatarUrl: sellerProfile.avatarUrl || sellerAvatar,
+    logoUrl: sellerProfile.logoUrl || normalized.sellerLogo || '',
+    accountType: sellerProfile.accountType || (isBusiness ? 'business' : 'community'),
+    area: sellerProfile.area || normalized.area || normalized.locationData?.area || normalized.locationData?.locality || '',
+    city: sellerProfile.city || normalized.city || normalized.locationData?.city || '',
+    karma: Number(sellerProfile.karma ?? normalized.sellerKarma ?? normalized.karma ?? 0) || 0,
+    activeListings: Number(sellerProfile.activeListings || 0) || 0,
+    joinedAt: sellerProfile.joinedAt || '',
+    bio: String(sellerProfile.bio || '').trim(),
+    verified: Boolean(sellerProfile.verified || isBusiness),
+  };
   return {
     id: normalized.serverId || normalized.id,
     serverId: normalized.serverId || normalized.id,
@@ -85,6 +106,7 @@ export const toListingPayload = (listing = {}) => {
       sellerAvatar,
       avatarUrl: sellerAvatar,
       profileImage: sellerAvatar,
+      sellerProfile: sellerProfilePayload,
     },
   };
 };

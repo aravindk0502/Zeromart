@@ -1119,6 +1119,17 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
           ...item,
           sellerName: nextUser.name || 'Drizn User',
           sellerProfileImage: nextUser.profileImage || '',
+          sellerAvatar: nextUser.profileImage || '',
+          avatarUrl: nextUser.profileImage || '',
+          sellerProfile: {
+            ...(item.sellerProfile || {}),
+            id: String(item.sellerProfile?.id || item.sellerId || nextUser.userId || nextUser.mobile || 'guest-owner'),
+            name: nextUser.name || item.sellerProfile?.name || 'Drizn User',
+            initials: item.sellerProfile?.initials || item.sellerInitials || nextUser.initials || 'DU',
+            avatarUrl: nextUser.profileImage || item.sellerProfile?.avatarUrl || '',
+            logoUrl: item.sellerProfile?.logoUrl || '',
+            accountType: item.sellerProfile?.accountType || item.sellerType || 'community',
+          },
         }
       : item;
     setItems((existing) => existing.map(applyProfile));
