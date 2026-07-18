@@ -178,7 +178,7 @@ export default function SectionPage({ section, businessItems = [], onBack, locat
             const stock = normalizeProductStock({ ...item, listingType: section === 'b2b' ? 'business' : item.listingType });
             const expiryBadge = item.expiryBadge || getExpiryBadgeState(stock);
             const sellerName = getSellerName(item);
-            const sellerAvatar = getSellerAvatar(item);
+            const sellerAvatar = getSellerAvatar(item) || (isOwnListing ? actor?.profileImage || '' : '');
             const sellerInitials = String(item?.sellerInitials || item?.sellerProfile?.initials || getInitials(sellerName)).slice(0, 2).toUpperCase();
             return (
               <article

@@ -33,7 +33,7 @@ export default function BuyerPaySheet({ open, onClose, onComplete }) {
         <div style={{ textAlign: 'center', marginBottom: 24 }}>
           <div style={{ fontSize: 24, fontWeight: 700, fontFamily: 'Sora, sans-serif', marginBottom: 6 }}>Platform fee for buyer access</div>
           <div style={{ fontSize: 13, color: 'var(--zm-text-muted)', lineHeight: 1.6 }}>
-            Pay ₹29 once for lifetime access.<br />Then request any ₹0 item on Drizn.
+            Pay ₹29 once per year for buyer access.<br />Then request any ₹0 item on Drizn.
           </div>
         </div>
 
@@ -54,7 +54,7 @@ export default function BuyerPaySheet({ open, onClose, onComplete }) {
 
         <div style={{ textAlign: 'center', marginBottom: 16 }}>
           <div style={{ fontSize: 40, fontWeight: 800, fontFamily: 'Sora, sans-serif', color: 'var(--zm-accent)' }}>₹29</div>
-          <div style={{ fontSize: 12, color: 'var(--zm-text-dim)' }}>One time • Lifetime access • No subscription</div>
+          <div style={{ fontSize: 12, color: 'var(--zm-text-dim)' }}>Once per year • Full buyer access • No auto-renew</div>
         </div>
 
         {error && (
@@ -69,7 +69,7 @@ export default function BuyerPaySheet({ open, onClose, onComplete }) {
           onClick={handlePay}
           disabled={loading}
         >
-          {loading ? 'Opening payment…' : 'Pay ₹29 and unlock forever'}
+          {loading ? 'Opening payment…' : 'Pay ₹29 for yearly access'}
         </button>
 
         <button className="btn btn-ghost btn-full" style={{ marginTop: 8 }} onClick={onClose}>

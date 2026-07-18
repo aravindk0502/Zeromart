@@ -6,6 +6,12 @@ export default function ItemDetailsModal({ item, onClose, onRequest, onRequireLo
   if (!item) return null;
   const product = normalizeProductStock(item);
   const expiryBadge = item.expiryBadge || getExpiryBadgeState(product);
+  const sellerAvatar = item.sellerProfileImage
+    || item.sellerAvatar
+    || item.avatarUrl
+    || item.sellerProfile?.avatarUrl
+    || item.sellerProfile?.logoUrl
+    || (isListingOwnedByUser(item, user) ? user?.profileImage || '' : '');
 
   const parsedDistance = Number.parseFloat(String(item.distance || '').replace(/[^\d.]/g, ''));
   const distanceKm = Number.isFinite(item.distanceKm)
@@ -108,8 +114,8 @@ export default function ItemDetailsModal({ item, onClose, onRequest, onRequireLo
                 className="flex h-11 w-11 shrink-0 items-center justify-center overflow-hidden rounded-full bg-amber-100 text-violet-700"
                 aria-label={`Open ${item.sellerName} profile`}
               >
-                {item.sellerProfileImage
-                  ? <img src={item.sellerProfileImage} alt={item.sellerName} className="h-full w-full object-cover" />
+                {sellerAvatar
+                  ? <img src={sellerAvatar} alt={item.sellerName} className="h-full w-full object-cover" />
                   : (item.sellerInitials || item.sellerProfile?.initials || <User size={18} />)}
               </button>
               <div>

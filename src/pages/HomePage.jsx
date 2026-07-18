@@ -68,7 +68,7 @@ export function ProductRail({
           const isOwnListing = isListingOwnedByUser(item, actor);
           const isFavorite = favorites.some((entry) => entry.id === item.id);
           const sellerName = getSellerName(item);
-          const sellerAvatar = getSellerAvatar(item);
+          const sellerAvatar = getSellerAvatar(item) || (isOwnListing ? user?.profileImage || '' : '');
           const sellerInitials = String(item?.sellerInitials || item?.sellerProfile?.initials || getInitials(sellerName) || 'DU').slice(0, 2).toUpperCase();
           return (
             <article
@@ -260,7 +260,7 @@ export default function HomePage({
             const isFavorite = favorites.some((entry) => entry.id === item.id);
             const unavailable = !isOwnListing && item.requestState && !item.requestState.canRequest;
             const sellerName = getSellerName(item);
-            const sellerAvatar = getSellerAvatar(item);
+            const sellerAvatar = getSellerAvatar(item) || (isOwnListing ? user?.profileImage || '' : '');
             const sellerInitials = String(item?.sellerInitials || item?.sellerProfile?.initials || getInitials(sellerName) || 'DU').slice(0, 2).toUpperCase();
             return (
               <article

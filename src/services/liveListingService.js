@@ -38,6 +38,7 @@ export const toListingPayload = (listing = {}) => {
   const normalized = normalizeLiveListing(listing);
   const coordinateData = getCoordinates(normalized);
   const isBusiness = normalized.listingType === 'business' || normalized.sellerType === 'business' || normalized.isBusinessProduct;
+  const sellerAvatar = normalized.sellerAvatar || normalized.sellerProfileImage || normalized.avatarUrl || '';
   return {
     id: normalized.serverId || normalized.id,
     serverId: normalized.serverId || normalized.id,
@@ -51,6 +52,9 @@ export const toListingPayload = (listing = {}) => {
     photo_url: normalized.photo_url || normalized.image || normalized.imageUrl || '',
     sellerId: normalized.sellerId || normalized.ownerMobile || normalized.businessId || '',
     sellerName: normalized.sellerName || normalized.storeName || 'Drizn User',
+    sellerAvatar,
+    avatarUrl: sellerAvatar,
+    profileImage: sellerAvatar,
     sellerType: isBusiness ? 'business' : 'community',
     listingType: isBusiness ? 'business' : 'community',
     isBusinessProduct: isBusiness,
@@ -78,6 +82,9 @@ export const toListingPayload = (listing = {}) => {
       source: 'zeromart-web',
       ownerMobile: normalized.ownerMobile || '',
       sellerInitials: normalized.sellerInitials || normalized.initials || '',
+      sellerAvatar,
+      avatarUrl: sellerAvatar,
+      profileImage: sellerAvatar,
     },
   };
 };

@@ -11,14 +11,14 @@ const SUGGESTIONS = [
 
 const PLATFORM_QA = [
   { keys: ['how to sell', 'list item', 'post item', 'give away', 'listing'], answer: 'Tap the + button at the bottom to list a product. Take a photo, add a short description, pick a category — it goes live instantly. Completely free!' },
-  { keys: ['how to buy', 'how to request', 'get item', 'buying'], answer: 'Pay a one-time ₹29 to unlock buyer access forever. Then browse, search, and request any item you like.' },
+  { keys: ['how to buy', 'how to request', 'get item', 'buying'], answer: 'Pay ₹29 once per year to unlock buyer access. Then browse, search, and request any item you like.' },
   { keys: ['delivery', 'shipping', 'courier', 'porter', 'shadowfax', 'uber'], answer: 'Drizn currently uses direct collection coordination. Use the seller chat to arrange pickup or your own courier service and share the required contact details.' },
   { keys: ['karma', 'points', 'rating', 'review'], answer: 'Karma is mandatory after collection. The buyer who received the item sends good karma to the seller or store, and that seller/store gains the karma point.' },
   { keys: ['in person', 'collect', 'pickup', 'nearby'], answer: 'For community items, send a collection request and wait for the seller to accept. Their phone, pickup address, date, time, and instructions then appear in Alerts. Business items use Reserve & Collect with a collection ID and QR pass.' },
   { keys: ['free', 'cost', 'charge', 'fee', 'price'], answer: 'Yes! Listing on Drizn is completely free for sellers. Items are listed at ₹0.' },
   { keys: ['reward', 'voucher', 'swiggy', 'bookmyshow', 'myntra', 'milestone'], answer: 'Sellers earn delivery credits and unlock brand vouchers (Swiggy, BookMyShow, Myntra) when they hit karma milestones at 5, 10, 25+ items given.' },
-  { keys: ['account', 'profile', 'login', 'sign up', 'otp', 'mobile', 'number'], answer: 'You need your mobile number only when you buy or sell — we send a quick OTP to verify. One account lets you list for ₹0 and buy ₹0 items after lifetime access.' },
-  { keys: ['₹29', '29', 'one time', 'lifetime', 'unlock'], answer: 'The ₹29 is a one-time lifetime fee to unlock buyer access. Pay once, browse and buy forever. No subscriptions.' },
+  { keys: ['account', 'profile', 'login', 'sign up', 'otp', 'mobile', 'number'], answer: 'You need your mobile number only when you buy or sell — we send a quick OTP to verify. One account lets you list for ₹0 and buy ₹0 items after yearly buyer access.' },
+  { keys: ['₹29', '29', 'one time', 'yearly', 'unlock'], answer: 'The ₹29 is a once-per-year platform fee to unlock buyer access. No monthly subscription.' },
   { keys: ['chat', 'message', 'talk', 'contact'], answer: 'After a seller accepts your request, their phone number, pickup address, time, and instructions appear in Alerts. You can call or use WhatsApp to coordinate.' },
   { keys: ['report', 'fraud', 'fake', 'scam', 'block'], answer: 'Tap the flag icon on any listing or profile to report. Three verified reports trigger a review. Serious fraud leads to a permanent ban.' },
   { keys: ['credit', 'delivery credit', 'offset'], answer: 'Delivery credits are earned every time you give away an item. Use them to offset your own delivery costs when buying.' },

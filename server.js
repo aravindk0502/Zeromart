@@ -421,11 +421,21 @@ function listingPayloadToDb(body = {}, user = null) {
   const quantity = Math.max(0, Number(body.totalQuantity ?? body.quantity ?? body.availableQuantity ?? 1) || 1);
   const availableQuantity = Math.max(0, Number(body.availableQuantity ?? body.quantity ?? quantity) || 0);
   const imageUrl = body.imageUrl || body.image_url || body.photo_url || body.image || body.photo || '';
+  const sellerAvatar = body.sellerAvatar
+    || body.avatarUrl
+    || body.avatar_url
+    || body.profileImage
+    || body.profile_image
+    || (body.metadata && (body.metadata.sellerAvatar || body.metadata.avatarUrl || body.metadata.profileImage))
+    || '';
   const metadata = {
     ...(body.metadata || {}),
     ownerMobile: body.ownerMobile || body.mobile || '',
     originalId: body.originalId || body.id || id,
     sellerInitials: body.sellerInitials || body.initials || '',
+    sellerAvatar,
+    avatarUrl: sellerAvatar,
+    profileImage: sellerAvatar,
     isOwn: Boolean(body.isOwn),
   };
 

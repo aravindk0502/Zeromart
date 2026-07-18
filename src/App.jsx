@@ -643,7 +643,7 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
       location: locationEngine.location,
     });
     setShowOtpModal(false);
-    setNotice('Welcome! You can list for free and buy anything for ₹0 with a one-time ₹29 platform fee for lifetime unlimited buying access.');
+    setNotice('Welcome! You can list for free and buy anything for ₹0 with a ₹29 yearly platform fee for buyer access.');
   };
 
   const handleNav = (view) => {

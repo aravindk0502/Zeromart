@@ -118,7 +118,7 @@ export default function ProductSheet() {
 
         {!user.isBuyer && (
           <div style={{ textAlign: 'center', fontSize: 12, color: 'var(--zm-text-dim)', marginBottom: 8 }}>
-            Unlock buyer access for ₹29 once — yours forever
+            Unlock buyer access for ₹29 per year
           </div>
         )}
 
