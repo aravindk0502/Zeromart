@@ -1010,40 +1010,9 @@ async function persistNotificationEvent(payload = {}) {
     openPath,
   };
 
-  try {
-    if (dedupeKey) {
-      const existing = await supabaseFetch(`/notification_events?select=id&dedupe_key=eq.${encodeURIComponent(dedupeKey)}&limit=1`);
-      if (Array.isArray(existing) && existing.length > 0) {
-        return {
-          success: true,
-          accepted: true,
-          deduped: true,
-          persisted: true,
-          id: existing[0].id,
-          openPath,
-          push: { attempted: false, sent: false },
-        };
-      }
-    }
+  const isMissingTableError = (error) => /could not find the table/i.test(String(error?.message || ''));
 
-    await supabaseFetch('/notification_events', {
-      method: 'POST',
-      body: JSON.stringify({
-        id: eventId,
-        event_type: String(eventType),
-        recipient_account_id: String(recipientAccountId),
-        actor_account_id: String(actorAccountId || ''),
-        listing_id: listingId || null,
-        request_id: requestId || null,
-        order_id: orderId || null,
-        dedupe_key: dedupeKey || null,
-        payload: mergedPayload,
-        push_attempted: false,
-        push_sent: false,
-        created_at: nowIso(),
-      }),
-    });
-
+  const insertAppNotification = async () => {
     await supabaseFetch('/app_notifications', {
       method: 'POST',
       body: JSON.stringify({
@@ -1061,7 +1030,6 @@ async function persistNotificationEvent(payload = {}) {
         created_at: nowIso(),
       }),
     });
-
     return {
       success: true,
       accepted: true,
@@ -1070,6 +1038,77 @@ async function persistNotificationEvent(payload = {}) {
       openPath,
       push: { attempted: false, sent: false },
     };
+  };
+
+  const insertLegacyNotification = async () => {
+    await supabaseFetch('/notifications', {
+      method: 'POST',
+      body: JSON.stringify({
+        text: `${String(title || 'Drizn update')}\n${String(body || '')}`.trim(),
+        read: false,
+        created_at: nowIso(),
+      }),
+    });
+    return {
+      success: true,
+      accepted: true,
+      persisted: true,
+      id: eventId,
+      openPath,
+      push: { attempted: false, sent: false },
+      compatibilityMode: 'legacy_notifications',
+    };
+  };
+
+  try {
+    if (dedupeKey) {
+      try {
+        const existing = await supabaseFetch(`/notification_events?select=id&dedupe_key=eq.${encodeURIComponent(dedupeKey)}&limit=1`);
+        if (Array.isArray(existing) && existing.length > 0) {
+          return {
+            success: true,
+            accepted: true,
+            deduped: true,
+            persisted: true,
+            id: existing[0].id,
+            openPath,
+            push: { attempted: false, sent: false },
+          };
+        }
+      } catch (error) {
+        if (!isMissingTableError(error)) throw error;
+      }
+    }
+
+    try {
+      await supabaseFetch('/notification_events', {
+        method: 'POST',
+        body: JSON.stringify({
+          id: eventId,
+          event_type: String(eventType),
+          recipient_account_id: String(recipientAccountId),
+          actor_account_id: String(actorAccountId || ''),
+          listing_id: listingId || null,
+          request_id: requestId || null,
+          order_id: orderId || null,
+          dedupe_key: dedupeKey || null,
+          payload: mergedPayload,
+          push_attempted: false,
+          push_sent: false,
+          created_at: nowIso(),
+        }),
+      });
+    } catch (error) {
+      if (!isMissingTableError(error)) throw error;
+    }
+
+    try {
+      return await insertAppNotification();
+    } catch (error) {
+      if (!isMissingTableError(error)) throw error;
+    }
+
+    return await insertLegacyNotification();
   } catch (error) {
     return {
       success: true,
@@ -1090,19 +1129,28 @@ async function handleNotifications(req, res, url) {
     if (!accountId || !token) return sendJson(res, 400, { error: 'accountId and token are required' });
     if (!SUPABASE_URL || !SUPABASE_KEY) return sendJson(res, 200, { success: true, persisted: false });
     try {
-      await supabaseFetch('/push_tokens?on_conflict=token&select=token', {
-        method: 'POST',
-        headers: { Prefer: 'resolution=merge-duplicates,return=representation' },
-        body: JSON.stringify({
-          account_id: accountId,
-          token,
-          platform: String(body.platform || 'web'),
-          enabled: body.enabled !== false,
-          metadata: body.metadata || {},
-          last_seen_at: nowIso(),
-          updated_at: nowIso(),
-        }),
-      });
+      const payload = {
+        account_id: accountId,
+        token,
+        platform: String(body.platform || 'web'),
+        enabled: body.enabled !== false,
+        metadata: body.metadata || {},
+        last_seen_at: nowIso(),
+        updated_at: nowIso(),
+      };
+      try {
+        await supabaseFetch('/notification_devices?on_conflict=token&select=token', {
+          method: 'POST',
+          headers: { Prefer: 'resolution=merge-duplicates,return=representation' },
+          body: JSON.stringify(payload),
+        });
+      } catch {
+        await supabaseFetch('/push_tokens?on_conflict=token&select=token', {
+          method: 'POST',
+          headers: { Prefer: 'resolution=merge-duplicates,return=representation' },
+          body: JSON.stringify(payload),
+        });
+      }
       return sendJson(res, 200, { success: true, persisted: true });
     } catch (error) {
       return sendJson(res, 200, { success: true, persisted: false, error: error.message || 'token persistence failed' });
@@ -1116,10 +1164,17 @@ async function handleNotifications(req, res, url) {
     if (!token) return sendJson(res, 400, { error: 'token is required' });
     if (!SUPABASE_URL || !SUPABASE_KEY) return sendJson(res, 200, { success: true, persisted: false });
     try {
-      await supabaseFetch(`/push_tokens?token=eq.${encodeURIComponent(token)}`, {
-        method: 'PATCH',
-        body: JSON.stringify({ enabled: false, invalidated_at: nowIso(), updated_at: nowIso() }),
-      });
+      try {
+        await supabaseFetch(`/notification_devices?token=eq.${encodeURIComponent(token)}`, {
+          method: 'PATCH',
+          body: JSON.stringify({ enabled: false, invalidated_at: nowIso(), updated_at: nowIso() }),
+        });
+      } catch {
+        await supabaseFetch(`/push_tokens?token=eq.${encodeURIComponent(token)}`, {
+          method: 'PATCH',
+          body: JSON.stringify({ enabled: false, invalidated_at: nowIso(), updated_at: nowIso() }),
+        });
+      }
       return sendJson(res, 200, { success: true, persisted: true });
     } catch (error) {
       return sendJson(res, 200, { success: true, persisted: false, error: error.message || 'token disable failed' });
@@ -1205,8 +1260,21 @@ async function handleNotifications(req, res, url) {
     const limit = Math.max(1, Math.min(100, Number(limitMatch?.[1] || 50)));
     if (!SUPABASE_URL || !SUPABASE_KEY) return sendJson(res, 200, []);
     try {
-      const rows = await supabaseFetch(`/app_notifications?recipient_account_id=eq.${encodeURIComponent(accountId)}&select=*&order=created_at.desc&limit=${limit}`);
-      return sendJson(res, 200, rows || []);
+      try {
+        const rows = await supabaseFetch(`/app_notifications?recipient_account_id=eq.${encodeURIComponent(accountId)}&select=*&order=created_at.desc&limit=${limit}`);
+        return sendJson(res, 200, rows || []);
+      } catch {
+        const rows = await supabaseFetch(`/notifications?select=*&order=created_at.desc&limit=${limit}`);
+        return sendJson(res, 200, (rows || []).map((row) => ({
+          id: String(row.id || makeId('legacy')),
+          event_type: 'platform',
+          title: 'Drizn update',
+          body: String(row.text || ''),
+          payload: {},
+          read: Boolean(row.read),
+          created_at: row.created_at || nowIso(),
+        })));
+      }
     } catch {
       return sendJson(res, 200, []);
     }
@@ -1249,7 +1317,12 @@ async function handleNotifications(req, res, url) {
 
     try {
       const radiusKm = Math.max(0.5, Math.min(10, Number(body.radiusKm || 2)));
-      const tokenRows = await supabaseFetch('/push_tokens?enabled=eq.true&select=account_id,metadata');
+      let tokenRows = [];
+      try {
+        tokenRows = await supabaseFetch('/notification_devices?enabled=eq.true&select=account_id,metadata');
+      } catch {
+        tokenRows = await supabaseFetch('/push_tokens?enabled=eq.true&select=account_id,metadata');
+      }
       const recipients = (tokenRows || [])
         .map((row) => {
           const accountId = String(row.account_id || '');

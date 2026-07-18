@@ -32,7 +32,14 @@ import {
   completePendingKarmaAction, getPendingKarmaActions, savePendingKarmaAction,
   getLiveListings, saveLiveListings, upsertLiveListing, removeLiveListing, normalizeLiveListing,
 } from './services/transactionService';
-import { emitNotificationEvent, isLoggedIn, registerPushToken, triggerNearbyListingAlerts, uploadImage } from './lib/api';
+import {
+  emitNotificationEvent,
+  fetchNotificationHistory,
+  isLoggedIn,
+  registerPushToken,
+  triggerNearbyListingAlerts,
+  uploadImage,
+} from './lib/api';
 import {
   deleteListingFromBackend,
   invalidateListingCache,
@@ -371,6 +378,57 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
     return () => {
       cancelled = true;
       unsubscribe?.();
+    };
+  }, [activeAccountId]);
+
+  useEffect(() => {
+    if (!activeAccountId) return;
+    let cancelled = false;
+
+    const mapRemoteNotification = (entry) => {
+      const payload = entry?.payload && typeof entry.payload === 'object' ? entry.payload : {};
+      return {
+        id: String(entry.id || `remote-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`),
+        type: entry.event_type || entry.type || 'platform',
+        title: entry.title || 'Drizn update',
+        body: entry.body || entry.text || '',
+        itemId: entry.listing_id || payload.listingId || '',
+        listingId: entry.listing_id || payload.listingId || '',
+        requestId: entry.request_id || payload.requestId || '',
+        orderId: entry.order_id || payload.orderId || '',
+        payload,
+        createdAt: entry.created_at || '',
+        read: Boolean(entry.read),
+        recipientId: activeAccountId,
+        time: entry.created_at ? new Date(entry.created_at).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' }) : 'Just now',
+      };
+    };
+
+    const syncRemoteNotifications = async () => {
+      try {
+        const rows = await fetchNotificationHistory(activeAccountId, 100);
+        if (cancelled || !Array.isArray(rows)) return;
+        const remote = rows.map(mapRemoteNotification);
+        commitNotifications((current) => {
+          const merged = new Map();
+          remote.forEach((entry) => merged.set(String(entry.id), entry));
+          current.forEach((entry) => {
+            if (!merged.has(String(entry.id))) merged.set(String(entry.id), entry);
+          });
+          return [...merged.values()].sort((first, second) => (
+            new Date(second.createdAt || second.time || 0).getTime() - new Date(first.createdAt || first.time || 0).getTime()
+          ));
+        });
+      } catch (error) {
+        console.warn('[notifications] remote history fetch failed', error?.message || error);
+      }
+    };
+
+    syncRemoteNotifications();
+    const timer = window.setInterval(syncRemoteNotifications, 30000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
     };
   }, [activeAccountId]);
 

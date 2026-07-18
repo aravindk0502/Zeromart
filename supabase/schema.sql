@@ -351,3 +351,38 @@ create table if not exists notification_events (
 
 create index if not exists notification_events_recipient_idx on notification_events (recipient_account_id, created_at desc);
 create index if not exists notification_events_type_idx on notification_events (event_type, created_at desc);
+
+-- Canonical device table for push registration (replaces legacy push_tokens naming)
+create table if not exists notification_devices (
+  id             bigserial primary key,
+  account_id     text not null,
+  token          text not null unique,
+  platform       text not null default 'web',
+  enabled        boolean not null default true,
+  metadata       jsonb not null default '{}'::jsonb,
+  last_seen_at   timestamptz not null default now(),
+  invalidated_at timestamptz,
+  created_at     timestamptz not null default now(),
+  updated_at     timestamptz not null default now()
+);
+
+create index if not exists notification_devices_account_id_idx on notification_devices (account_id);
+create index if not exists notification_devices_enabled_idx on notification_devices (enabled);
+
+create table if not exists pending_karma_actions (
+  id                  text primary key default gen_random_uuid()::text,
+  request_id          text,
+  order_id            text,
+  listing_id          text,
+  buyer_account_id    text,
+  seller_account_id   text,
+  business_account_id text,
+  status              text not null default 'pending' check (status in ('pending', 'completed', 'cancelled')),
+  payload             jsonb not null default '{}'::jsonb,
+  created_at          timestamptz not null default now(),
+  completed_at        timestamptz
+);
+
+create unique index if not exists pending_karma_actions_request_unique on pending_karma_actions (request_id) where request_id is not null;
+create unique index if not exists pending_karma_actions_order_unique on pending_karma_actions (order_id) where order_id is not null;
+create index if not exists pending_karma_actions_buyer_idx on pending_karma_actions (buyer_account_id, status);
