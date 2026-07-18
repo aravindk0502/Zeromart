@@ -211,3 +211,12 @@ export const fetchOrders = () => get('/api/orders').catch(() => []);
 // ── Payment ───────────────────────────────────────────────────────────────────
 export const createRazorpayOrder = (amount = 2900) => post('/api/create-order', { amount });
 export const verifyPayment = (payload) => post('/api/verify-payment', payload, true);
+
+// ── Notifications ─────────────────────────────────────────────────────────────
+export const registerPushToken = (payload) => post('/api/notifications/token', payload, isLoggedIn());
+export const disablePushToken = (token) => post('/api/notifications/token/disable', { token }, isLoggedIn());
+export const fetchNotificationPreferences = (accountId) => requestJson(`/api/notifications/preferences/${encodeURIComponent(accountId)}`, { method: 'GET', auth: isLoggedIn() });
+export const updateNotificationPreferences = (accountId, payload) => requestJson(`/api/notifications/preferences/${encodeURIComponent(accountId)}`, { method: 'PUT', body: payload, auth: isLoggedIn() });
+export const fetchNotificationHistory = (accountId, limit = 50) => requestJson(`/api/notifications/history/${encodeURIComponent(accountId)}?limit=${encodeURIComponent(limit)}`, { method: 'GET', auth: isLoggedIn() });
+export const emitNotificationEvent = (payload) => post('/api/notifications/events', payload, isLoggedIn());
+export const triggerNearbyListingAlerts = (payload) => post('/api/notifications/nearby-listing', payload, isLoggedIn());

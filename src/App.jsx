@@ -32,7 +32,7 @@ import {
   completePendingKarmaAction, getPendingKarmaActions, savePendingKarmaAction,
   getLiveListings, saveLiveListings, upsertLiveListing, removeLiveListing, normalizeLiveListing,
 } from './services/transactionService';
-import { isLoggedIn, uploadImage } from './lib/api';
+import { emitNotificationEvent, isLoggedIn, registerPushToken, triggerNearbyListingAlerts, uploadImage } from './lib/api';
 import {
   deleteListingFromBackend,
   invalidateListingCache,
@@ -272,6 +272,36 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
   };
   const isOwnedByActiveAccount = (item) => isListingOwnedByUser(item, activeBuyer);
 
+  const safeEmitNotificationEvent = async (payload) => {
+    try {
+      await emitNotificationEvent(payload);
+    } catch (error) {
+      console.warn('[notifications] event emit failed (non-blocking)', error?.message || error);
+    }
+  };
+
+  const safeTriggerNearbyListingAlerts = async (listing) => {
+    const coordinates = listing?.coordinates || listing?.locationData || {};
+    const latitude = Number(listing?.latitude ?? coordinates?.latitude ?? coordinates?.lat);
+    const longitude = Number(listing?.longitude ?? coordinates?.longitude ?? coordinates?.lng);
+    if (!Number.isFinite(latitude) || !Number.isFinite(longitude) || !activeAccountId || !listing?.id) return;
+    try {
+      await triggerNearbyListingAlerts({
+        actorAccountId: activeAccountId,
+        listingId: String(listing.id),
+        title: listing.title || '',
+        category: listing.category || '',
+        area: listing.area || listing.locationData?.area || '',
+        city: listing.city || listing.locationData?.city || '',
+        latitude,
+        longitude,
+        radiusKm: 2,
+      });
+    } catch (error) {
+      console.warn('[notifications] nearby listing alert failed (non-blocking)', error?.message || error);
+    }
+  };
+
   const requestPushAccessForAccount = async (accountId) => {
     if (!accountId) return;
     const push = await requestPushPermission();
@@ -285,6 +315,26 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
     }
     if (push.token) {
       localStorage.setItem(FCM_TOKEN_STORAGE_KEY, JSON.stringify({ accountId: String(accountId), token: push.token }));
+      try {
+        const currentLocation = locationEngine.location || {};
+        await registerPushToken({
+          accountId: String(accountId),
+          token: push.token,
+          platform: 'web',
+          metadata: {
+            userAgent: typeof navigator !== 'undefined' ? navigator.userAgent : '',
+            location: {
+              latitude: Number(currentLocation.latitude) || null,
+              longitude: Number(currentLocation.longitude) || null,
+              area: currentLocation.area || currentLocation.locality || '',
+              city: currentLocation.city || '',
+            },
+          },
+          enabled: true,
+        });
+      } catch (error) {
+        console.warn('[fcm] token registration failed (non-blocking)', error?.message || error);
+      }
     }
     if (push.error) console.warn('[fcm] token fetch warning', push.error);
   };
@@ -864,6 +914,21 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
     setQuantityItem(null);
     setSelectedItem(null);
     setNotice('Request sent. The seller can confirm it from Alerts.');
+    safeEmitNotificationEvent({
+      eventType: 'new_request',
+      recipientAccountId: requestNotification.recipientId,
+      actorAccountId: activeAccountId,
+      listingId: itemId,
+      requestId: orderId,
+      title: requestNotification.title,
+      body: requestNotification.body,
+      dedupeKey: `new_request:${orderId}`,
+      payload: {
+        buyerName: historyEntry.buyerName,
+        buyerPhone: historyEntry.buyerPhone,
+        quantity,
+      },
+    });
   };
 
   const handleQuantityConfirm = ({ quantity, collectionWindow }) => {
@@ -993,6 +1058,36 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
     setQuantityItem(null);
     setSelectedItem(null);
     setNotice(`Reserved successfully. Show collection ID ${collectionCode} at the store.`);
+    safeEmitNotificationEvent({
+      eventType: 'reservation_confirmed',
+      recipientAccountId: activeAccountId,
+      actorAccountId: requestedItem.businessId,
+      listingId: requestedItem.id,
+      orderId,
+      title: 'Your item is reserved',
+      body: `${requestedItem.title} × ${reservedQuantity} is reserved at ${requestedItem.sellerName}.`,
+      dedupeKey: `reservation_confirmed:${orderId}`,
+      payload: {
+        collectionCode,
+        quantity: reservedQuantity,
+      },
+    });
+    safeEmitNotificationEvent({
+      eventType: 'store_reservation_received',
+      recipientAccountId: requestedItem.businessId,
+      actorAccountId: activeAccountId,
+      listingId: requestedItem.id,
+      orderId,
+      title: 'New business collection order',
+      body: `${activeBuyer.name} reserved ${requestedItem.title} × ${reservedQuantity}.`,
+      dedupeKey: `store_reservation_received:${orderId}`,
+      payload: {
+        buyerName: activeBuyer.name,
+        buyerPhone: activeBuyer.mobile,
+        quantity: reservedQuantity,
+        collectionCode,
+      },
+    });
   };
 
   const handleBuyNow = (item) => {
@@ -1056,7 +1151,6 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
         title: `${notification.sellerName} accepted your request`,
         body: `Accepted. Collect ${productName} on ${collectionSummary}. Phone, pickup address, and seller note are available here.`,
         requestStatus: 'accepted',
-        chatEnabled: false,
         collectionDate: confirmation.collectionDate || '',
         collectionTime: confirmation.collectionTime || '',
         pickupAddress: confirmation.pickupAddress || '',
@@ -1075,7 +1169,6 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
                 ...entry,
                 read: true,
                 requestStatus: 'accepted',
-                chatEnabled: false,
                 body: `Awaiting collection from ${notification.buyerName}. Collection details were sent to the buyer.`,
               }
             : entry
@@ -1098,7 +1191,7 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
       commitNotifications((prev) => {
         const sellerUpdate = prev.map((entry) => (
           entry.id === notification.id
-            ? { ...entry, read: true, requestStatus: 'declined', chatEnabled: false, body: 'Request declined by the seller.' }
+            ? { ...entry, read: true, requestStatus: 'declined', body: 'Request declined by the seller.' }
             : entry
         ));
         return [declinedNotification, ...sellerUpdate.filter((entry) => entry.id !== declinedNotification.id)];
@@ -1110,7 +1203,6 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
             ...current,
             read: true,
             requestStatus: decision,
-            chatEnabled: false,
             body: accepted
               ? `Awaiting collection from ${notification.buyerName}. Collection details were sent to the buyer.`
               : 'Request declined by the seller.',
@@ -1133,9 +1225,32 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
     }));
     if (accepted) {
       setNotice('Request accepted. The buyer received your phone number, pickup address, time, and message.');
+      safeEmitNotificationEvent({
+        eventType: 'request_accepted',
+        recipientAccountId: notification.buyerId,
+        actorAccountId: notification.recipientId,
+        listingId: notification.itemId,
+        requestId: notification.requestId,
+        title: `${notification.sellerName} accepted your request`,
+        body: `Accepted. Collect ${notification.productName || 'the item'} on ${confirmation.collectionDate} at ${confirmation.collectionTime}.`,
+        dedupeKey: `request_accepted:${notification.requestId}`,
+        payload: {
+          sellerPhone: confirmation.sellerPhone || notification.sellerPhone || '',
+          pickupAddress: confirmation.pickupAddress || '',
+        },
+      });
     } else {
-      localStorage.removeItem(`zeromart-chat-${notification.requestId}`);
       setNotice('The request was declined. Reserved stock was released.');
+      safeEmitNotificationEvent({
+        eventType: 'request_declined',
+        recipientAccountId: notification.buyerId,
+        actorAccountId: notification.recipientId,
+        listingId: notification.itemId,
+        requestId: notification.requestId,
+        title: 'Collection request declined',
+        body: `${notification.sellerName} could not confirm your request for ${notification.productName || 'this item'}.`,
+        dedupeKey: `request_declined:${notification.requestId}`,
+      });
     }
   };
 
@@ -1272,6 +1387,7 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
         setItems((prev) => prev.map((item) => (item.id === editingItem.id ? updatedItem : item)));
         setFavorites((prev) => prev.map((item) => (item.id === editingItem.id ? updatedItem : item)));
         setNotice('Your listing has been updated live.');
+        safeTriggerNearbyListingAlerts(updatedItem);
       } catch (err) {
         console.error('[listing-submit] submit failed reason', err);
         setNotice(isProductionRuntime ? 'Live listings are temporarily unavailable' : 'Updated locally. Live sync failed.');
@@ -1346,6 +1462,7 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
       console.log('[listing-submit] API response', saved);
       Object.assign(newItem, saved);
       setItems((prev) => prev.map((item) => (item.id === optimisticId || item.id === saved.id ? newItem : item)));
+      safeTriggerNearbyListingAlerts(newItem);
     } catch (err) {
       console.error('[listing-submit] submit failed reason', err);
       setItems((prev) => prev.filter((item) => String(item.id) !== String(optimisticId)));
@@ -1428,6 +1545,7 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
   };
 
   const handleKarmaSubmit = () => {
+    const currentKarmaTarget = karmaTarget;
     if (karmaTarget?.type === 'business') {
       const accounts = getBusinessAccounts();
       const business = accounts.find((account) => account.id === karmaTarget.businessId);
@@ -1450,6 +1568,15 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
       setShowKarmaPopup(false);
       setKarmaTarget(null);
       setNotice('Good karma sent to the store.');
+      safeEmitNotificationEvent({
+        eventType: 'karma_received',
+        recipientAccountId: currentKarmaTarget?.businessId,
+        actorAccountId: activeAccountId,
+        orderId: currentKarmaTarget?.orderId,
+        title: 'Store received Good Karma',
+        body: `${activeBuyer?.name || 'A buyer'} sent Good Karma to your store.`,
+        dedupeKey: `karma_received:business:${currentKarmaTarget?.orderId}:${activeAccountId}`,
+      });
       window.dispatchEvent(new Event('storage'));
       return;
     }
@@ -1472,11 +1599,19 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
     setShowKarmaPopup(false);
     setKarmaTarget(null);
     setNotice(`Good karma sent to ${karmaTarget?.name || 'the seller'}.`);
+    safeEmitNotificationEvent({
+      eventType: 'karma_received',
+      recipientAccountId: currentKarmaTarget?.sellerId,
+      actorAccountId: activeAccountId,
+      requestId: currentKarmaTarget?.requestId,
+      title: 'You received Good Karma',
+      body: `${activeBuyer?.name || 'A buyer'} sent you Good Karma.`,
+      dedupeKey: `karma_received:community:${currentKarmaTarget?.requestId}:${activeAccountId}`,
+    });
   };
 
   const finishCompletedHandoff = (result, target) => {
     const quantity = Number(result.request?.quantity || 1);
-    localStorage.removeItem(`zeromart-chat-${target.requestId}`);
     const pendingKarma = {
       ...(target.karmaRecipient || target),
       id: `community:${target.requestId}`,
@@ -1523,6 +1658,16 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
         ? 'Exchange complete. Send mandatory good karma to the seller.'
         : 'Handover complete. The buyer will be asked to send good karma.'
     );
+    safeEmitNotificationEvent({
+      eventType: 'karma_required',
+      recipientAccountId: result.request?.buyerId,
+      actorAccountId: result.request?.sellerId,
+      requestId: target.requestId,
+      listingId: target.itemId,
+      title: 'Good Karma required',
+      body: `Collection complete for ${result.request?.productName || 'your item'}. Please send Good Karma to the seller.`,
+      dedupeKey: `karma_required:${target.requestId}`,
+    });
     window.dispatchEvent(new CustomEvent('zeromart-karma-pending'));
   };
 
@@ -1608,6 +1753,37 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
 
   const handleNotificationOpen = (notification) => {
     setNotifications((prev) => prev.map((entry) => (entry.id === notification.id ? { ...entry, read: true } : entry)));
+    const openPathFromPayload = typeof notification?.payload?.openPath === 'string'
+      ? notification.payload.openPath
+      : '';
+    const itemIdFromPayload = notification.itemId || notification.listingId || notification.payload?.listingId;
+    const requestIdFromPayload = notification.requestId || notification.payload?.requestId;
+    const orderIdFromPayload = notification.orderId || notification.payload?.orderId;
+    let targetItem = null;
+
+    if (itemIdFromPayload) {
+      targetItem = items.find((item) => String(item.id) === String(itemIdFromPayload));
+    }
+    if (!targetItem && requestIdFromPayload) {
+      const request = getRequests().find((entry) => String(entry.requestId) === String(requestIdFromPayload));
+      if (request?.productId) {
+        targetItem = items.find((item) => String(item.id) === String(request.productId));
+      }
+    }
+    if (!targetItem && orderIdFromPayload) {
+      const reservation = getReservations().find((entry) => String(entry.orderId || entry.id) === String(orderIdFromPayload));
+      if (reservation?.productId) {
+        targetItem = items.find((item) => String(item.id) === String(reservation.productId));
+      }
+    }
+
+    if (['request', 'requestAccepted', 'requestDeclined', 'businessOrderUpdate', 'businessOrderReceived', 'karma_required', 'karma_received', 'nearby_listing'].includes(notification.type) && targetItem) {
+      if (targetItem) {
+        setSelectedItem(targetItem);
+        setSelectedNotification(notification);
+        return;
+      }
+    }
     if (notification.type === 'product' && notification.itemId) {
       const targetItem = items.find((item) => item.id === notification.itemId);
       if (targetItem) {
@@ -1631,6 +1807,10 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
         setSelectedNotification(null);
         return;
       }
+    }
+    if (openPathFromPayload && openPathFromPayload.startsWith('/')) {
+      navigate(openPathFromPayload);
+      return;
     }
     setSelectedNotification(notification);
   };

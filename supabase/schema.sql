@@ -282,3 +282,72 @@ exception
   when duplicate_object then null;
   when undefined_object then null;
 end $$;
+
+-- ─────────────────────────────────────
+-- PRODUCTION NOTIFICATION INFRASTRUCTURE
+-- ─────────────────────────────────────
+create table if not exists push_tokens (
+  id             bigserial primary key,
+  account_id     text not null,
+  token          text not null unique,
+  platform       text not null default 'web',
+  enabled        boolean not null default true,
+  metadata       jsonb not null default '{}'::jsonb,
+  last_seen_at   timestamptz not null default now(),
+  invalidated_at timestamptz,
+  created_at     timestamptz not null default now(),
+  updated_at     timestamptz not null default now()
+);
+
+create index if not exists push_tokens_account_id_idx on push_tokens (account_id);
+create index if not exists push_tokens_enabled_idx on push_tokens (enabled);
+
+create table if not exists notification_preferences (
+  account_id            text primary key,
+  transactional_enabled boolean not null default true,
+  marketing_enabled     boolean not null default false,
+  nearby_enabled        boolean not null default true,
+  favourites_enabled    boolean not null default true,
+  muted_account_ids     text[] not null default '{}',
+  blocked_account_ids   text[] not null default '{}',
+  max_nearby_per_day    integer not null default 5,
+  created_at            timestamptz not null default now(),
+  updated_at            timestamptz not null default now()
+);
+
+create table if not exists app_notifications (
+  id                   text primary key,
+  recipient_account_id text not null,
+  actor_account_id     text,
+  event_type           text not null,
+  listing_id           text,
+  request_id           text,
+  order_id             text,
+  title                text not null,
+  body                 text not null,
+  payload              jsonb not null default '{}'::jsonb,
+  read                 boolean not null default false,
+  created_at           timestamptz not null default now()
+);
+
+create index if not exists app_notifications_recipient_idx on app_notifications (recipient_account_id, created_at desc);
+create index if not exists app_notifications_event_type_idx on app_notifications (event_type, created_at desc);
+
+create table if not exists notification_events (
+  id                   text primary key,
+  event_type           text not null,
+  recipient_account_id text not null,
+  actor_account_id     text,
+  listing_id           text,
+  request_id           text,
+  order_id             text,
+  dedupe_key           text unique,
+  payload              jsonb not null default '{}'::jsonb,
+  push_attempted       boolean not null default false,
+  push_sent            boolean not null default false,
+  push_error           text,
+  created_at           timestamptz not null default now()
+);
+
+create index if not exists notification_events_recipient_idx on notification_events (recipient_account_id, created_at desc);
+create index if not exists notification_events_type_idx on notification_events (event_type, created_at desc);

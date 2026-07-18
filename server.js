@@ -10,6 +10,7 @@ import Razorpay from 'razorpay';
 import pg from 'pg';
 import multer from 'multer';
 import WebSocket from 'ws';
+import admin from 'firebase-admin';
 import { createClient as createSupabaseClient } from '@supabase/supabase-js';
 
 if (!globalThis.WebSocket) {
@@ -582,6 +583,400 @@ function canUseSupabaseTable() {
   return Boolean(supabase);
 }
 
+let notificationSchemaReady = false;
+
+const getFirebaseCredential = () => {
+  const serviceAccountJson = process.env.FIREBASE_SERVICE_ACCOUNT_JSON;
+  if (serviceAccountJson) {
+    try {
+      return admin.credential.cert(JSON.parse(serviceAccountJson));
+    } catch (error) {
+      console.warn('[FCM] FIREBASE_SERVICE_ACCOUNT_JSON is invalid JSON');
+    }
+  }
+
+  const projectId = process.env.FIREBASE_PROJECT_ID;
+  const clientEmail = process.env.FIREBASE_CLIENT_EMAIL;
+  const privateKey = String(process.env.FIREBASE_PRIVATE_KEY || '').replace(/\\n/g, '\n');
+  if (!projectId || !clientEmail || !privateKey) return null;
+  return admin.credential.cert({ projectId, clientEmail, privateKey });
+};
+
+const initializeFirebaseAdmin = () => {
+  if (admin.apps.length > 0) return true;
+  const credential = getFirebaseCredential();
+  if (!credential) return false;
+  try {
+    admin.initializeApp({ credential });
+    return true;
+  } catch (error) {
+    console.warn('[FCM] firebase-admin initialization failed', error.message || error);
+    return false;
+  }
+};
+
+async function ensureNotificationSchema() {
+  if (!dbEnabled || !pool || notificationSchemaReady) return;
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS push_tokens (
+      id BIGSERIAL PRIMARY KEY,
+      account_id TEXT NOT NULL,
+      token TEXT NOT NULL UNIQUE,
+      platform TEXT NOT NULL DEFAULT 'web',
+      enabled BOOLEAN NOT NULL DEFAULT true,
+      metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+      last_seen_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      invalidated_at TIMESTAMPTZ,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+
+    CREATE INDEX IF NOT EXISTS push_tokens_account_id_idx ON push_tokens (account_id);
+    CREATE INDEX IF NOT EXISTS push_tokens_enabled_idx ON push_tokens (enabled);
+
+    CREATE TABLE IF NOT EXISTS notification_preferences (
+      account_id TEXT PRIMARY KEY,
+      transactional_enabled BOOLEAN NOT NULL DEFAULT true,
+      marketing_enabled BOOLEAN NOT NULL DEFAULT false,
+      nearby_enabled BOOLEAN NOT NULL DEFAULT true,
+      favourites_enabled BOOLEAN NOT NULL DEFAULT true,
+      muted_account_ids TEXT[] NOT NULL DEFAULT '{}',
+      blocked_account_ids TEXT[] NOT NULL DEFAULT '{}',
+      max_nearby_per_day INTEGER NOT NULL DEFAULT 5,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+
+    CREATE TABLE IF NOT EXISTS app_notifications (
+      id TEXT PRIMARY KEY,
+      recipient_account_id TEXT NOT NULL,
+      actor_account_id TEXT,
+      event_type TEXT NOT NULL,
+      listing_id TEXT,
+      request_id TEXT,
+      order_id TEXT,
+      title TEXT NOT NULL,
+      body TEXT NOT NULL,
+      payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+      read BOOLEAN NOT NULL DEFAULT false,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+
+    CREATE INDEX IF NOT EXISTS app_notifications_recipient_idx ON app_notifications (recipient_account_id, created_at DESC);
+    CREATE INDEX IF NOT EXISTS app_notifications_event_type_idx ON app_notifications (event_type);
+
+    CREATE TABLE IF NOT EXISTS notification_events (
+      id TEXT PRIMARY KEY,
+      event_type TEXT NOT NULL,
+      recipient_account_id TEXT NOT NULL,
+      actor_account_id TEXT,
+      listing_id TEXT,
+      request_id TEXT,
+      order_id TEXT,
+      dedupe_key TEXT UNIQUE,
+      payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+      push_attempted BOOLEAN NOT NULL DEFAULT false,
+      push_sent BOOLEAN NOT NULL DEFAULT false,
+      push_error TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+
+    CREATE INDEX IF NOT EXISTS notification_events_recipient_idx ON notification_events (recipient_account_id, created_at DESC);
+    CREATE INDEX IF NOT EXISTS notification_events_type_idx ON notification_events (event_type, created_at DESC);
+  `);
+  notificationSchemaReady = true;
+}
+
+const isTransactionalEvent = (eventType = '') => String(eventType).startsWith('transaction_')
+  || String(eventType).includes('request')
+  || String(eventType).includes('reservation')
+  || String(eventType).includes('karma');
+
+async function shouldDeliverEventToRecipient({ recipientAccountId, actorAccountId, eventType }) {
+  if (!dbEnabled || !pool) return true;
+  await ensureNotificationSchema();
+  const { rows } = await pool.query(
+    `SELECT
+      transactional_enabled,
+      marketing_enabled,
+      nearby_enabled,
+      favourites_enabled,
+      muted_account_ids,
+      blocked_account_ids,
+      max_nearby_per_day
+     FROM notification_preferences
+     WHERE account_id = $1`,
+    [String(recipientAccountId)]
+  );
+  const pref = rows[0];
+  if (!pref) return true;
+
+  const actorId = String(actorAccountId || '');
+  if (actorId) {
+    if ((pref.blocked_account_ids || []).includes(actorId)) return false;
+    if ((pref.muted_account_ids || []).includes(actorId)) return false;
+  }
+
+  const type = String(eventType || '').toLowerCase();
+  if (type === 'nearby_listing' && pref.nearby_enabled === false) return false;
+  if (type === 'favourite_listing' && pref.favourites_enabled === false) return false;
+  if (type === 'marketing' && pref.marketing_enabled === false) return false;
+  if (isTransactionalEvent(type) && pref.transactional_enabled === false) return false;
+
+  if (type === 'nearby_listing') {
+    const { rows: capRows } = await pool.query(
+      `SELECT COUNT(*)::int AS sent_count
+       FROM notification_events
+       WHERE recipient_account_id = $1
+         AND event_type = 'nearby_listing'
+         AND created_at >= date_trunc('day', now())`,
+      [String(recipientAccountId)]
+    );
+    const sentCount = Number(capRows[0]?.sent_count || 0);
+    const maxPerDay = Math.max(1, Number(pref.max_nearby_per_day || 5));
+    if (sentCount >= maxPerDay) return false;
+  }
+
+  return true;
+}
+
+async function markPushTokensInvalid(tokens = []) {
+  if (!dbEnabled || !pool || !tokens.length) return;
+  await ensureNotificationSchema();
+  await pool.query(
+    `UPDATE push_tokens
+     SET enabled = false,
+         invalidated_at = now(),
+         updated_at = now()
+     WHERE token = ANY($1::text[])`,
+    [tokens]
+  );
+}
+
+async function sendPushToAccount({ recipientAccountId, eventType, title, body, data = {} }) {
+  if (!dbEnabled || !pool) return { attempted: false, sent: false, reason: 'db-disabled' };
+  if (!initializeFirebaseAdmin()) return { attempted: false, sent: false, reason: 'fcm-not-configured' };
+  await ensureNotificationSchema();
+
+  const tokensResult = await pool.query(
+    `SELECT token
+     FROM push_tokens
+     WHERE account_id = $1
+       AND enabled = true
+     ORDER BY last_seen_at DESC`,
+    [String(recipientAccountId)]
+  );
+  const tokens = tokensResult.rows.map((row) => row.token).filter(Boolean);
+  if (!tokens.length) return { attempted: false, sent: false, reason: 'no-tokens' };
+
+  const message = {
+    tokens,
+    notification: {
+      title: String(title || 'Drizn update'),
+      body: String(body || 'You have a new update.'),
+    },
+    data: Object.fromEntries(Object.entries({ ...data, eventType }).map(([key, value]) => [key, String(value ?? '')])),
+    webpush: {
+      fcmOptions: {
+        link: data?.openPath ? `https://drizn.com${data.openPath}` : 'https://drizn.com/',
+      },
+    },
+  };
+
+  try {
+    const response = await admin.messaging().sendEachForMulticast(message);
+    const invalidTokens = [];
+    response.responses.forEach((entry, index) => {
+      if (entry.success) return;
+      const code = String(entry.error?.code || '');
+      if (code.includes('registration-token-not-registered') || code.includes('invalid-registration-token')) {
+        invalidTokens.push(tokens[index]);
+      }
+    });
+    if (invalidTokens.length) await markPushTokensInvalid(invalidTokens);
+    return {
+      attempted: true,
+      sent: response.successCount > 0,
+      successCount: response.successCount,
+      failureCount: response.failureCount,
+    };
+  } catch (error) {
+    return { attempted: true, sent: false, reason: error.message || 'push-send-failed' };
+  }
+}
+
+const buildOpenPath = ({ eventType, listingId, requestId, orderId }) => {
+  const type = String(eventType || '');
+  if (type === 'new_request' || type === 'request_accepted' || type === 'request_declined') {
+    return requestId ? `/request/${encodeURIComponent(requestId)}` : '/';
+  }
+  if (type === 'store_reservation_received' || type === 'reservation_confirmed') {
+    return orderId ? `/business/orders?order=${encodeURIComponent(orderId)}` : '/business/orders';
+  }
+  if (listingId) return `/listing/${encodeURIComponent(listingId)}`;
+  return '/';
+};
+
+const toFiniteNumber = (value) => {
+  const next = Number(value);
+  return Number.isFinite(next) ? next : null;
+};
+
+const getCoordinatesFromMetadata = (metadata = {}) => {
+  const lat = toFiniteNumber(metadata?.location?.latitude ?? metadata?.latitude ?? metadata?.lat);
+  const lng = toFiniteNumber(metadata?.location?.longitude ?? metadata?.longitude ?? metadata?.lng);
+  if (lat === null || lng === null) return null;
+  return { lat, lng };
+};
+
+const haversineKm = (from, to) => {
+  const rad = (value) => (value * Math.PI) / 180;
+  const dLat = rad(to.lat - from.lat);
+  const dLng = rad(to.lng - from.lng);
+  const a = Math.sin(dLat / 2) ** 2
+    + Math.cos(rad(from.lat)) * Math.cos(rad(to.lat)) * Math.sin(dLng / 2) ** 2;
+  return 2 * 6371 * Math.asin(Math.min(1, Math.sqrt(a)));
+};
+
+async function getNearbyRecipients({ actorAccountId, origin, radiusKm = 2 }) {
+  if (!dbEnabled || !pool) return [];
+  await ensureNotificationSchema();
+  const { rows } = await pool.query(
+    `SELECT DISTINCT ON (account_id) account_id, metadata
+     FROM push_tokens
+     WHERE enabled = true
+       AND account_id <> $1
+     ORDER BY account_id, last_seen_at DESC`,
+    [String(actorAccountId || '')]
+  );
+
+  return rows
+    .map((row) => {
+      const coordinates = getCoordinatesFromMetadata(parseJsonValue(row.metadata, {}));
+      if (!coordinates) return null;
+      const distanceKm = haversineKm(origin, coordinates);
+      if (!Number.isFinite(distanceKm) || distanceKm > radiusKm) return null;
+      return {
+        accountId: String(row.account_id),
+        distanceKm,
+      };
+    })
+    .filter(Boolean)
+    .sort((first, second) => first.distanceKm - second.distanceKm);
+}
+
+async function createNotificationEvent({ eventType, recipientAccountId, actorAccountId = '', listingId = '', requestId = '', orderId = '', title = '', body = '', payload = {}, dedupeKey = '' }) {
+  if (!dbEnabled || !pool) {
+    return { accepted: false, reason: 'db-disabled' };
+  }
+  await ensureNotificationSchema();
+  const deliver = await shouldDeliverEventToRecipient({ recipientAccountId, actorAccountId, eventType });
+  if (!deliver) return { accepted: false, skipped: true, reason: 'preference-or-cap' };
+
+  const eventId = crypto.randomUUID();
+  const openPath = buildOpenPath({ eventType, listingId, requestId, orderId });
+  const payloadWithPath = { ...payload, openPath };
+
+  let inserted = true;
+  try {
+    await pool.query(
+      `INSERT INTO notification_events (
+         id,
+         event_type,
+         recipient_account_id,
+         actor_account_id,
+         listing_id,
+         request_id,
+         order_id,
+         dedupe_key,
+         payload
+       ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+      [
+        eventId,
+        String(eventType),
+        String(recipientAccountId),
+        String(actorAccountId || ''),
+        listingId || null,
+        requestId || null,
+        orderId || null,
+        dedupeKey || null,
+        payloadWithPath,
+      ]
+    );
+  } catch (error) {
+    const duplicate = String(error?.code || '') === '23505';
+    if (!duplicate) throw error;
+    inserted = false;
+  }
+
+  if (!inserted) {
+    return { accepted: true, deduped: true };
+  }
+
+  await pool.query(
+    `INSERT INTO app_notifications (
+      id,
+      recipient_account_id,
+      actor_account_id,
+      event_type,
+      listing_id,
+      request_id,
+      order_id,
+      title,
+      body,
+      payload
+    ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+    [
+      eventId,
+      String(recipientAccountId),
+      String(actorAccountId || ''),
+      String(eventType),
+      listingId || null,
+      requestId || null,
+      orderId || null,
+      String(title || 'Drizn update'),
+      String(body || ''),
+      payloadWithPath,
+    ]
+  );
+
+  const push = await sendPushToAccount({
+    recipientAccountId,
+    eventType,
+    title,
+    body,
+    data: {
+      eventId,
+      eventType,
+      listingId,
+      requestId,
+      orderId,
+      openPath,
+    },
+  });
+
+  await pool.query(
+    `UPDATE notification_events
+     SET push_attempted = $2,
+         push_sent = $3,
+         push_error = $4
+     WHERE id = $1`,
+    [
+      eventId,
+      Boolean(push.attempted),
+      Boolean(push.sent),
+      push.sent ? null : (push.reason || null),
+    ]
+  );
+
+  return {
+    accepted: true,
+    id: eventId,
+    push,
+    openPath,
+  };
+}
+
 async function fetchListingsViaSupabase() {
   if (!canUseSupabaseTable()) return null;
   const { data, error } = await supabase
@@ -1051,6 +1446,274 @@ app.delete('/api/products/:id', authMiddleware, async (req, res) => {
 // Expose whether database persistence is enabled
 app.get('/api/persistence', (_req, res) => {
   return res.json({ db: hasSharedPersistence(), missing: getMissingRuntimeEnv() });
+});
+
+app.post('/api/notifications/token', optionalAuthMiddleware, async (req, res) => {
+  const { accountId, token, platform = 'web', metadata = {}, enabled = true } = req.body || {};
+  const resolvedAccountId = String(req.user?.id || accountId || '').trim();
+  if (!resolvedAccountId || !token) {
+    return res.status(400).json({ error: 'accountId and token are required' });
+  }
+  if (!dbEnabled || !pool) {
+    return res.json({ success: true, persisted: false });
+  }
+  try {
+    await ensureNotificationSchema();
+    await pool.query(
+      `INSERT INTO push_tokens (account_id, token, platform, enabled, metadata, last_seen_at, updated_at)
+       VALUES ($1,$2,$3,$4,$5,now(),now())
+       ON CONFLICT (token) DO UPDATE SET
+         account_id = EXCLUDED.account_id,
+         platform = EXCLUDED.platform,
+         enabled = EXCLUDED.enabled,
+         metadata = COALESCE(push_tokens.metadata, '{}'::jsonb) || EXCLUDED.metadata,
+         invalidated_at = CASE WHEN EXCLUDED.enabled THEN NULL ELSE push_tokens.invalidated_at END,
+         last_seen_at = now(),
+         updated_at = now()`,
+      [resolvedAccountId, token, String(platform || 'web'), Boolean(enabled), metadata || {}]
+    );
+    return res.json({ success: true, persisted: true });
+  } catch (error) {
+    console.error('[NOTIFICATIONS] token upsert failed', error.message || error);
+    return res.status(500).json({ error: 'Could not register token' });
+  }
+});
+
+app.post('/api/notifications/token/disable', optionalAuthMiddleware, async (req, res) => {
+  const { token } = req.body || {};
+  if (!token) return res.status(400).json({ error: 'token is required' });
+  if (!dbEnabled || !pool) return res.json({ success: true, persisted: false });
+  try {
+    await ensureNotificationSchema();
+    await markPushTokensInvalid([String(token)]);
+    return res.json({ success: true, persisted: true });
+  } catch (error) {
+    console.error('[NOTIFICATIONS] token disable failed', error.message || error);
+    return res.status(500).json({ error: 'Could not disable token' });
+  }
+});
+
+app.get('/api/notifications/preferences/:accountId', optionalAuthMiddleware, async (req, res) => {
+  const accountId = String(req.params.accountId || '').trim();
+  if (!accountId) return res.status(400).json({ error: 'accountId is required' });
+  if (!dbEnabled || !pool) {
+    return res.json({
+      accountId,
+      transactionalEnabled: true,
+      marketingEnabled: false,
+      nearbyEnabled: true,
+      favouritesEnabled: true,
+      mutedAccountIds: [],
+      blockedAccountIds: [],
+      maxNearbyPerDay: 5,
+    });
+  }
+  try {
+    await ensureNotificationSchema();
+    const { rows } = await pool.query(
+      `SELECT *
+       FROM notification_preferences
+       WHERE account_id = $1`,
+      [accountId]
+    );
+    const pref = rows[0] || {};
+    return res.json({
+      accountId,
+      transactionalEnabled: pref.transactional_enabled ?? true,
+      marketingEnabled: pref.marketing_enabled ?? false,
+      nearbyEnabled: pref.nearby_enabled ?? true,
+      favouritesEnabled: pref.favourites_enabled ?? true,
+      mutedAccountIds: pref.muted_account_ids || [],
+      blockedAccountIds: pref.blocked_account_ids || [],
+      maxNearbyPerDay: Number(pref.max_nearby_per_day || 5),
+    });
+  } catch (error) {
+    console.error('[NOTIFICATIONS] preferences fetch failed', error.message || error);
+    return res.status(500).json({ error: 'Could not fetch preferences' });
+  }
+});
+
+app.put('/api/notifications/preferences/:accountId', optionalAuthMiddleware, async (req, res) => {
+  const accountId = String(req.params.accountId || '').trim();
+  if (!accountId) return res.status(400).json({ error: 'accountId is required' });
+  if (!dbEnabled || !pool) return res.json({ success: true, persisted: false });
+  const {
+    transactionalEnabled = true,
+    marketingEnabled = false,
+    nearbyEnabled = true,
+    favouritesEnabled = true,
+    mutedAccountIds = [],
+    blockedAccountIds = [],
+    maxNearbyPerDay = 5,
+  } = req.body || {};
+  try {
+    await ensureNotificationSchema();
+    await pool.query(
+      `INSERT INTO notification_preferences (
+        account_id,
+        transactional_enabled,
+        marketing_enabled,
+        nearby_enabled,
+        favourites_enabled,
+        muted_account_ids,
+        blocked_account_ids,
+        max_nearby_per_day,
+        updated_at
+      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,now())
+      ON CONFLICT (account_id) DO UPDATE SET
+        transactional_enabled = EXCLUDED.transactional_enabled,
+        marketing_enabled = EXCLUDED.marketing_enabled,
+        nearby_enabled = EXCLUDED.nearby_enabled,
+        favourites_enabled = EXCLUDED.favourites_enabled,
+        muted_account_ids = EXCLUDED.muted_account_ids,
+        blocked_account_ids = EXCLUDED.blocked_account_ids,
+        max_nearby_per_day = EXCLUDED.max_nearby_per_day,
+        updated_at = now()`,
+      [
+        accountId,
+        Boolean(transactionalEnabled),
+        Boolean(marketingEnabled),
+        Boolean(nearbyEnabled),
+        Boolean(favouritesEnabled),
+        Array.isArray(mutedAccountIds) ? mutedAccountIds.map((value) => String(value)) : [],
+        Array.isArray(blockedAccountIds) ? blockedAccountIds.map((value) => String(value)) : [],
+        Math.max(1, Number(maxNearbyPerDay || 5)),
+      ]
+    );
+    return res.json({ success: true, persisted: true });
+  } catch (error) {
+    console.error('[NOTIFICATIONS] preferences update failed', error.message || error);
+    return res.status(500).json({ error: 'Could not update preferences' });
+  }
+});
+
+app.get('/api/notifications/history/:accountId', optionalAuthMiddleware, async (req, res) => {
+  const accountId = String(req.params.accountId || '').trim();
+  const limit = Math.min(100, Math.max(1, Number(req.query.limit || 50)));
+  if (!accountId) return res.status(400).json({ error: 'accountId is required' });
+  if (!dbEnabled || !pool) return res.json([]);
+  try {
+    await ensureNotificationSchema();
+    const { rows } = await pool.query(
+      `SELECT id, event_type, listing_id, request_id, order_id, title, body, payload, read, created_at
+       FROM app_notifications
+       WHERE recipient_account_id = $1
+       ORDER BY created_at DESC
+       LIMIT $2`,
+      [accountId, limit]
+    );
+    return res.json(rows);
+  } catch (error) {
+    console.error('[NOTIFICATIONS] history fetch failed', error.message || error);
+    return res.status(500).json({ error: 'Could not fetch history' });
+  }
+});
+
+app.post('/api/notifications/events', optionalAuthMiddleware, async (req, res) => {
+  const {
+    eventType,
+    recipientAccountId,
+    actorAccountId,
+    listingId,
+    requestId,
+    orderId,
+    title,
+    body,
+    payload,
+    dedupeKey,
+  } = req.body || {};
+
+  if (!eventType || !recipientAccountId) {
+    return res.status(400).json({ error: 'eventType and recipientAccountId are required' });
+  }
+
+  if (!dbEnabled || !pool) {
+    return res.json({ success: true, persisted: false, push: { attempted: false, sent: false } });
+  }
+
+  try {
+    const result = await createNotificationEvent({
+      eventType,
+      recipientAccountId: String(recipientAccountId),
+      actorAccountId: String(actorAccountId || req.user?.id || ''),
+      listingId: listingId ? String(listingId) : '',
+      requestId: requestId ? String(requestId) : '',
+      orderId: orderId ? String(orderId) : '',
+      title: String(title || 'Drizn update'),
+      body: String(body || ''),
+      payload: payload || {},
+      dedupeKey: dedupeKey ? String(dedupeKey) : '',
+    });
+    return res.json({ success: true, ...result });
+  } catch (error) {
+    console.error('[NOTIFICATIONS] event create failed', error.message || error);
+    // Fail-open contract: primary business flows must not fail because push failed.
+    return res.json({ success: true, accepted: false, push: { attempted: false, sent: false }, error: String(error.message || error) });
+  }
+});
+
+app.post('/api/notifications/nearby-listing', optionalAuthMiddleware, async (req, res) => {
+  const {
+    actorAccountId,
+    listingId,
+    title,
+    category,
+    latitude,
+    longitude,
+    area,
+    city,
+    radiusKm = 2,
+  } = req.body || {};
+
+  const ownerId = String(actorAccountId || req.user?.id || '').trim();
+  const lat = toFiniteNumber(latitude);
+  const lng = toFiniteNumber(longitude);
+  if (!ownerId || !listingId || lat === null || lng === null) {
+    return res.status(400).json({ error: 'actorAccountId, listingId, latitude, and longitude are required' });
+  }
+  if (!dbEnabled || !pool) {
+    return res.json({ success: true, persisted: false, notifiedCount: 0 });
+  }
+
+  try {
+    const recipients = await getNearbyRecipients({
+      actorAccountId: ownerId,
+      origin: { lat, lng },
+      radiusKm: Math.max(0.5, Math.min(10, Number(radiusKm) || 2)),
+    });
+
+    const today = new Date().toISOString().slice(0, 10);
+    let notifiedCount = 0;
+    for (const recipient of recipients) {
+      const result = await createNotificationEvent({
+        eventType: 'nearby_listing',
+        recipientAccountId: recipient.accountId,
+        actorAccountId: ownerId,
+        listingId: String(listingId),
+        title: 'New nearby listing',
+        body: `${String(title || 'A listing')} is available within 2 km${area || city ? ` near ${[area, city].filter(Boolean).join(', ')}` : ''}.`,
+        dedupeKey: `nearby_listing:${listingId}:${recipient.accountId}:${today}`,
+        payload: {
+          category: String(category || ''),
+          distanceKm: Number(recipient.distanceKm.toFixed(2)),
+          area: String(area || ''),
+          city: String(city || ''),
+        },
+      });
+      if (result.accepted && !result.skipped && !result.deduped) notifiedCount += 1;
+    }
+
+    return res.json({
+      success: true,
+      persisted: true,
+      candidates: recipients.length,
+      notifiedCount,
+    });
+  } catch (error) {
+    console.error('[NOTIFICATIONS] nearby listing dispatch failed', error.message || error);
+    // Fail-open: listing creation/update should remain successful.
+    return res.json({ success: true, persisted: false, notifiedCount: 0, error: String(error.message || error) });
+  }
 });
 
 // Get favourites

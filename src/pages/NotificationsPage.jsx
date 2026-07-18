@@ -45,9 +45,6 @@ export default function NotificationsPage({
 }) {
   const [confirmRequest, setConfirmRequest] = useState(null);
   const [showPickupPicker, setShowPickupPicker] = useState(false);
-  const [demoChatRequestId, setDemoChatRequestId] = useState('');
-  const [demoChatDraft, setDemoChatDraft] = useState('');
-  const [demoChatMessages, setDemoChatMessages] = useState([]);
   const [confirmation, setConfirmation] = useState({
     collectionDate: '',
     collectionTime: '',
@@ -67,30 +64,6 @@ export default function NotificationsPage({
       sellerPhone: item.sellerPhone || '',
       optionalMessage: '',
     });
-  };
-
-  const toggleDemoChat = (requestId) => {
-    if (demoChatRequestId === requestId) {
-      setDemoChatRequestId('');
-      return;
-    }
-    let saved = [];
-    try {
-      saved = JSON.parse(localStorage.getItem(`zeromart-chat-${requestId}`)) || [];
-    } catch {
-      saved = [];
-    }
-    setDemoChatMessages(saved);
-    setDemoChatRequestId(requestId);
-  };
-
-  const sendDemoChat = () => {
-    const message = demoChatDraft.trim();
-    if (!message || !demoChatRequestId) return;
-    const next = [...demoChatMessages, { id: Date.now(), text: message, sender: 'buyer' }];
-    setDemoChatMessages(next);
-    localStorage.setItem(`zeromart-chat-${demoChatRequestId}`, JSON.stringify(next));
-    setDemoChatDraft('');
   };
 
   const requestActions = (item) => {
@@ -219,26 +192,7 @@ export default function NotificationsPage({
                     {selectedNotification.sellerPhone && <a href={phoneLink(selectedNotification.sellerPhone)} className="inline-flex items-center justify-center gap-2 rounded-xl border border-violet-200 bg-violet-50 px-3 py-2.5 font-bold text-violet-800"><Phone size={15} /> Call seller</a>}
                     {selectedNotification.whatsappLink && <a href={selectedNotification.whatsappLink} target="_blank" rel="noreferrer" className="inline-flex items-center justify-center gap-2 rounded-xl border border-emerald-200 bg-white px-3 py-2.5 font-bold text-emerald-700"><MessageCircle size={15} /> WhatsApp</a>}
                     {selectedNotification.emailLink && <a href={selectedNotification.emailLink} className="inline-flex items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2.5 font-bold text-slate-700"><Mail size={15} /> Email draft</a>}
-                    {selectedNotification.isDemo && selectedNotification.requestStatus === 'accepted' && (
-                      <button type="button" onClick={() => toggleDemoChat(selectedNotification.requestId)} className="inline-flex items-center justify-center gap-2 rounded-xl border border-violet-200 bg-violet-50 px-3 py-2.5 font-bold text-violet-800">
-                        <MessageCircle size={15} /> Temporary chat
-                      </button>
-                    )}
                   </div>
-                  {selectedNotification.isDemo && demoChatRequestId === selectedNotification.requestId && selectedNotification.requestStatus === 'accepted' && (
-                    <div className="rounded-xl border border-violet-100 bg-violet-50/60 p-3">
-                      <p className="text-xs font-bold uppercase tracking-wide text-violet-700">Temporary chat</p>
-                      <div className="mt-2 max-h-28 space-y-2 overflow-y-auto">
-                        {demoChatMessages.length === 0
-                          ? <p className="text-xs text-slate-500">Coordinate collection here. This chat is deleted when the handover completes.</p>
-                          : demoChatMessages.map((message) => <p key={message.id} className="ml-auto w-fit max-w-[85%] rounded-xl bg-white px-3 py-2 text-xs text-slate-700 shadow-sm">{message.text}</p>)}
-                      </div>
-                      <div className="mt-2 flex gap-2">
-                        <input value={demoChatDraft} onChange={(event) => setDemoChatDraft(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') sendDemoChat(); }} placeholder="Type a message" className="min-w-0 flex-1 rounded-xl border border-violet-100 bg-white px-3 py-2 text-xs outline-none" />
-                        <button type="button" onClick={sendDemoChat} className="rounded-xl bg-violet-600 px-3 py-2 text-xs font-bold text-white">Send</button>
-                      </div>
-                    </div>
-                  )}
                   {selectedNotification.requestStatus === 'accepted' ? (
                     <button type="button" onClick={() => onMarkCollected(selectedNotification)} className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-emerald-700 px-3 py-3 font-bold text-white"><Check size={16} /> Mark collected</button>
                   ) : selectedNotification.requestStatus === 'completed' ? (
