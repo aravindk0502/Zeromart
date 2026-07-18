@@ -189,7 +189,7 @@ export default function SectionPage({ section, businessItems = [], onBack, locat
                 onKeyDown={(event) => {
                   if (event.key === 'Enter' || event.key === ' ') onSelectItem?.(stock);
                 }}
-                className="group min-w-0 cursor-pointer overflow-hidden rounded-[1.5rem] border border-emerald-100 bg-white shadow-[0_14px_45px_rgba(15,23,42,0.08)] transition hover:-translate-y-1 hover:shadow-[0_22px_60px_rgba(15,23,42,0.12)] focus:outline-none focus:ring-4 focus:ring-emerald-100"
+                className="group min-w-0 cursor-pointer overflow-hidden rounded-[1.5rem] border border-emerald-200 bg-white ring-1 ring-emerald-100/90 shadow-[0_14px_45px_rgba(15,23,42,0.08)] transition hover:-translate-y-1 hover:shadow-[0_22px_60px_rgba(15,23,42,0.12)] focus:outline-none focus:ring-4 focus:ring-emerald-100"
               >
                 {item.image && <img src={item.image} alt={item.title} loading="lazy" decoding="async" className="h-40 w-full object-cover sm:h-44" />}
                 <div className="p-4">

@@ -29,6 +29,17 @@ function cleanSellerName(...names) {
   });
   return String(value || DEFAULT_SELLER_NAME).trim();
 }
+
+function getInitialsFromName(name = '') {
+  return String(name || '')
+    .split(' ')
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .map((part) => part[0])
+    .join('')
+    .slice(0, 2)
+    .toUpperCase();
+}
 const { Pool } = pg;
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -363,6 +374,19 @@ function listingRowToClient(row) {
   const latitude = numberOrNull(row.latitude ?? locationData.latitude ?? locationData.lat);
   const longitude = numberOrNull(row.longitude ?? locationData.longitude ?? locationData.lng);
   const imageUrl = row.image_url || metadata.image || metadata.photo || '';
+  const sellerName = cleanSellerName(row.seller_name, row.store_name, metadata.sellerName, metadata.businessName);
+  const sellerAvatar = metadata.sellerLogo
+    || metadata.logoUrl
+    || metadata.sellerAvatar
+    || metadata.profileImage
+    || metadata.avatarUrl
+    || '';
+  const sellerInitials = String(
+    metadata.sellerInitials
+    || getInitialsFromName(sellerName)
+    || 'DU'
+  ).trim().toUpperCase().slice(0, 2) || 'DU';
+  const sellerProfileMetadata = parseJsonValue(metadata.sellerProfile, {});
   const createdAt = row.created_at instanceof Date ? row.created_at.toISOString() : row.created_at;
   const updatedAt = row.updated_at instanceof Date ? row.updated_at.toISOString() : row.updated_at;
 
@@ -379,7 +403,11 @@ function listingRowToClient(row) {
     photo_url: imageUrl,
     sellerId: row.seller_id || '',
     ownerMobile: metadata.ownerMobile || '',
-    sellerName: cleanSellerName(row.seller_name, row.store_name, metadata.sellerName, metadata.businessName),
+    sellerName,
+    sellerInitials,
+    sellerAvatar,
+    sellerProfileImage: sellerAvatar,
+    avatarUrl: sellerAvatar,
     sellerType,
     listingType: sellerType === 'business' ? 'business' : 'community',
     isBusinessProduct: sellerType === 'business',
@@ -405,6 +433,21 @@ function listingRowToClient(row) {
     longitude,
     coordinates: latitude !== null && longitude !== null ? { lat: latitude, lng: longitude } : metadata.coordinates || null,
     locationData,
+    sellerProfile: {
+      id: String(sellerProfileMetadata.id || row.seller_id || row.business_id || '').trim(),
+      name: sellerProfileMetadata.name || sellerName,
+      initials: sellerProfileMetadata.initials || sellerInitials,
+      avatarUrl: sellerProfileMetadata.avatarUrl || sellerAvatar,
+      logoUrl: sellerProfileMetadata.logoUrl || metadata.logoUrl || metadata.sellerLogo || '',
+      accountType: sellerProfileMetadata.accountType || (sellerType === 'business' ? 'business' : 'community'),
+      area: sellerProfileMetadata.area || row.area || locationData.area || locationData.locality || '',
+      city: sellerProfileMetadata.city || row.city || locationData.city || '',
+      karma: Number(sellerProfileMetadata.karma ?? row.karma_score ?? 0) || 0,
+      activeListings: Number(sellerProfileMetadata.activeListings || 0) || 0,
+      joinedAt: sellerProfileMetadata.joinedAt || '',
+      bio: String(sellerProfileMetadata.bio || '').trim(),
+      verified: Boolean(sellerProfileMetadata.verified || sellerType === 'business'),
+    },
     createdAt,
     updatedAt,
     metadata,

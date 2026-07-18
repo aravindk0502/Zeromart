@@ -1083,6 +1083,7 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
       return;
     }
     setEditingItem(null);
+    setShowPostSuccessModal(false);
     setShowListingSheet(true);
   };
 
@@ -1139,6 +1140,12 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
   const handleListingSubmit = async (formData) => {
     console.log('[listing-submit] submit started', formData);
     if (editingItem) {
+      const sellerAvatar = editingItem.sellerProfileImage
+        || editingItem.sellerAvatar
+        || editingItem.avatarUrl
+        || editingItem.sellerProfile?.avatarUrl
+        || user?.profileImage
+        || '';
       const updatedItem = {
         ...editingItem,
         title: formData.title,
@@ -1163,6 +1170,17 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
         locationData: formData.locationData,
         sellerType: 'community',
         isBusinessProduct: false,
+        sellerProfileImage: sellerAvatar,
+        sellerAvatar,
+        avatarUrl: sellerAvatar,
+        sellerProfile: {
+          ...(editingItem.sellerProfile || {}),
+          id: String(editingItem.sellerProfile?.id || editingItem.sellerId || user?.userId || user?.mobile || 'guest-owner'),
+          name: editingItem.sellerProfile?.name || editingItem.sellerName || user?.name || 'You',
+          initials: editingItem.sellerProfile?.initials || editingItem.sellerInitials || user?.initials || 'DU',
+          avatarUrl: editingItem.sellerProfile?.avatarUrl || sellerAvatar,
+          accountType: 'community',
+        },
         updatedAt: new Date().toISOString(),
       };
       if (!isProductionRuntime) {
@@ -1190,6 +1208,7 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
       setShowListingSheet(false);
       return true;
     }
+    const sellerAvatar = user?.profileImage || '';
     const newItem = {
       id: Date.now(),
       title: formData.title,
@@ -1201,7 +1220,16 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
       sellerName: user?.name || 'You',
       sellerId: user?.userId || user?.mobile || 'guest-owner',
       sellerKarma: user?.karma || 0,
-      sellerProfileImage: user?.profileImage || '',
+      sellerProfileImage: sellerAvatar,
+      sellerAvatar,
+      avatarUrl: sellerAvatar,
+      sellerProfile: {
+        id: String(user?.userId || user?.mobile || 'guest-owner'),
+        name: user?.name || 'You',
+        initials: user?.initials || 'DU',
+        avatarUrl: sellerAvatar,
+        accountType: 'community',
+      },
       ownerMobile: user?.mobile || 'guest-owner',
       isOwn: true,
       image: formData.image || 'https://images.unsplash.com/photo-1512436991641-6745cdb1723f?auto=format&fit=crop&w=900&q=80',

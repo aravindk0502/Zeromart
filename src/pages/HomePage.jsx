@@ -68,7 +68,7 @@ export function ProductRail({
           const isOwnListing = isListingOwnedByUser(item, actor);
           const isFavorite = favorites.some((entry) => entry.id === item.id);
           const sellerName = getSellerName(item);
-          const sellerAvatar = getSellerAvatar(item) || (isOwnListing ? user?.profileImage || '' : '');
+          const sellerAvatar = getSellerAvatar(item) || (isOwnListing ? actor?.profileImage || '' : '');
           const sellerInitials = String(item?.sellerInitials || item?.sellerProfile?.initials || getInitials(sellerName) || 'DU').slice(0, 2).toUpperCase();
           return (
             <article
@@ -79,7 +79,7 @@ export function ProductRail({
               onKeyDown={(event) => {
                 if (event.key === 'Enter' || event.key === ' ') onSelectItem?.(stock);
               }}
-              className="group min-w-[245px] max-w-[245px] snap-start cursor-pointer overflow-hidden rounded-2xl border border-slate-100 bg-white shadow-sm transition hover:-translate-y-1 hover:shadow-lg focus:outline-none focus:ring-4 focus:ring-violet-100"
+              className="group min-w-[245px] max-w-[245px] snap-start cursor-pointer overflow-hidden rounded-2xl border border-slate-200 bg-white ring-1 ring-slate-200/80 shadow-sm transition hover:-translate-y-1 hover:shadow-lg focus:outline-none focus:ring-4 focus:ring-violet-100"
             >
               <div className="relative">
                 <img src={item.image} alt={item.title} loading="lazy" decoding="async" className="h-32 w-full object-cover" />
@@ -228,7 +228,7 @@ export default function HomePage({
 
   return (
     <div className="space-y-4">
-      <section className="overflow-hidden rounded-[1.5rem] border border-emerald-100 bg-white/95 shadow-[0_16px_55px_rgba(15,23,42,0.08)]">
+      <section className="overflow-visible rounded-[1.5rem] border border-emerald-100 bg-white/95 shadow-[0_16px_55px_rgba(15,23,42,0.08)]">
         <div className="border-b border-emerald-100/80 bg-[linear-gradient(135deg,#f0fdf4_0%,#ffffff_52%,#fffbeb_100%)] p-4 sm:p-5">
           <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             <div className="min-w-0">
@@ -271,7 +271,7 @@ export default function HomePage({
                 onKeyDown={(event) => {
                   if (event.key === 'Enter' || event.key === ' ') onSelectItem?.(stock);
                 }}
-                className={`group cursor-pointer overflow-hidden rounded-[1.5rem] border bg-white shadow-[0_14px_45px_rgba(15,23,42,0.08)] transition-all duration-200 hover:-translate-y-1 hover:shadow-[0_22px_60px_rgba(15,23,42,0.12)] focus:outline-none focus:ring-4 ${isBusiness ? 'border-emerald-200 focus:ring-emerald-100' : 'border-amber-100/80 focus:ring-violet-100'}`}
+                className={`group cursor-pointer overflow-hidden rounded-[1.5rem] border bg-white ring-1 shadow-[0_14px_45px_rgba(15,23,42,0.08)] transition-all duration-200 hover:-translate-y-1 hover:shadow-[0_22px_60px_rgba(15,23,42,0.12)] focus:outline-none focus:ring-4 ${isBusiness ? 'border-emerald-200 ring-emerald-100/90 focus:ring-emerald-100' : 'border-amber-200/90 ring-amber-100/90 focus:ring-violet-100'}`}
               >
                 <div className="relative">
                   <img src={item.image} alt={item.title} loading="lazy" decoding="async" className="h-40 w-full object-cover transition duration-500 group-hover:scale-[1.03]" />
