@@ -1318,7 +1318,7 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
       setUser((prev) => (prev ? { ...prev, isBuyer: true } : prev));
     }
     setShowBuyerPaySheet(false);
-    setNotice('Lifetime buying access unlocked. You can request ₹0 items now.');
+    setNotice('Yearly buyer access unlocked. You can request ₹0 items now.');
   };
 
   const handleKarmaSubmit = () => {

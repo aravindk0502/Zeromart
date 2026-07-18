@@ -357,7 +357,7 @@ export default function ProfilePage({ user, items = [], orders = [], receivedOrd
 
         <div className="mt-4 flex flex-wrap items-center gap-2">
           <div className="rounded-full border border-amber-200 bg-white px-3 py-2 text-sm font-semibold text-violet-700">
-            {user.isBuyer ? 'Lifetime buying access active' : 'Buying unlocks when you request an item'}
+            {user.isBuyer ? 'Yearly buyer access active' : 'Buying unlocks when you request an item'}
           </div>
           <button onClick={onLogout} className="ml-auto inline-flex items-center gap-2 rounded-full border border-rose-200 bg-rose-50 px-3 py-2 text-sm font-semibold text-rose-700">
             <LogOut size={14} /> Logout

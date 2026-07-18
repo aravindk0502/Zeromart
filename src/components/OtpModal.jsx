@@ -42,7 +42,7 @@ export default function OtpModal({ onClose, onVerify }) {
               />
             </label>
             <div className="rounded-2xl border border-slate-200 bg-slate-50 p-3 text-sm text-slate-600">
-              One account lets you list for ₹0 and request ₹0 items after the one-time buying access fee.
+              One account lets you list for ₹0 and request ₹0 items after the ₹29 yearly buyer access fee.
             </div>
             <button type="button" onClick={() => locationEngine.openPicker({
               title: 'Set your home location',
