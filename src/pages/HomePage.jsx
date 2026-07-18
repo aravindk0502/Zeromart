@@ -246,7 +246,7 @@ export default function HomePage({
           </div>
         </div>
 
-        <div className="grid gap-3 p-4 sm:grid-cols-2 sm:p-5 xl:grid-cols-3">
+        <div className="grid gap-3 p-4 md:grid-cols-2 sm:p-5 xl:grid-cols-3">
           {nearbyProducts.length === 0 ? (
             <div className="rounded-[1.5rem] border border-dashed border-slate-200 bg-white/80 p-6 text-center sm:col-span-2 xl:col-span-3">
               <p className="text-base font-bold text-slate-700">No live listings yet.</p>
@@ -353,8 +353,8 @@ export default function HomePage({
                   <div className="mt-3 flex items-center justify-between gap-2">
                     <p className="min-w-0 truncate text-sm text-slate-500">{item.condition || item.category || 'Available'} · {item.distance || 'nearby'}</p>
                   </div>
-                  <div className="mt-4 flex items-center justify-between gap-2 border-t border-slate-100 pt-3">
-                    <span className={`inline-flex min-w-0 items-center gap-1.5 rounded-full px-3 py-2 text-xs font-bold ${isBusiness ? 'bg-emerald-50 text-emerald-800' : 'bg-gradient-to-r from-amber-50 to-violet-50 text-amber-700'}`}>
+                  <div className="mt-4 flex flex-wrap items-center justify-between gap-2 border-t border-slate-100 pt-3">
+                    <span className={`inline-flex max-w-full items-center gap-1.5 rounded-full px-3 py-2 text-xs font-bold ${isBusiness ? 'bg-emerald-50 text-emerald-800' : 'bg-gradient-to-r from-amber-50 to-violet-50 text-amber-700'}`}>
                       <Star size={13} fill="currentColor" />
                       <span className="truncate">{item.sellerKarma || 0} {isBusiness ? 'Store Karma' : 'karma'}</span>
                     </span>
@@ -364,7 +364,7 @@ export default function HomePage({
                         event.stopPropagation();
                         isOwnListing ? onEditItem?.(item) : onBuyItem?.(stock);
                       }}
-                      className={`shrink-0 rounded-full px-4 py-2 text-sm font-bold transition ${
+                      className={`w-full shrink-0 rounded-full px-4 py-2 text-sm font-bold transition sm:w-auto ${
                         unavailable
                           ? 'cursor-not-allowed border border-slate-300 bg-slate-200 text-slate-800 shadow-none'
                           : isBusiness
