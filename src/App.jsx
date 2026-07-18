@@ -25,7 +25,7 @@ import {
   formatDistance, formatShortAddress, getLocationScopes, getLocationScopeValue, haversineKm,
 } from './services/locationService';
 import {
-  applyProductExpiry, createCollectionCode, getCollectionSettings, getExpiryTimestamp,
+  applyProductExpiry, createCollectionCode, getCollectionSettings, getExpiryBadgeState, getExpiryTimestamp,
   getProductRequestState, getPurchaseHistory, getQuantityAllowance, isMarketplaceVisible, normalizeProductStock, recordPurchaseAttempt,
   savePurchaseHistory, saveRequests, getRequests, saveReservations, getReservations, createWhatsAppLink,
   updatePurchaseHistoryStatus, confirmHandoff, getTransactionProducts, saveTransactionProducts,
@@ -155,6 +155,13 @@ const createOrderId = () => {
   const date = new Date().toISOString().slice(0, 10).replaceAll('-', '');
   const suffix = Math.random().toString(36).slice(2, 8).toUpperCase();
   return `ZM-${date}-${suffix}`;
+};
+
+const formatJoinedDate = (value) => {
+  if (!value) return '';
+  const next = new Date(value);
+  if (Number.isNaN(next.getTime())) return '';
+  return next.toLocaleDateString([], { month: 'short', year: 'numeric' });
 };
 
 const loadNotifications = () => {
@@ -1574,29 +1581,18 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
       const itemCoordinates = getItemCoordinates(item);
       const distanceFromActive = activeLocation && itemCoordinates ? haversineKm(activeLocation, itemCoordinates) : null;
       const requestState = getProductRequestState(item, activeAccountId, requestClock);
-      const expiryTimestamp = getExpiryTimestamp(item);
-      const hoursRemaining = expiryTimestamp === null
-        ? Number.POSITIVE_INFINITY
-        : Math.max(0, (expiryTimestamp - requestClock) / (60 * 60 * 1000));
-      const rescueWindowDays = Number(item.expiryWindowDays ?? item.listBeforeExpiryDays ?? 5);
-      const nearExpiry = expiryTimestamp !== null
-        && hoursRemaining <= rescueWindowDays * 24
+      const expiryBadge = getExpiryBadgeState(item, requestClock);
+      const nearExpiry = expiryBadge.nearExpiry
         && Number(requestState?.requestableStock ?? item.availableQuantity ?? 0) > 0;
-      let rescueBadge = '';
-      if (nearExpiry) {
-        if (hoursRemaining <= 12) rescueBadge = 'Rescue Now';
-        else if (hoursRemaining <= 24) rescueBadge = 'Expires Today';
-        else if (hoursRemaining <= 48) rescueBadge = 'Expires Tomorrow';
-        else rescueBadge = `${Math.ceil(hoursRemaining / 24)} Days Left`;
-      }
       return {
         ...item,
         distanceKm: distanceFromActive,
         distance: distanceFromActive === null ? item.distance : formatDistance(distanceFromActive),
         requestState,
+        expiryBadge,
         nearExpiry,
-        rescueBadge,
-        hoursRemaining,
+        rescueBadge: nearExpiry ? expiryBadge.rescueLabel : '',
+        hoursRemaining: expiryBadge.hoursRemaining,
       };
     }).filter((item) => {
       const searchableText = [
@@ -1737,20 +1733,36 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
         : Number.POSITIVE_INFINITY;
       const existing = profileMap.get(name) || {
         name,
+        sellerId: String(item.sellerProfile?.id || item.sellerId || item.businessId || ''),
+        initials: item.sellerInitials || item.sellerProfile?.initials || name.split(' ').map((part) => part[0]).join('').slice(0, 2).toUpperCase(),
         karma: 0,
         listings: 0,
         completed: 0,
         distanceKm: Number.POSITIVE_INFINITY,
         location: item.location,
+        area: item.sellerProfile?.area || item.area || '',
+        city: item.sellerProfile?.city || item.city || '',
+        accountType: item.sellerProfile?.accountType || item.sellerType || (item.isBusinessProduct ? 'business' : 'community'),
+        joinedAt: item.sellerProfile?.joinedAt || '',
+        bio: item.sellerProfile?.bio || '',
+        verified: Boolean(item.sellerProfile?.verified || item.sellerType === 'business' || item.isBusinessProduct),
         image: item.sellerProfileImage || (user?.name === name ? user.profileImage : ''),
       };
       profileMap.set(name, {
         ...existing,
+        sellerId: existing.sellerId || String(item.sellerProfile?.id || item.sellerId || item.businessId || ''),
+        initials: existing.initials || item.sellerInitials || item.sellerProfile?.initials || '',
         karma: Math.max(existing.karma, item.sellerKarma || 0),
         listings: existing.listings + 1,
         completed: existing.completed + Number(item.completedCount || item.soldQuantity || 0),
         distanceKm: Math.min(existing.distanceKm, itemDistanceKm ?? Number.POSITIVE_INFINITY),
         location: existing.location || item.location,
+        area: existing.area || item.sellerProfile?.area || item.area || '',
+        city: existing.city || item.sellerProfile?.city || item.city || '',
+        accountType: existing.accountType || item.sellerProfile?.accountType || item.sellerType || (item.isBusinessProduct ? 'business' : 'community'),
+        joinedAt: existing.joinedAt || item.sellerProfile?.joinedAt || '',
+        bio: existing.bio || item.sellerProfile?.bio || '',
+        verified: existing.verified || Boolean(item.sellerProfile?.verified || item.sellerType === 'business' || item.isBusinessProduct),
         image: existing.image || item.sellerProfileImage || (user?.name === name ? user.profileImage : ''),
       });
     });
@@ -1775,7 +1787,9 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
         )).slice(0, 5);
       }
       const existing = profileMap.get(user.name) || {
+        sellerId: String(user.userId || user.id || ''),
         name: user.name, karma: 0, listings: 0, completed: 0,
+        initials: user.initials || user.name?.split(' ').map((part) => part[0]).join('').slice(0, 2).toUpperCase() || 'DU',
         distanceKm: userDistanceKm ?? Number.POSITIVE_INFINITY,
         location: locationLabel, image: user.profileImage,
       };
@@ -1794,8 +1808,51 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
   }, [debouncedCoordinates, items, leaderboardScope, locationEngine.location, locationLabel, radiusKm, user]);
   const selectedPublicProfileItems = useMemo(() => {
     if (!selectedPublicProfile) return [];
-    return items.filter((item) => (item.sellerName || item.brand) === selectedPublicProfile.name);
+    const selectedSellerId = String(selectedPublicProfile.sellerId || '').trim();
+    return items.filter((item) => {
+      const itemSellerId = String(item.sellerProfile?.id || item.sellerId || item.businessId || '').trim();
+      if (selectedSellerId && itemSellerId) return itemSellerId === selectedSellerId;
+      return (item.sellerName || item.brand) === selectedPublicProfile.name;
+    });
   }, [items, selectedPublicProfile]);
+  const openPublicSellerProfile = (item) => {
+    if (!item) return;
+    const sellerProfile = item.sellerProfile || {};
+    const sellerId = String(sellerProfile.id || item.sellerId || item.businessId || '').trim();
+    const name = sellerProfile.name
+      || item.sellerName
+      || item.storeName
+      || item.brand
+      || item.sellerInitials
+      || 'Drizn User';
+    const initials = (sellerProfile.initials || item.sellerInitials || name.split(' ').map((part) => part[0]).join('').slice(0, 2).toUpperCase() || 'DU').slice(0, 2).toUpperCase();
+    const image = sellerProfile.logoUrl || sellerProfile.avatarUrl || item.sellerProfileImage || item.sellerAvatar || item.avatarUrl || '';
+    const accountTypeRaw = String(sellerProfile.accountType || item.sellerType || (item.isBusinessProduct ? 'business' : 'community')).toLowerCase();
+    const accountType = accountTypeRaw === 'business' || accountTypeRaw === 'store' ? 'business' : 'community';
+    const listingCount = items.filter((entry) => {
+      const entrySellerId = String(entry.sellerProfile?.id || entry.sellerId || entry.businessId || '').trim();
+      if (sellerId && entrySellerId) return entrySellerId === sellerId;
+      return (entry.sellerName || entry.brand) === name;
+    }).length;
+    const area = sellerProfile.area || item.area || item.locationData?.area || item.locationData?.locality || '';
+    const city = sellerProfile.city || item.city || item.locationData?.city || '';
+    setSelectedPublicProfile({
+      sellerId,
+      name,
+      initials,
+      image,
+      logoUrl: sellerProfile.logoUrl || '',
+      accountType,
+      area,
+      city,
+      location: [area, city].filter(Boolean).join(', ') || item.location || 'Area unavailable',
+      karma: Number(sellerProfile.karma ?? item.sellerKarma ?? 0) || 0,
+      listings: Number(sellerProfile.activeListings || listingCount) || 0,
+      joinedAt: sellerProfile.joinedAt || '',
+      bio: String(sellerProfile.bio || '').trim(),
+      verified: Boolean(sellerProfile.verified || accountType === 'business'),
+    });
+  };
   const hasActiveSession = Boolean(user || businessSession);
   const visibleNotice = hasActiveSession && /you are logged out/i.test(notice) ? '' : notice;
 
@@ -1981,6 +2038,7 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
                   onSelectItem={setSelectedItem}
                   onBuyItem={handleBuyNow}
                   onEditItem={handleEditListing}
+                  onOpenSellerProfile={openPublicSellerProfile}
                   onToggleFavorite={toggleFavorite}
                   favorites={favorites}
                   rescue
@@ -2201,6 +2259,7 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
                 onToggleFavorite={toggleFavorite}
                 favorites={favorites}
                 onEditItem={handleEditListing}
+                onOpenSellerProfile={openPublicSellerProfile}
                 hasMoreItems={hasMoreDiscoveryItems}
                 loadMoreLabel={DISCOVERY_STAGES[discoveryStageIndex + 1]?.label || ''}
                 onLoadMore={() => setDiscoveryStageIndex((index) => Math.min(DISCOVERY_STAGES.length - 1, index + 1))}
@@ -2343,6 +2402,7 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
           onEdit={handleEditListing}
           onDelete={handleDeleteListing}
           user={activeBuyer}
+          onOpenSellerProfile={openPublicSellerProfile}
         />
       )}
 
@@ -2355,13 +2415,26 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
                   {selectedPublicProfile.image ? (
                     <img src={selectedPublicProfile.image} alt={selectedPublicProfile.name} className="h-full w-full object-cover" />
                   ) : (
-                    selectedPublicProfile.name.split(' ').map((part) => part[0]).join('').slice(0, 2).toUpperCase()
+                    selectedPublicProfile.initials
+                    || selectedPublicProfile.name.split(' ').map((part) => part[0]).join('').slice(0, 2).toUpperCase()
+                    || 'DU'
                   )}
                 </div>
                 <div>
                   <p className="text-sm font-semibold text-violet-600">Good karma profile</p>
-                  <h3 className="text-xl font-bold text-slate-900">{selectedPublicProfile.name}</h3>
-                  <p className="text-sm text-slate-500">{selectedPublicProfile.location}</p>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <h3 className="text-xl font-bold text-slate-900">{selectedPublicProfile.name}</h3>
+                    {selectedPublicProfile.verified && (
+                      <span className="inline-flex items-center gap-1 rounded-full bg-emerald-100 px-2 py-0.5 text-[11px] font-extrabold text-emerald-700">
+                        <ShieldCheck size={11} /> Verified
+                      </span>
+                    )}
+                  </div>
+                  {(selectedPublicProfile.accountType || selectedPublicProfile.location) && (
+                    <p className="text-sm text-slate-500">
+                      {[selectedPublicProfile.accountType === 'business' ? 'Business account' : selectedPublicProfile.accountType ? 'Community account' : '', selectedPublicProfile.location].filter(Boolean).join(' · ')}
+                    </p>
+                  )}
                 </div>
               </div>
               <button onClick={() => setSelectedPublicProfile(null)} className="rounded-full bg-slate-100 px-3 py-2 text-sm font-semibold text-slate-600">
@@ -2375,19 +2448,19 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
               </div>
               <div className="rounded-2xl bg-violet-50 p-3 text-center">
                 <p className="text-xl font-bold text-violet-700">{selectedPublicProfile.listings}</p>
-                <p className="text-xs text-slate-500">Products listed</p>
+                <p className="text-xs text-slate-500">Active listings</p>
               </div>
               <div className="rounded-2xl bg-slate-50 p-3 text-center">
-                <p className="text-xl font-bold text-slate-900">₹0</p>
-                <p className="text-xs text-slate-500">Giving price</p>
+                <p className="text-xl font-bold text-slate-900">{formatJoinedDate(selectedPublicProfile.joinedAt) || '--'}</p>
+                <p className="text-xs text-slate-500">Joined</p>
               </div>
             </div>
-            <div className="mt-5 rounded-[1.5rem] border border-amber-100 bg-gradient-to-r from-amber-50 to-violet-50 p-4">
-              <p className="font-semibold text-slate-900">About {selectedPublicProfile.name}</p>
-              <p className="mt-2 text-sm leading-6 text-slate-600">
-                {selectedPublicProfile.name} has shared {selectedPublicProfile.listings} product{selectedPublicProfile.listings === 1 ? '' : 's'} around {selectedPublicProfile.location} and earned {selectedPublicProfile.karma} good karma points.
-              </p>
-            </div>
+            {selectedPublicProfile.bio && (
+              <div className="mt-5 rounded-[1.5rem] border border-amber-100 bg-gradient-to-r from-amber-50 to-violet-50 p-4">
+                <p className="font-semibold text-slate-900">About {selectedPublicProfile.name}</p>
+                <p className="mt-2 text-sm leading-6 text-slate-600">{selectedPublicProfile.bio}</p>
+              </div>
+            )}
             <div className="mt-5">
               <p className="mb-3 font-semibold text-slate-900">Listed products</p>
               {selectedPublicProfileItems.length === 0 ? (

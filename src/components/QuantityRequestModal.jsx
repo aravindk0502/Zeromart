@@ -1,7 +1,7 @@
 import { Minus, PackageCheck, Plus, X } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import {
-  formatExpiry, formatRequestCountdown, getQuantityAllowance, normalizeProductStock,
+  formatRequestCountdown, getExpiryBadgeState, getQuantityAllowance, normalizeProductStock,
 } from '../services/transactionService';
 
 export default function QuantityRequestModal({ item, buyerId, collectionSettings, onClose, onConfirm }) {
@@ -9,6 +9,7 @@ export default function QuantityRequestModal({ item, buyerId, collectionSettings
   const [quantity, setQuantity] = useState(1);
   const [slot, setSlot] = useState('');
   const [now, setNow] = useState(Date.now());
+  const expiryBadge = useMemo(() => getExpiryBadgeState(product, now), [product, now]);
   const allowance = getQuantityAllowance(product, buyerId, quantity, now);
   const maximum = Math.min(allowance.remainingLimit, allowance.requestableStock, product.maxQuantityPerUserPer24h);
   const isBusiness = product.listingType === 'business';
@@ -54,7 +55,7 @@ export default function QuantityRequestModal({ item, buyerId, collectionSettings
           </div>
         </div>
 
-        {formatExpiry(product) && <p className="mt-3 rounded-xl bg-slate-50 px-3 py-2 text-sm font-semibold text-slate-600">Expires: {formatExpiry(product)}</p>}
+        {expiryBadge.statusLabel && <p className={`mt-3 rounded-xl px-3 py-2 text-sm font-semibold ${expiryBadge.statusClassName}`}>{expiryBadge.statusLabel}</p>}
 
         {maximum > 0 ? (
           <>

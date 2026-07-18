@@ -185,6 +185,176 @@ export const formatExpiry = (product, now = new Date()) => {
   return `${day}${time ? ` ${time}` : ''}`;
 };
 
+const toFiniteNumber = (value, fallback = 0) => {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : fallback;
+};
+
+export const getExpiryBadgeState = (product, now = Date.now()) => {
+  const expiryTimestamp = getExpiryTimestamp(product);
+  const hasExpiry = expiryTimestamp !== null;
+  const rescueWindowDays = Math.max(1, toFiniteNumber(product?.expiryWindowDays ?? product?.listBeforeExpiryDays, 5));
+  const fallbackNearExpiry = Boolean(product?.nearExpiryDeal || product?.nearExpiry);
+  const fallbackExpired = String(product?.status || '').toLowerCase() === 'expired';
+
+  if (!hasExpiry) {
+    if (fallbackExpired) {
+      return {
+        hasExpiry,
+        expiryTimestamp,
+        hoursRemaining: 0,
+        daysRemaining: 0,
+        isExpired: true,
+        nearExpiry: false,
+        showPublic: false,
+        rescueLabel: 'Expired',
+        rescueClassName: 'bg-rose-700',
+        statusLabel: 'Expired',
+        statusClassName: 'bg-rose-100 text-rose-800',
+        formattedExpiry: '',
+      };
+    }
+    if (fallbackNearExpiry) {
+      return {
+        hasExpiry,
+        expiryTimestamp,
+        hoursRemaining: Number.POSITIVE_INFINITY,
+        daysRemaining: Number.POSITIVE_INFINITY,
+        isExpired: false,
+        nearExpiry: true,
+        showPublic: true,
+        rescueLabel: 'Near Expiry',
+        rescueClassName: 'bg-amber-600',
+        statusLabel: 'Near Expiry',
+        statusClassName: 'bg-amber-100 text-amber-800',
+        formattedExpiry: '',
+      };
+    }
+    return {
+      hasExpiry,
+      expiryTimestamp,
+      hoursRemaining: Number.POSITIVE_INFINITY,
+      daysRemaining: Number.POSITIVE_INFINITY,
+      isExpired: false,
+      nearExpiry: false,
+      showPublic: true,
+      rescueLabel: '',
+      rescueClassName: 'bg-slate-600',
+      statusLabel: '',
+      statusClassName: 'bg-slate-100 text-slate-700',
+      formattedExpiry: '',
+    };
+  }
+
+  const hoursRemaining = Math.max(0, (expiryTimestamp - now) / (60 * 60 * 1000));
+  const daysRemaining = Math.max(0, Math.ceil(hoursRemaining / 24));
+  const isExpired = expiryTimestamp <= now;
+  const nearExpiry = !isExpired && (hoursRemaining <= rescueWindowDays * 24 || fallbackNearExpiry);
+  const formattedExpiry = formatExpiry(product, new Date(now));
+
+  if (isExpired) {
+    return {
+      hasExpiry,
+      expiryTimestamp,
+      hoursRemaining,
+      daysRemaining,
+      isExpired,
+      nearExpiry: false,
+      showPublic: false,
+      rescueLabel: 'Expired',
+      rescueClassName: 'bg-rose-700',
+      statusLabel: 'Expired',
+      statusClassName: 'bg-rose-100 text-rose-800',
+      formattedExpiry,
+    };
+  }
+
+  if (hoursRemaining <= 12) {
+    return {
+      hasExpiry,
+      expiryTimestamp,
+      hoursRemaining,
+      daysRemaining,
+      isExpired,
+      nearExpiry: true,
+      showPublic: true,
+      rescueLabel: 'Rescue Now',
+      rescueClassName: 'bg-red-600',
+      statusLabel: 'Expires Today',
+      statusClassName: 'bg-rose-100 text-rose-800',
+      formattedExpiry,
+    };
+  }
+
+  if (hoursRemaining <= 24) {
+    return {
+      hasExpiry,
+      expiryTimestamp,
+      hoursRemaining,
+      daysRemaining,
+      isExpired,
+      nearExpiry: true,
+      showPublic: true,
+      rescueLabel: 'Expires Today',
+      rescueClassName: 'bg-red-600',
+      statusLabel: 'Expires Today',
+      statusClassName: 'bg-rose-100 text-rose-800',
+      formattedExpiry,
+    };
+  }
+
+  if (hoursRemaining <= 48) {
+    return {
+      hasExpiry,
+      expiryTimestamp,
+      hoursRemaining,
+      daysRemaining,
+      isExpired,
+      nearExpiry: true,
+      showPublic: true,
+      rescueLabel: 'Expires Tomorrow',
+      rescueClassName: 'bg-orange-500',
+      statusLabel: 'Expires Tomorrow',
+      statusClassName: 'bg-orange-100 text-orange-800',
+      formattedExpiry,
+    };
+  }
+
+  if (nearExpiry) {
+    const rescueLabel = `Expires in ${daysRemaining} Days`;
+    const statusLabel = daysRemaining <= 3 ? `Expires in ${daysRemaining} Days` : `Expires ${formattedExpiry}`;
+    return {
+      hasExpiry,
+      expiryTimestamp,
+      hoursRemaining,
+      daysRemaining,
+      isExpired,
+      nearExpiry,
+      showPublic: true,
+      rescueLabel,
+      rescueClassName: 'bg-amber-500',
+      statusLabel,
+      statusClassName: 'bg-amber-100 text-amber-800',
+      formattedExpiry,
+    };
+  }
+
+  return {
+    hasExpiry,
+    expiryTimestamp,
+    hoursRemaining,
+    daysRemaining,
+    isExpired,
+    nearExpiry,
+    showPublic: true,
+    rescueLabel: '',
+    rescueClassName: 'bg-slate-600',
+    statusLabel: formattedExpiry ? `Expires ${formattedExpiry}` : '',
+    statusClassName: 'bg-slate-100 text-slate-700',
+    formattedExpiry,
+  };
+};
+
 const normalizePurchaseEntry = (entry) => {
   const requestedAt = entry.requestedAt || entry.createdAt || new Date().toISOString();
   const requestedTimestamp = new Date(requestedAt).getTime();

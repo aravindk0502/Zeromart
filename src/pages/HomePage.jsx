@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef } from 'react';
 import {
   ArrowRight, Heart, MapPin, ShieldCheck, Sparkles, Star, Store, Users,
 } from 'lucide-react';
-import { formatExpiry, getExpiryTimestamp, normalizeProductStock } from '../services/transactionService';
+import { getExpiryBadgeState, normalizeProductStock } from '../services/transactionService';
 import { isListingOwnedByUser } from '../utils/listingOwnership';
 
 const getCollectionCta = (item) => (
@@ -16,7 +16,26 @@ const getPriceLabel = (item) => {
   return price === 0 ? '₹0' : `₹${price}`;
 };
 
-const getBusinessName = (item) => item?.sellerName || item?.storeName || item?.brand || 'Local store';
+const getSellerName = (item) => (
+  item?.sellerProfile?.name
+  || item?.sellerName
+  || item?.storeName
+  || item?.brand
+  || item?.sellerInitials
+  || 'Drizn User'
+);
+
+const getBusinessName = (item) => getSellerName(item) || 'Local store';
+
+const getSellerAvatar = (item) => (
+  item?.sellerProfile?.logoUrl
+  || item?.sellerLogo
+  || item?.sellerProfile?.avatarUrl
+  || item?.sellerProfileImage
+  || item?.sellerAvatar
+  || item?.avatarUrl
+  || ''
+);
 
 const getInitials = (name = 'Drizn User') => String(name)
   .split(' ')
@@ -27,7 +46,7 @@ const getInitials = (name = 'Drizn User') => String(name)
   .toUpperCase() || 'U';
 
 export function ProductRail({
-  title, eyebrow, icon: Icon, items, onSelectItem, onBuyItem, onToggleFavorite, favorites, rescue = false, actor, onEditItem,
+  title, eyebrow, icon: Icon, items, onSelectItem, onBuyItem, onToggleFavorite, favorites, rescue = false, actor, onEditItem, onOpenSellerProfile,
 }) {
   if (!items?.length) return null;
   return (
@@ -44,9 +63,13 @@ export function ProductRail({
       <div className="flex snap-x gap-3 overflow-x-auto pb-2">
         {items.map((item) => {
           const stock = normalizeProductStock(item);
+          const expiryBadge = item.expiryBadge || getExpiryBadgeState(stock);
           const requestState = item.requestState;
           const isOwnListing = isListingOwnedByUser(item, actor);
           const isFavorite = favorites.some((entry) => entry.id === item.id);
+          const sellerName = getSellerName(item);
+          const sellerAvatar = getSellerAvatar(item);
+          const sellerInitials = String(item?.sellerInitials || item?.sellerProfile?.initials || getInitials(sellerName) || 'DU').slice(0, 2).toUpperCase();
           return (
             <article
               key={`${title}-${item.id}`}
@@ -60,9 +83,9 @@ export function ProductRail({
             >
               <div className="relative">
                 <img src={item.image} alt={item.title} loading="lazy" decoding="async" className="h-32 w-full object-cover" />
-                {rescue && (
-                  <span className={`absolute left-2 top-2 rounded-full px-2.5 py-1 text-[10px] font-extrabold uppercase tracking-wide text-white shadow ${item.hoursRemaining <= 24 ? 'bg-red-600' : item.hoursRemaining <= 48 ? 'bg-orange-500' : 'bg-amber-500'}`}>
-                    {item.rescueLabel}
+                {rescue && expiryBadge.nearExpiry && expiryBadge.rescueLabel && (
+                  <span className={`absolute left-2 top-2 rounded-full px-2.5 py-1 text-[10px] font-extrabold uppercase tracking-wide text-white shadow ${expiryBadge.rescueClassName}`}>
+                    {expiryBadge.rescueLabel}
                   </span>
                 )}
                 <button
@@ -90,9 +113,28 @@ export function ProductRail({
                   <MapPin size={12} /> {item.distance || 'Distance unavailable'}
                 </p>
                 <div className="mt-2 flex items-center justify-between gap-2 text-xs">
-                  <span className="truncate text-slate-500">{item.sellerName}</span>
+                  <button
+                    type="button"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      onOpenSellerProfile?.(item);
+                    }}
+                    className="flex min-w-0 items-center gap-2 text-slate-500 hover:text-violet-700"
+                  >
+                    <span className="flex h-6 w-6 shrink-0 items-center justify-center overflow-hidden rounded-full bg-amber-100 text-[10px] font-extrabold text-violet-700">
+                      {sellerAvatar
+                        ? <img src={sellerAvatar} alt={sellerName} className="h-full w-full object-cover" />
+                        : sellerInitials || 'DU'}
+                    </span>
+                    <span className="truncate">{sellerName}</span>
+                  </button>
                   <span className="shrink-0 font-bold text-amber-600">★ {item.sellerKarma || 0}</span>
                 </div>
+                {expiryBadge.statusLabel && (
+                  <div className="mt-2 text-xs font-bold">
+                    <span className={`rounded-full px-2.5 py-1 ${expiryBadge.statusClassName}`}>{expiryBadge.statusLabel}</span>
+                  </div>
+                )}
                 <button
                   type="button"
                   disabled={!isOwnListing && requestState && !requestState.canRequest}
@@ -127,7 +169,7 @@ export function ProductRail({
 
 export default function HomePage({
   user, items = [], businessItems = [], onSelectItem, onBuyItem,
-  locationLabel, onToggleFavorite, favorites = [], onEditItem,
+  locationLabel, onToggleFavorite, favorites = [], onEditItem, onOpenSellerProfile,
   hasMoreItems = false, onLoadMore, loadMoreLabel = '',
 }) {
   const loadMoreRef = useRef(null);
@@ -146,12 +188,8 @@ export default function HomePage({
 
   const nearbyProducts = useMemo(() => {
     const groupPriority = (item) => {
-      const expiryAt = getExpiryTimestamp(item);
-      const isNearExpiry = Boolean(
-        item.nearExpiryDeal
-        || item.nearExpiry
-        || (expiryAt && expiryAt > Date.now() && expiryAt - Date.now() <= 7 * 24 * 60 * 60 * 1000),
-      );
+      const expiryBadge = item.expiryBadge || getExpiryBadgeState(item);
+      const isNearExpiry = Boolean(expiryBadge.nearExpiry);
       if (isNearExpiry) return 0;
       if (item.isBusinessProduct || item.listingType === 'business' || item.sellerType === 'business') return 1;
       return 2;
@@ -163,12 +201,13 @@ export default function HomePage({
     const listedValue = (item) => new Date(item.createdAt || item.updatedAt || 0).getTime() || 0;
     const stores = businessItems.map((item) => normalizeProductStock({
       ...item,
+      expiryBadge: item.expiryBadge || getExpiryBadgeState(item),
       isBusinessProduct: true,
       listingType: 'business',
       sellerType: 'business',
       brand: getBusinessName(item),
       subtitle: item.subtitle || `Local business · ${item.distance || 'nearby'}`,
-      badge: item.nearExpiryDeal ? 'Near Expiry' : 'Verified',
+      badge: (item.expiryBadge || getExpiryBadgeState(item)).nearExpiry ? 'Near Expiry' : 'Verified',
     }));
     const community = items
       .filter((item) => !item.isBusinessProduct && item.listingType !== 'business' && item.sellerType !== 'business')
@@ -217,8 +256,12 @@ export default function HomePage({
             const isBusiness = item.isBusinessProduct || item.listingType === 'business' || item.sellerType === 'business';
             const isOwnListing = isListingOwnedByUser(item, user);
             const stock = normalizeProductStock(item);
+            const expiryBadge = item.expiryBadge || getExpiryBadgeState(stock);
             const isFavorite = favorites.some((entry) => entry.id === item.id);
             const unavailable = !isOwnListing && item.requestState && !item.requestState.canRequest;
+            const sellerName = getSellerName(item);
+            const sellerAvatar = getSellerAvatar(item);
+            const sellerInitials = String(item?.sellerInitials || item?.sellerProfile?.initials || getInitials(sellerName) || 'DU').slice(0, 2).toUpperCase();
             return (
               <article
                 key={item.id}
@@ -238,13 +281,13 @@ export default function HomePage({
                         <ShieldCheck size={12} /> Drizn Partner
                       </span>
                       <span className="rounded-full bg-emerald-700/90 px-2.5 py-1 text-[10px] font-bold text-white shadow-sm backdrop-blur">
-                        {item.nearExpiryDeal ? 'Near Expiry' : 'Verified'}
+                        {expiryBadge.nearExpiry ? expiryBadge.statusLabel || 'Near Expiry' : 'Verified'}
                       </span>
                     </div>
                   )}
-                  {item.nearExpiry && (
-                    <span className={`absolute left-2 top-2 rounded-full px-2.5 py-1 text-[10px] font-extrabold uppercase tracking-wide text-white shadow ${item.hoursRemaining <= 24 ? 'bg-red-600' : item.hoursRemaining <= 48 ? 'bg-orange-500' : 'bg-amber-500'}`}>
-                      {item.rescueBadge}
+                  {expiryBadge.nearExpiry && expiryBadge.rescueLabel && (
+                    <span className={`absolute left-2 top-2 rounded-full px-2.5 py-1 text-[10px] font-extrabold uppercase tracking-wide text-white shadow ${expiryBadge.rescueClassName}`}>
+                      {expiryBadge.rescueLabel}
                     </span>
                   )}
                   <button
@@ -263,11 +306,30 @@ export default function HomePage({
                 <div className="p-4">
                   <div className="flex items-start justify-between gap-3">
                     <div className="flex min-w-0 items-center gap-3">
-                      <div className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-xl text-sm font-extrabold text-white shadow-lg ${isBusiness ? 'bg-gradient-to-br from-emerald-600 to-emerald-800 shadow-emerald-700/20' : 'bg-gradient-to-br from-amber-500 to-violet-600 shadow-violet-500/20'}`}>
-                        {getInitials(item.sellerName || item.storeName || 'Drizn User')}
-                      </div>
+                      <button
+                        type="button"
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          onOpenSellerProfile?.(item);
+                        }}
+                        className={`flex h-11 w-11 shrink-0 items-center justify-center overflow-hidden rounded-xl text-sm font-extrabold text-white shadow-lg ${isBusiness ? 'bg-gradient-to-br from-emerald-600 to-emerald-800 shadow-emerald-700/20' : 'bg-gradient-to-br from-amber-500 to-violet-600 shadow-violet-500/20'}`}
+                        aria-label={`Open ${sellerName} profile`}
+                      >
+                        {sellerAvatar
+                          ? <img src={sellerAvatar} alt={sellerName} className="h-full w-full object-cover" />
+                          : sellerInitials || 'DU'}
+                      </button>
                       <div className="min-w-0">
-                        <p className={`truncate font-extrabold ${isBusiness ? 'text-emerald-800' : 'text-slate-900'}`}>{item.sellerName || item.storeName || 'Drizn User'}</p>
+                        <button
+                          type="button"
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            onOpenSellerProfile?.(item);
+                          }}
+                          className={`truncate text-left font-extrabold hover:text-violet-700 ${isBusiness ? 'text-emerald-800' : 'text-slate-900'}`}
+                        >
+                          {sellerName}
+                        </button>
                         <p className="mt-0.5 truncate text-[11px] font-semibold uppercase tracking-[0.1em] text-slate-400">
                           {isBusiness ? 'Local business partner' : 'Community listing'}
                         </p>
@@ -286,7 +348,7 @@ export default function HomePage({
                   <h3 className="mt-3 line-clamp-2 text-lg font-extrabold text-slate-900">{item.title}</h3>
                   <div className="mt-2 flex flex-wrap gap-1.5 text-[11px] font-bold">
                     <span className="rounded-full bg-emerald-50 px-2.5 py-1 text-emerald-800">{item.requestState?.stockLabel || (stock.availableQuantity === 1 ? 'Only 1 left' : `${stock.availableQuantity} left`)}</span>
-                    {formatExpiry(stock) && <span className="rounded-full bg-amber-50 px-2.5 py-1 text-amber-800">Expires {formatExpiry(stock)}</span>}
+                    {expiryBadge.statusLabel && <span className={`rounded-full px-2.5 py-1 ${expiryBadge.statusClassName}`}>{expiryBadge.statusLabel}</span>}
                   </div>
                   <div className="mt-3 flex items-center justify-between gap-2">
                     <p className="min-w-0 truncate text-sm text-slate-500">{item.condition || item.category || 'Available'} · {item.distance || 'nearby'}</p>

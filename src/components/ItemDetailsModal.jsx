@@ -1,12 +1,11 @@
-import { useState } from 'react';
 import { ArrowLeft, MapPin, Pencil, ShieldCheck, Sparkles, Trash2, User, X } from 'lucide-react';
-import { formatExpiry, normalizeProductStock } from '../services/transactionService';
+import { getExpiryBadgeState, normalizeProductStock } from '../services/transactionService';
 import { isListingOwnedByUser } from '../utils/listingOwnership';
 
-export default function ItemDetailsModal({ item, onClose, onRequest, onRequireLogin, onEdit, onDelete, user }) {
-  const [previewProfileImage, setPreviewProfileImage] = useState('');
+export default function ItemDetailsModal({ item, onClose, onRequest, onRequireLogin, onEdit, onDelete, user, onOpenSellerProfile }) {
   if (!item) return null;
   const product = normalizeProductStock(item);
+  const expiryBadge = item.expiryBadge || getExpiryBadgeState(product);
 
   const parsedDistance = Number.parseFloat(String(item.distance || '').replace(/[^\d.]/g, ''));
   const distanceKm = Number.isFinite(item.distanceKm)
@@ -64,7 +63,7 @@ export default function ItemDetailsModal({ item, onClose, onRequest, onRequireLo
               {item.isBusinessProduct && (
                 <div className="mb-2 flex flex-wrap gap-2">
                   <span className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-3 py-1 text-xs font-bold text-emerald-700"><ShieldCheck size={13} /> Business Verified</span>
-                  {item.nearExpiryDeal && <span className="rounded-full bg-amber-100 px-3 py-1 text-xs font-bold text-amber-800">Near Expiry Deal</span>}
+                  {expiryBadge.nearExpiry && <span className={`rounded-full px-3 py-1 text-xs font-bold ${expiryBadge.statusClassName}`}>{expiryBadge.statusLabel || 'Near Expiry'}</span>}
                 </div>
               )}
               <p className="text-sm font-semibold text-violet-600">{item.category}</p>
@@ -82,7 +81,7 @@ export default function ItemDetailsModal({ item, onClose, onRequest, onRequireLo
             <span className="rounded-full bg-emerald-50 px-3 py-1 font-semibold text-emerald-700">
               {item.requestState?.stockLabel || (product.availableQuantity === 1 ? 'Only 1 left' : `Available: ${product.availableQuantity} left`)}
             </span>
-            {formatExpiry(product) && <span className="rounded-full bg-amber-50 px-3 py-1 font-semibold text-amber-800">Expires: {formatExpiry(product)}</span>}
+            {expiryBadge.statusLabel && <span className={`rounded-full px-3 py-1 font-semibold ${expiryBadge.statusClassName}`}>{expiryBadge.statusLabel}</span>}
           </div>
 
           <p className="mt-4 text-sm leading-6 text-slate-600">{item.description || 'No description added by seller.'}</p>
@@ -105,15 +104,18 @@ export default function ItemDetailsModal({ item, onClose, onRequest, onRequireLo
             <div className="mt-3 flex items-center gap-3 rounded-[1.1rem] bg-white p-3 shadow-sm">
               <button
                 type="button"
-                disabled={!item.sellerProfileImage}
-                onClick={() => item.sellerProfileImage && setPreviewProfileImage(item.sellerProfileImage)}
-                className="flex h-11 w-11 shrink-0 items-center justify-center overflow-hidden rounded-full bg-amber-100 text-violet-700 disabled:cursor-default"
-                aria-label={item.sellerProfileImage ? `View ${item.sellerName} profile photo` : `${item.sellerName} profile`}
+                onClick={() => onOpenSellerProfile?.(item)}
+                className="flex h-11 w-11 shrink-0 items-center justify-center overflow-hidden rounded-full bg-amber-100 text-violet-700"
+                aria-label={`Open ${item.sellerName} profile`}
               >
-                {item.sellerProfileImage ? <img src={item.sellerProfileImage} alt={item.sellerName} className="h-full w-full object-cover" /> : <User size={18} />}
+                {item.sellerProfileImage
+                  ? <img src={item.sellerProfileImage} alt={item.sellerName} className="h-full w-full object-cover" />
+                  : (item.sellerInitials || item.sellerProfile?.initials || <User size={18} />)}
               </button>
               <div>
-                <p className="font-semibold text-slate-900">{item.sellerName}</p>
+                <button type="button" onClick={() => onOpenSellerProfile?.(item)} className="font-semibold text-slate-900 hover:text-violet-700">
+                  {item.sellerName}
+                </button>
                 <p className="text-sm text-slate-500">✨ {item.sellerKarma} Good Karma</p>
               </div>
             </div>
@@ -164,12 +166,6 @@ export default function ItemDetailsModal({ item, onClose, onRequest, onRequireLo
           )}
         </div>
       </div>
-      {previewProfileImage && (
-        <div className="fixed inset-0 z-[260] flex items-center justify-center bg-slate-950/80 p-5 backdrop-blur-sm">
-          <button type="button" onClick={() => setPreviewProfileImage('')} className="absolute right-4 top-4 rounded-full bg-white p-3 text-slate-700 shadow-lg" aria-label="Close profile photo"><X size={20} /></button>
-          <img src={previewProfileImage} alt={`${item.sellerName} profile`} className="max-h-[82vh] max-w-full rounded-[2rem] object-contain shadow-2xl" />
-        </div>
-      )}
     </div>
   );
 }

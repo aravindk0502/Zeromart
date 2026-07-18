@@ -29,10 +29,26 @@ const jsonHeaders = {
 
 const DEFAULT_SELLER_NAME = 'Drizn User';
 
+function getInitialsFromName(name = '') {
+  return String(name || '')
+    .split(' ')
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .map((part) => part[0])
+    .join('')
+    .slice(0, 2)
+    .toUpperCase();
+}
+
 function cleanSellerName(...names) {
   const value = names.find((name) => {
     const trimmed = String(name || '').trim();
-    return trimmed && trimmed.toLowerCase() !== 'unknown';
+    const normalized = trimmed.toLowerCase();
+    return trimmed
+      && normalized !== 'unknown'
+      && normalized !== 'undefined'
+      && normalized !== 'null'
+      && normalized !== 'guest';
   });
   return String(value || DEFAULT_SELLER_NAME).trim();
 }
@@ -180,8 +196,18 @@ function listingRowToClient(row) {
   const latitude = numberOrNull(row.latitude ?? locationData.latitude ?? locationData.lat ?? metadata.latitude ?? metadata.lat);
   const longitude = numberOrNull(row.longitude ?? locationData.longitude ?? locationData.lng ?? metadata.longitude ?? metadata.lng);
   const imageUrl = row.image_url || row.photo_url || row.image || metadata.imageUrl || metadata.photoUrl || metadata.image || metadata.photo || '';
-  const sellerName = cleanSellerName(row.seller_name, row.store_name, metadata.sellerName, metadata.businessName, metadata.storeName);
-  const sellerAvatar = metadata.sellerAvatar || metadata.profileImage || metadata.avatarUrl || metadata.logoUrl || '';
+  const sellerName = cleanSellerName(
+    row.seller_name,
+    row.seller_initials,
+    row.store_name,
+    metadata.sellerName,
+    metadata.sellerInitials,
+    metadata.businessName,
+    metadata.storeName,
+  );
+  const sellerAvatar = metadata.sellerLogo || metadata.logoUrl || metadata.sellerAvatar || metadata.profileImage || metadata.avatarUrl || '';
+  const sellerInitials = String(metadata.sellerInitials || getInitialsFromName(sellerName) || 'DU').trim().toUpperCase().slice(0, 2) || 'DU';
+  const sellerProfileMetadata = parseJsonValue(metadata.sellerProfile, {});
   const quantity = Math.max(0, Number(row.quantity ?? metadata.quantity ?? row.available_quantity ?? metadata.availableQuantity ?? 1) || 0);
   const availableQuantity = Math.max(0, Number(row.available_quantity ?? metadata.availableQuantity ?? row.quantity ?? metadata.quantity ?? quantity) || 0);
   const karma = Number(row.karma_score ?? metadata.sellerKarma ?? metadata.karma ?? 0) || 0;
@@ -201,6 +227,7 @@ function listingRowToClient(row) {
     sellerId: row.seller_id || '',
     ownerMobile: metadata.ownerMobile || '',
     sellerName,
+    sellerInitials,
     sellerAvatar,
     sellerProfileImage: sellerAvatar,
     avatarUrl: sellerAvatar,
@@ -231,6 +258,21 @@ function listingRowToClient(row) {
     locationData,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
+    sellerProfile: {
+      id: String(sellerProfileMetadata.id || row.seller_id || row.business_id || '').trim(),
+      name: sellerProfileMetadata.name || sellerName,
+      initials: sellerProfileMetadata.initials || sellerInitials,
+      avatarUrl: sellerProfileMetadata.avatarUrl || sellerAvatar,
+      logoUrl: sellerProfileMetadata.logoUrl || metadata.logoUrl || metadata.sellerLogo || '',
+      accountType: sellerProfileMetadata.accountType || (sellerType === 'business' ? 'business' : 'community'),
+      area: sellerProfileMetadata.area || row.area || locationData.area || locationData.locality || '',
+      city: sellerProfileMetadata.city || row.city || locationData.city || '',
+      karma: Number(sellerProfileMetadata.karma ?? karma) || 0,
+      activeListings: Number(sellerProfileMetadata.activeListings || 0) || 0,
+      joinedAt: sellerProfileMetadata.joinedAt || '',
+      bio: String(sellerProfileMetadata.bio || '').trim(),
+      verified: Boolean(sellerProfileMetadata.verified || sellerType === 'business'),
+    },
     metadata,
   };
 }
@@ -377,9 +419,11 @@ function safeUploadName(name = 'listing.jpg') {
 
 function profileDisplayName(profile = {}) {
   const metadata = parseJsonValue(profile.metadata, {});
-  return profile.display_name
-    || profile.business_name
+  return profile.business_name
+    || profile.full_name
+    || profile.display_name
     || profile.name
+    || metadata.fullName
     || metadata.displayName
     || metadata.businessName
     || metadata.name
@@ -388,11 +432,11 @@ function profileDisplayName(profile = {}) {
 
 function profileAvatar(profile = {}) {
   const metadata = parseJsonValue(profile.metadata, {});
-  return profile.avatar_url
-    || profile.logo_url
-    || profile.profile_image
-    || metadata.avatarUrl
+  return profile.logo_url
     || metadata.logoUrl
+    || profile.avatar_url
+    || metadata.avatarUrl
+    || profile.profile_image
     || metadata.profileImage
     || '';
 }
@@ -402,39 +446,146 @@ function profileKarma(profile = {}) {
   return Number(profile.karma_points ?? profile.karma ?? profile.store_karma ?? metadata.karma ?? metadata.storeKarma ?? 0) || 0;
 }
 
+function enrichListingRow(row = {}, profileMap = new Map()) {
+  const metadata = parseJsonValue(row.metadata, {});
+  const profileKeys = [
+    row.seller_id,
+    row.business_id,
+    metadata.profileId,
+    metadata.userId,
+    metadata.sellerId,
+    metadata.businessId,
+    metadata.ownerMobile,
+    metadata.mobile,
+  ].map((key) => String(key || '').trim()).filter(Boolean);
+  const profile = profileKeys.map((key) => profileMap.get(key)).find(Boolean);
+  const profileMetadata = parseJsonValue(profile?.metadata, {});
+  const profileLocation = parseJsonValue(profile?.profile_location, {});
+  const name = cleanSellerName(
+    profileDisplayName(profile || {}),
+    row.seller_name,
+    row.store_name,
+    metadata.sellerName,
+    metadata.ownerName,
+    metadata.displayName,
+    metadata.businessName,
+    metadata.name,
+      row.seller_initials,
+      profile?.initials,
+  );
+  const initials = String(
+    profile?.initials
+      || metadata.sellerInitials
+      || profileMetadata.initials
+      || getInitialsFromName(name)
+      || 'DU'
+  ).trim().toUpperCase().slice(0, 2) || 'DU';
+  const logoUrl = profile?.logo_url || profileMetadata.logoUrl || profileMetadata.businessLogo || metadata.logoUrl || '';
+  const avatar = profileAvatar(profile || {})
+    || metadata.sellerAvatar
+    || metadata.avatarUrl
+    || metadata.profileImage
+    || '';
+  const karma = Number(row.karma_score || 0)
+    || profileKarma(profile || {})
+    || Number(metadata.karma || metadata.storeKarma || metadata.sellerKarma || 0)
+    || 0;
+  const accountType = String(
+    profile?.account_type
+      || profile?.mode
+      || profileMetadata.accountType
+      || profileMetadata.mode
+      || row.seller_type
+      || metadata.sellerType
+      || metadata.listingType
+      || 'community'
+  ).toLowerCase();
+  const profileArea = profileLocation.area
+    || profileLocation.locality
+    || profileLocation.subLocality
+    || profileMetadata.area
+    || metadata.area
+    || row.area
+    || '';
+  const profileCity = profileLocation.city
+    || profileLocation.district
+    || profileMetadata.city
+    || metadata.city
+    || row.city
+    || '';
+  const joinedAt = profile?.created_at || profileMetadata.createdAt || '';
+  const bio = String(profile?.bio || profileMetadata.bio || '').trim();
+  const verified = Boolean(
+    profile?.verified
+    || profile?.is_verified
+    || profileMetadata.verified
+    || profileMetadata.isVerified
+    || accountType === 'business'
+  );
+  const activeListings = Number(profileMetadata.activeListings || profileMetadata.listingsCount || profileMetadata.activeListingCount || 0) || 0;
+
+  return {
+    ...row,
+    seller_name: name,
+    karma_score: karma,
+    seller_initials: initials,
+    metadata: {
+      ...metadata,
+      sellerName: name,
+      displayName: metadata.displayName || name,
+      sellerInitials: initials,
+      sellerLogo: metadata.sellerLogo || logoUrl,
+      logoUrl: metadata.logoUrl || logoUrl,
+      sellerAvatar: avatar,
+      avatarUrl: metadata.avatarUrl || avatar,
+      profileImage: metadata.profileImage || avatar,
+      sellerProfile: {
+        id: String(profile?.id || row.seller_id || row.business_id || metadata.profileId || '').trim(),
+        name,
+        initials,
+        avatarUrl: avatar,
+        logoUrl,
+        accountType,
+        area: profileArea,
+        city: profileCity,
+        karma,
+        activeListings,
+        joinedAt,
+        bio,
+        verified,
+      },
+    },
+  };
+}
+
 async function attachListingProfiles(rows = []) {
-  const ids = [...new Set(rows.map((row) => String(row.seller_id || '').trim()).filter(Boolean))];
-  if (!ids.length) return rows;
+  const ids = [...new Set(rows.flatMap((row) => {
+    const metadata = parseJsonValue(row.metadata, {});
+    return [
+      row.seller_id,
+      row.business_id,
+      metadata.profileId,
+      metadata.userId,
+      metadata.sellerId,
+      metadata.businessId,
+      metadata.ownerMobile,
+      metadata.mobile,
+    ].map((id) => String(id || '').trim()).filter(Boolean);
+  }))];
+  if (!ids.length) return rows.map((row) => enrichListingRow(row));
   try {
     const filter = ids.map((id) => encodeURIComponent(id)).join(',');
     const profiles = await supabaseFetch(`/profiles?id=in.(${filter})&select=*`);
     const profileMap = new Map((Array.isArray(profiles) ? profiles : []).map((profile) => [String(profile.id), profile]));
-    return rows.map((row) => {
-      const profile = profileMap.get(String(row.seller_id || ''));
-      if (!profile) return row;
-      const metadata = parseJsonValue(row.metadata, {});
-      const name = profileDisplayName(profile);
-      const avatar = profileAvatar(profile);
-      const karma = profileKarma(profile);
-      return {
-        ...row,
-        seller_name: cleanSellerName(name, row.seller_name, row.store_name),
-        karma_score: Number(row.karma_score || 0) || karma,
-        metadata: {
-          ...metadata,
-          sellerName: cleanSellerName(name, metadata.sellerName, row.seller_name),
-          sellerAvatar: avatar || metadata.sellerAvatar || metadata.profileImage || '',
-          profileImage: avatar || metadata.profileImage || '',
-        },
-      };
-    });
+    return rows.map((row) => enrichListingRow(row, profileMap));
   } catch (error) {
     console.error('[api] profile join failed for listings', error?.message || error);
-    return rows;
+    return rows.map((row) => enrichListingRow(row));
   }
 }
 
 function listingPayloadToSupabase(body = {}) {
+  const listingMetadata = parseJsonValue(body.metadata || body.meta, {});
   const locationData = body.locationData || body.location_data || {};
   const coordinates = body.coordinates || {};
   const sellerType = body.sellerType || body.seller_type || body.listingType || (body.isBusinessProduct ? 'business' : 'community');
@@ -443,6 +594,32 @@ function listingPayloadToSupabase(body = {}) {
   const availableQuantity = Math.max(0, Number(body.availableQuantity ?? body.quantity ?? quantity) || 0);
   const latitude = numberOrNull(body.latitude ?? body.lat ?? coordinates.lat ?? locationData.latitude ?? locationData.lat);
   const longitude = numberOrNull(body.longitude ?? body.lng ?? coordinates.lng ?? locationData.longitude ?? locationData.lng);
+  const sellerName = cleanSellerName(
+    body.sellerName,
+    body.seller_name,
+    body.storeName,
+    body.businessName,
+    body.ownerName,
+    body.userName,
+    body.profileName,
+    body.displayName,
+    listingMetadata.sellerName,
+    listingMetadata.ownerName,
+    listingMetadata.displayName,
+    listingMetadata.businessName,
+    listingMetadata.name,
+  );
+  const sellerAvatar = body.sellerAvatar
+    || body.avatarUrl
+    || body.avatar_url
+    || body.profileImage
+    || body.profile_image
+    || body.photoUrl
+    || listingMetadata.sellerAvatar
+    || listingMetadata.avatarUrl
+    || listingMetadata.profileImage
+    || listingMetadata.logoUrl
+    || '';
 
   return {
     id,
@@ -451,8 +628,8 @@ function listingPayloadToSupabase(body = {}) {
     condition: body.condition || 'Good',
     description: body.description || '',
     image_url: body.imageUrl || body.image_url || body.photo_url || body.image || body.photo || '',
-    seller_id: String(body.sellerId || body.seller_id || body.businessId || body.ownerMobile || 'guest'),
-    seller_name: cleanSellerName(body.sellerName, body.seller_name, body.storeName, body.businessName),
+    seller_id: String(body.sellerId || body.seller_id || body.userId || body.user_id || body.profileId || body.businessId || body.ownerMobile || body.mobile || 'guest'),
+    seller_name: sellerName,
     seller_type: sellerType === 'business' ? 'business' : 'community',
     business_id: body.businessId || body.business_id || null,
     store_name: body.storeName || body.businessName || body.store_name || null,
@@ -474,8 +651,12 @@ function listingPayloadToSupabase(body = {}) {
     country: body.country || locationData.country || 'India',
     location_data: locationData,
     metadata: {
-      ...(body.metadata || {}),
+      ...listingMetadata,
       ownerMobile: body.ownerMobile || body.mobile || '',
+      sellerName,
+      sellerAvatar,
+      avatarUrl: sellerAvatar,
+      profileImage: sellerAvatar,
       originalId: body.originalId || body.id || id,
       sellerInitials: body.sellerInitials || body.initials || '',
       isOwn: Boolean(body.isOwn),

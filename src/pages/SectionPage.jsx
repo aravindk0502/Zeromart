@@ -1,5 +1,5 @@
 import { ArrowLeft, Heart, MapPin, ShieldCheck, Sparkles, Star } from 'lucide-react';
-import { formatExpiry, normalizeProductStock } from '../services/transactionService';
+import { getExpiryBadgeState, normalizeProductStock } from '../services/transactionService';
 import { isListingOwnedByUser } from '../utils/listingOwnership';
 
 const areaCoordinates = {
@@ -109,7 +109,7 @@ export default function SectionPage({ section, businessItems = [], onBack, locat
         ...item,
         brand: item.sellerName || 'Local business',
         subtitle: `${item.category || 'Local business'} · ${item.distance || 'Nearby'}`,
-        badge: item.nearExpiryDeal ? 'Near Expiry' : 'Verified',
+        badge: (item.expiryBadge || getExpiryBadgeState(item)).nearExpiry ? 'Near Expiry' : 'Verified',
       }))
     : data.items;
   const activeLocation = areaCoordinates[locationLabel];
@@ -149,6 +149,7 @@ export default function SectionPage({ section, businessItems = [], onBack, locat
             const isFavorite = favorites.some((entry) => entry.id === item.id);
             const isOwnListing = isListingOwnedByUser(item, actor);
             const stock = normalizeProductStock({ ...item, listingType: section === 'b2b' ? 'business' : item.listingType });
+            const expiryBadge = item.expiryBadge || getExpiryBadgeState(stock);
             return (
               <article
                 key={item.id || item.brand + item.title}
@@ -167,7 +168,7 @@ export default function SectionPage({ section, businessItems = [], onBack, locat
                       <span className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2.5 py-1 text-[11px] font-bold text-emerald-700">
                         <ShieldCheck size={13} /> Business Verified
                       </span>
-                      {item.nearExpiryDeal && <span className="rounded-full bg-amber-50 px-2.5 py-1 text-[11px] font-bold text-amber-800">Near Expiry Deal</span>}
+                      {expiryBadge.nearExpiry && <span className={`rounded-full px-2.5 py-1 text-[11px] font-bold ${expiryBadge.statusClassName}`}>{expiryBadge.statusLabel || 'Near Expiry'}</span>}
                     </div>
                   )}
                   <div className="flex items-start justify-between gap-3">
@@ -190,7 +191,7 @@ export default function SectionPage({ section, businessItems = [], onBack, locat
                   </div>
                   <div className="mt-2 flex flex-wrap gap-1.5 text-xs font-semibold">
                     <span className="rounded-full bg-emerald-50 px-2.5 py-1 text-emerald-700">{item.requestState?.stockLabel || (stock.availableQuantity === 1 ? 'Only 1 left' : `${stock.availableQuantity} available`)}</span>
-                    {formatExpiry(stock) && <span className="rounded-full bg-amber-50 px-2.5 py-1 text-amber-800">Expires {formatExpiry(stock)}</span>}
+                    {expiryBadge.statusLabel && <span className={`rounded-full px-2.5 py-1 ${expiryBadge.statusClassName}`}>{expiryBadge.statusLabel}</span>}
                   </div>
                   <div className="mt-4 flex items-center justify-between gap-3 rounded-[1rem] bg-slate-50 px-3 py-3">
                     <div className="min-w-0">
