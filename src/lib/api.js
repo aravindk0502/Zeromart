@@ -11,7 +11,7 @@ const normalizeApiBase = (value = '') => {
 
 const BASE = normalizeApiBase(import.meta.env.VITE_API_URL);
 const IS_PRODUCTION = import.meta.env.PROD;
-const PROD_API_FALLBACK = 'https://api.drizn.com';
+const PROD_API_FALLBACK = 'https://drizn.com';
 
 const apiUrl = (path, base = BASE) => `${String(base || '').replace(/\/$/, '')}${path}`;
 
