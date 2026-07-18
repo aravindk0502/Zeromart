@@ -2,6 +2,33 @@ import { ArrowLeft, Heart, MapPin, ShieldCheck, Sparkles, Star } from 'lucide-re
 import { getExpiryBadgeState, normalizeProductStock } from '../services/transactionService';
 import { isListingOwnedByUser } from '../utils/listingOwnership';
 
+const getSellerName = (item) => (
+  item?.sellerProfile?.name
+  || item?.sellerName
+  || item?.storeName
+  || item?.brand
+  || item?.sellerInitials
+  || 'Drizn User'
+);
+
+const getSellerAvatar = (item) => (
+  item?.sellerProfile?.logoUrl
+  || item?.sellerLogo
+  || item?.sellerProfile?.avatarUrl
+  || item?.sellerProfileImage
+  || item?.sellerAvatar
+  || item?.avatarUrl
+  || ''
+);
+
+const getInitials = (name = 'Drizn User') => String(name)
+  .split(' ')
+  .filter(Boolean)
+  .map((part) => part[0])
+  .join('')
+  .slice(0, 2)
+  .toUpperCase() || 'DU';
+
 const areaCoordinates = {
   Koramangala: { latitude: 12.9352, longitude: 77.6245 },
   Indiranagar: { latitude: 12.9784, longitude: 77.6408 },
@@ -102,7 +129,7 @@ const sectionData = {
   },
 };
 
-export default function SectionPage({ section, businessItems = [], onBack, locationLabel = 'Your area', radiusKm = 'all', onSelectItem, onBuyItem, onToggleFavorite, favorites = [], actor, onEditItem }) {
+export default function SectionPage({ section, businessItems = [], onBack, locationLabel = 'Your area', radiusKm = 'all', onSelectItem, onBuyItem, onToggleFavorite, favorites = [], actor, onEditItem, onOpenSellerProfile }) {
   const data = sectionData[section] || sectionData.explore;
   const sourceItems = section === 'b2b'
     ? businessItems.map((item) => ({
@@ -150,6 +177,9 @@ export default function SectionPage({ section, businessItems = [], onBack, locat
             const isOwnListing = isListingOwnedByUser(item, actor);
             const stock = normalizeProductStock({ ...item, listingType: section === 'b2b' ? 'business' : item.listingType });
             const expiryBadge = item.expiryBadge || getExpiryBadgeState(stock);
+            const sellerName = getSellerName(item);
+            const sellerAvatar = getSellerAvatar(item);
+            const sellerInitials = String(item?.sellerInitials || item?.sellerProfile?.initials || getInitials(sellerName)).slice(0, 2).toUpperCase();
             return (
               <article
                 key={item.id || item.brand + item.title}
@@ -195,7 +225,21 @@ export default function SectionPage({ section, businessItems = [], onBack, locat
                   </div>
                   <div className="mt-4 flex items-center justify-between gap-3 rounded-[1rem] bg-slate-50 px-3 py-3">
                     <div className="min-w-0">
-                      <p className="truncate text-sm font-semibold text-slate-800">{item.sellerName || item.brand}</p>
+                      <button
+                        type="button"
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          onOpenSellerProfile?.(item);
+                        }}
+                        className="flex min-w-0 items-center gap-2 text-sm font-semibold text-slate-800 hover:text-violet-700"
+                      >
+                        <span className="flex h-7 w-7 shrink-0 items-center justify-center overflow-hidden rounded-full bg-amber-100 text-[10px] font-extrabold text-violet-700">
+                          {sellerAvatar
+                            ? <img src={sellerAvatar} alt={sellerName} className="h-full w-full object-cover" />
+                            : sellerInitials}
+                        </span>
+                        <span className="truncate">{sellerName}</span>
+                      </button>
                       <div className="flex items-center gap-1 text-xs text-amber-500">
                         <Star size={13} fill="currentColor" />
                         <span>{item.sellerKarma || 0} karma</span>

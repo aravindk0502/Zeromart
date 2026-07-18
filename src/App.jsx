@@ -2274,6 +2274,7 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
                 favorites={favorites}
                 actor={activeBuyer}
                 onEditItem={handleEditListing}
+                onOpenSellerProfile={openPublicSellerProfile}
               />
             )}
             {activeView === 'favorites' && (
@@ -2288,7 +2289,16 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
                 ) : (
                   <div className="grid gap-3 sm:grid-cols-2">
                     {favorites.map((item) => (
-                      <article key={item.id} className="overflow-hidden rounded-[1.5rem] border border-amber-100 bg-white shadow-sm">
+                      <article
+                        key={item.id}
+                        role="button"
+                        tabIndex={0}
+                        onClick={() => setSelectedItem(item)}
+                        onKeyDown={(event) => {
+                          if (event.key === 'Enter' || event.key === ' ') setSelectedItem(item);
+                        }}
+                        className="cursor-pointer overflow-hidden rounded-[1.5rem] border border-amber-100 bg-white shadow-sm focus:outline-none focus:ring-4 focus:ring-violet-100"
+                      >
                         <img src={item.image} alt={item.title} loading="lazy" decoding="async" className="h-36 w-full object-cover" />
                         <div className="p-4">
                           <div className="flex items-start justify-between gap-2">
@@ -2296,16 +2306,35 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
                               <h3 className="text-lg font-semibold text-slate-900">{item.title}</h3>
                               <p className="mt-1 text-sm text-slate-500">{item.condition} · {item.distance}</p>
                             </div>
-                            <button onClick={() => toggleFavorite(item)} className="rounded-full border border-rose-100 bg-rose-50 p-2 text-rose-500" aria-label="Remove from favorites">
+                            <button
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                toggleFavorite(item);
+                              }}
+                              className="rounded-full border border-rose-100 bg-rose-50 p-2 text-rose-500"
+                              aria-label="Remove from favorites"
+                            >
                               <Heart size={15} fill="currentColor" />
                             </button>
                           </div>
                           <p className="mt-3 line-clamp-2 text-sm text-slate-500">{item.description || 'No description added.'}</p>
                           <div className="mt-4 flex flex-wrap gap-2">
-                            <button onClick={() => setSelectedItem(item)} className="rounded-full bg-violet-600 px-4 py-2 text-sm font-semibold text-white">
+                            <button
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                setSelectedItem(item);
+                              }}
+                              className="rounded-full bg-violet-600 px-4 py-2 text-sm font-semibold text-white"
+                            >
                               View item
                             </button>
-                            <button onClick={() => toggleFavorite(item)} className="rounded-full border border-rose-100 bg-rose-50 px-4 py-2 text-sm font-semibold text-rose-600">
+                            <button
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                toggleFavorite(item);
+                              }}
+                              className="rounded-full border border-rose-100 bg-rose-50 px-4 py-2 text-sm font-semibold text-rose-600"
+                            >
                               Remove
                             </button>
                           </div>
