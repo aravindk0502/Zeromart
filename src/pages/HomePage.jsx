@@ -336,7 +336,6 @@ export default function HomePage({
                       </div>
                     </div>
                     <div className="ml-auto flex shrink-0 flex-wrap items-center justify-end gap-2">
-                      <span className="shrink-0 rounded-full bg-amber-50 px-3 py-1.5 text-sm font-extrabold text-amber-800">{getPriceLabel(item)}</span>
                       {item.serverPersisted || isOwnListing ? (
                         <span className="shrink-0 rounded-full bg-emerald-50 px-2 py-1 text-xs font-bold text-emerald-800">Live</span>
                       ) : (
@@ -346,6 +345,10 @@ export default function HomePage({
                   </div>
 
                   <h3 className="mt-3 line-clamp-2 text-lg font-extrabold text-slate-900">{item.title}</h3>
+                  <div className="mt-2 flex items-end gap-2">
+                    <span className="text-[26px] font-black leading-none text-amber-600 sm:text-[28px]">{getPriceLabel(item)}</span>
+                    <span className="mb-1 rounded-full bg-gradient-to-r from-amber-50 to-violet-50 px-2.5 py-1 text-[10px] font-extrabold uppercase tracking-[0.08em] text-violet-700">Free to collect</span>
+                  </div>
                   <div className="mt-2 flex flex-wrap gap-1.5 text-[11px] font-bold">
                     <span className="rounded-full bg-emerald-50 px-2.5 py-1 text-emerald-800">{item.requestState?.stockLabel || (stock.availableQuantity === 1 ? 'Only 1 left' : `${stock.availableQuantity} left`)}</span>
                     {expiryBadge.statusLabel && !expiryBadge.nearExpiry && <span className={`rounded-full px-2.5 py-1 ${expiryBadge.statusClassName}`}>{expiryBadge.statusLabel}</span>}
