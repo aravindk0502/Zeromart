@@ -59,6 +59,15 @@ curl https://<your-site>/api/persistence
 curl https://<your-site>/api/products
 ```
 
+Production data hygiene
+-----------------------
+
+To remove only obvious demo/test listings from Supabase, review and run:
+
+- `scripts/cleanup_test_rows.sql`
+
+The script is intentionally strict (`chennai-*`, `demo-*`, `demo_*`, `business-product-demo-*`) and starts with a preview query before delete.
+
 Supabase storage policies
 ------------------------
 

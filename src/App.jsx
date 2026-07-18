@@ -15,7 +15,7 @@ import KarmaPopup from './components/KarmaPopup';
 import BotAssistant from './components/BotAssistant';
 import BusinessAuthModal from './components/BusinessAuthModal';
 import {
-  clearBusinessSession, createBusinessOrder, getBusinessAccounts, getBusinessMarketplaceItems,
+  clearBusinessSession, createBusinessOrder, getBusinessAccounts,
   getBusinessOrders, getBusinessProducts, getBusinessPurchases, getBusinessSession,
   saveBusinessAccounts, saveBusinessOrders, saveBusinessProducts, saveBusinessPurchases,
   saveBusinessSession,
@@ -28,7 +28,7 @@ import {
   applyProductExpiry, createCollectionCode, getCollectionSettings, getExpiryBadgeState, getExpiryTimestamp,
   getProductRequestState, getPurchaseHistory, getQuantityAllowance, isMarketplaceVisible, normalizeProductStock, recordPurchaseAttempt,
   savePurchaseHistory, saveRequests, getRequests, saveReservations, getReservations, createWhatsAppLink,
-  updatePurchaseHistoryStatus, confirmHandoff, getTransactionProducts, saveTransactionProducts,
+  updatePurchaseHistoryStatus, confirmHandoff, saveTransactionProducts,
   completePendingKarmaAction, getPendingKarmaActions, savePendingKarmaAction,
   getLiveListings, saveLiveListings, upsertLiveListing, removeLiveListing, normalizeLiveListing,
 } from './services/transactionService';
@@ -109,11 +109,6 @@ const isLegacyDemoRecord = (record) => {
     || value.startsWith('business-product-demo-')
   ));
 };
-
-const fallbackMarketplaceListings = () => mergeListingsById(
-  getTransactionProducts(),
-  getBusinessMarketplaceItems(),
-).map(normalizeLiveListing);
 
 const stripFallbackDemoWhenLiveExists = (catalog) => {
   const normalized = catalog.filter(Boolean).map(normalizeLiveListing);
@@ -424,6 +419,7 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
   // Dev/demo utility: clear every live listing so the marketplace starts empty.
   // Run `driznResetListings()` in the browser console.
   useEffect(() => {
+    if (isProductionRuntime) return undefined;
     window.driznResetListings = () => {
       saveLiveListings([]);
       localStorage.removeItem('zeromart-transaction-products');
