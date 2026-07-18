@@ -943,6 +943,366 @@ function requestRowToOrder(row = {}) {
   };
 }
 
+function nowIso() {
+  return new Date().toISOString();
+}
+
+function makeId(prefix = 'evt') {
+  return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+function toFiniteNumber(value) {
+  const next = Number(value);
+  return Number.isFinite(next) ? next : null;
+}
+
+function haversineKm(from, to) {
+  const rad = (value) => (value * Math.PI) / 180;
+  const dLat = rad(to.lat - from.lat);
+  const dLng = rad(to.lng - from.lng);
+  const a = Math.sin(dLat / 2) ** 2
+    + Math.cos(rad(from.lat)) * Math.cos(rad(to.lat)) * Math.sin(dLng / 2) ** 2;
+  return 2 * 6371 * Math.asin(Math.min(1, Math.sqrt(a)));
+}
+
+function getLocationFromTokenMetadata(metadata = {}) {
+  const location = metadata.location || metadata.geo || {};
+  const lat = toFiniteNumber(location.latitude ?? location.lat ?? metadata.latitude ?? metadata.lat);
+  const lng = toFiniteNumber(location.longitude ?? location.lng ?? metadata.longitude ?? metadata.lng);
+  if (lat === null || lng === null) return null;
+  return { lat, lng };
+}
+
+function notificationOpenPath({ eventType = '', listingId = '', requestId = '', orderId = '' }) {
+  const type = String(eventType || '').toLowerCase();
+  if (type === 'new_request' || type === 'request_accepted' || type === 'request_declined') {
+    return requestId ? `/request/${encodeURIComponent(requestId)}` : '/';
+  }
+  if (type === 'store_reservation_received' || type === 'reservation_confirmed') {
+    return orderId ? `/business/orders?order=${encodeURIComponent(orderId)}` : '/business/orders';
+  }
+  if (listingId) return `/listing/${encodeURIComponent(listingId)}`;
+  return '/';
+}
+
+async function persistNotificationEvent(payload = {}) {
+  if (!SUPABASE_URL || !SUPABASE_KEY) {
+    return { success: true, persisted: false, push: { attempted: false, sent: false } };
+  }
+
+  const {
+    eventType,
+    recipientAccountId,
+    actorAccountId = '',
+    listingId = '',
+    requestId = '',
+    orderId = '',
+    title = 'Drizn update',
+    body = '',
+    dedupeKey = '',
+    payload: metadataPayload = {},
+  } = payload;
+
+  const eventId = makeId('evt');
+  const openPath = notificationOpenPath({ eventType, listingId, requestId, orderId });
+  const mergedPayload = {
+    ...(metadataPayload || {}),
+    openPath,
+  };
+
+  try {
+    if (dedupeKey) {
+      const existing = await supabaseFetch(`/notification_events?select=id&dedupe_key=eq.${encodeURIComponent(dedupeKey)}&limit=1`);
+      if (Array.isArray(existing) && existing.length > 0) {
+        return {
+          success: true,
+          accepted: true,
+          deduped: true,
+          persisted: true,
+          id: existing[0].id,
+          openPath,
+          push: { attempted: false, sent: false },
+        };
+      }
+    }
+
+    await supabaseFetch('/notification_events', {
+      method: 'POST',
+      body: JSON.stringify({
+        id: eventId,
+        event_type: String(eventType),
+        recipient_account_id: String(recipientAccountId),
+        actor_account_id: String(actorAccountId || ''),
+        listing_id: listingId || null,
+        request_id: requestId || null,
+        order_id: orderId || null,
+        dedupe_key: dedupeKey || null,
+        payload: mergedPayload,
+        push_attempted: false,
+        push_sent: false,
+        created_at: nowIso(),
+      }),
+    });
+
+    await supabaseFetch('/app_notifications', {
+      method: 'POST',
+      body: JSON.stringify({
+        id: eventId,
+        recipient_account_id: String(recipientAccountId),
+        actor_account_id: String(actorAccountId || ''),
+        event_type: String(eventType),
+        listing_id: listingId || null,
+        request_id: requestId || null,
+        order_id: orderId || null,
+        title: String(title),
+        body: String(body || ''),
+        payload: mergedPayload,
+        read: false,
+        created_at: nowIso(),
+      }),
+    });
+
+    return {
+      success: true,
+      accepted: true,
+      persisted: true,
+      id: eventId,
+      openPath,
+      push: { attempted: false, sent: false },
+    };
+  } catch (error) {
+    return {
+      success: true,
+      accepted: false,
+      persisted: false,
+      push: { attempted: false, sent: false },
+      error: error.message || 'notification persistence failed',
+    };
+  }
+}
+
+async function handleNotifications(req, res, url) {
+  if (url === '/api/notifications/token' || url === '/notifications/token') {
+    if (req.method !== 'POST') return sendJson(res, 405, { error: 'Method not allowed' });
+    const body = await readRequestJson(req);
+    const accountId = String(body.accountId || getAuthUserId(req)).trim();
+    const token = String(body.token || '').trim();
+    if (!accountId || !token) return sendJson(res, 400, { error: 'accountId and token are required' });
+    if (!SUPABASE_URL || !SUPABASE_KEY) return sendJson(res, 200, { success: true, persisted: false });
+    try {
+      await supabaseFetch('/push_tokens?on_conflict=token&select=token', {
+        method: 'POST',
+        headers: { Prefer: 'resolution=merge-duplicates,return=representation' },
+        body: JSON.stringify({
+          account_id: accountId,
+          token,
+          platform: String(body.platform || 'web'),
+          enabled: body.enabled !== false,
+          metadata: body.metadata || {},
+          last_seen_at: nowIso(),
+          updated_at: nowIso(),
+        }),
+      });
+      return sendJson(res, 200, { success: true, persisted: true });
+    } catch (error) {
+      return sendJson(res, 200, { success: true, persisted: false, error: error.message || 'token persistence failed' });
+    }
+  }
+
+  if (url === '/api/notifications/token/disable' || url === '/notifications/token/disable') {
+    if (req.method !== 'POST') return sendJson(res, 405, { error: 'Method not allowed' });
+    const body = await readRequestJson(req);
+    const token = String(body.token || '').trim();
+    if (!token) return sendJson(res, 400, { error: 'token is required' });
+    if (!SUPABASE_URL || !SUPABASE_KEY) return sendJson(res, 200, { success: true, persisted: false });
+    try {
+      await supabaseFetch(`/push_tokens?token=eq.${encodeURIComponent(token)}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ enabled: false, invalidated_at: nowIso(), updated_at: nowIso() }),
+      });
+      return sendJson(res, 200, { success: true, persisted: true });
+    } catch (error) {
+      return sendJson(res, 200, { success: true, persisted: false, error: error.message || 'token disable failed' });
+    }
+  }
+
+  const prefMatch = url.match(/^\/(?:api\/)?notifications\/preferences\/([^/]+)$/);
+  if (prefMatch) {
+    const accountId = decodeURIComponent(prefMatch[1]);
+    if (req.method === 'GET') {
+      if (!SUPABASE_URL || !SUPABASE_KEY) {
+        return sendJson(res, 200, {
+          accountId,
+          transactionalEnabled: true,
+          marketingEnabled: false,
+          nearbyEnabled: true,
+          favouritesEnabled: true,
+          mutedAccountIds: [],
+          blockedAccountIds: [],
+          maxNearbyPerDay: 5,
+        });
+      }
+      try {
+        const rows = await supabaseFetch(`/notification_preferences?account_id=eq.${encodeURIComponent(accountId)}&select=*&limit=1`);
+        const pref = rows?.[0] || {};
+        return sendJson(res, 200, {
+          accountId,
+          transactionalEnabled: pref.transactional_enabled ?? true,
+          marketingEnabled: pref.marketing_enabled ?? false,
+          nearbyEnabled: pref.nearby_enabled ?? true,
+          favouritesEnabled: pref.favourites_enabled ?? true,
+          mutedAccountIds: pref.muted_account_ids || [],
+          blockedAccountIds: pref.blocked_account_ids || [],
+          maxNearbyPerDay: Number(pref.max_nearby_per_day || 5),
+        });
+      } catch {
+        return sendJson(res, 200, {
+          accountId,
+          transactionalEnabled: true,
+          marketingEnabled: false,
+          nearbyEnabled: true,
+          favouritesEnabled: true,
+          mutedAccountIds: [],
+          blockedAccountIds: [],
+          maxNearbyPerDay: 5,
+        });
+      }
+    }
+
+    if (req.method === 'PUT') {
+      const body = await readRequestJson(req);
+      if (!SUPABASE_URL || !SUPABASE_KEY) return sendJson(res, 200, { success: true, persisted: false });
+      try {
+        await supabaseFetch('/notification_preferences?on_conflict=account_id&select=account_id', {
+          method: 'POST',
+          headers: { Prefer: 'resolution=merge-duplicates,return=representation' },
+          body: JSON.stringify({
+            account_id: accountId,
+            transactional_enabled: body.transactionalEnabled !== false,
+            marketing_enabled: Boolean(body.marketingEnabled),
+            nearby_enabled: body.nearbyEnabled !== false,
+            favourites_enabled: body.favouritesEnabled !== false,
+            muted_account_ids: Array.isArray(body.mutedAccountIds) ? body.mutedAccountIds : [],
+            blocked_account_ids: Array.isArray(body.blockedAccountIds) ? body.blockedAccountIds : [],
+            max_nearby_per_day: Math.max(1, Number(body.maxNearbyPerDay || 5)),
+            updated_at: nowIso(),
+          }),
+        });
+        return sendJson(res, 200, { success: true, persisted: true });
+      } catch (error) {
+        return sendJson(res, 200, { success: true, persisted: false, error: error.message || 'preference update failed' });
+      }
+    }
+
+    return sendJson(res, 405, { error: 'Method not allowed' });
+  }
+
+  const historyMatch = url.match(/^\/(?:api\/)?notifications\/history\/([^/]+)$/);
+  if (historyMatch) {
+    if (req.method !== 'GET') return sendJson(res, 405, { error: 'Method not allowed' });
+    const accountId = decodeURIComponent(historyMatch[1]);
+    const limitMatch = String(req.url || '').match(/[?&]limit=(\d+)/);
+    const limit = Math.max(1, Math.min(100, Number(limitMatch?.[1] || 50)));
+    if (!SUPABASE_URL || !SUPABASE_KEY) return sendJson(res, 200, []);
+    try {
+      const rows = await supabaseFetch(`/app_notifications?recipient_account_id=eq.${encodeURIComponent(accountId)}&select=*&order=created_at.desc&limit=${limit}`);
+      return sendJson(res, 200, rows || []);
+    } catch {
+      return sendJson(res, 200, []);
+    }
+  }
+
+  if (url === '/api/notifications/events' || url === '/notifications/events') {
+    if (req.method !== 'POST') return sendJson(res, 405, { error: 'Method not allowed' });
+    const body = await readRequestJson(req);
+    if (!body.eventType || !body.recipientAccountId) {
+      return sendJson(res, 400, { error: 'eventType and recipientAccountId are required' });
+    }
+    const result = await persistNotificationEvent({
+      eventType: String(body.eventType),
+      recipientAccountId: String(body.recipientAccountId),
+      actorAccountId: String(body.actorAccountId || getAuthUserId(req) || ''),
+      listingId: body.listingId ? String(body.listingId) : '',
+      requestId: body.requestId ? String(body.requestId) : '',
+      orderId: body.orderId ? String(body.orderId) : '',
+      title: String(body.title || 'Drizn update'),
+      body: String(body.body || ''),
+      dedupeKey: body.dedupeKey ? String(body.dedupeKey) : '',
+      payload: body.payload || {},
+    });
+    return sendJson(res, 200, result);
+  }
+
+  if (url === '/api/notifications/nearby-listing' || url === '/notifications/nearby-listing') {
+    if (req.method !== 'POST') return sendJson(res, 405, { error: 'Method not allowed' });
+    const body = await readRequestJson(req);
+    const ownerId = String(body.actorAccountId || getAuthUserId(req) || '').trim();
+    const listingId = String(body.listingId || '').trim();
+    const lat = toFiniteNumber(body.latitude);
+    const lng = toFiniteNumber(body.longitude);
+    if (!ownerId || !listingId || lat === null || lng === null) {
+      return sendJson(res, 400, { error: 'actorAccountId, listingId, latitude, and longitude are required' });
+    }
+    if (!SUPABASE_URL || !SUPABASE_KEY) {
+      return sendJson(res, 200, { success: true, persisted: false, notifiedCount: 0 });
+    }
+
+    try {
+      const radiusKm = Math.max(0.5, Math.min(10, Number(body.radiusKm || 2)));
+      const tokenRows = await supabaseFetch('/push_tokens?enabled=eq.true&select=account_id,metadata');
+      const recipients = (tokenRows || [])
+        .map((row) => {
+          const accountId = String(row.account_id || '');
+          if (!accountId || accountId === ownerId) return null;
+          const coordinates = getLocationFromTokenMetadata(parseJsonValue(row.metadata, {}));
+          if (!coordinates) return null;
+          const distanceKm = haversineKm({ lat, lng }, coordinates);
+          if (!Number.isFinite(distanceKm) || distanceKm > radiusKm) return null;
+          return { accountId, distanceKm };
+        })
+        .filter(Boolean)
+        .sort((a, b) => a.distanceKm - b.distanceKm);
+
+      const today = new Date().toISOString().slice(0, 10);
+      let notifiedCount = 0;
+      for (const recipient of recipients) {
+        const result = await persistNotificationEvent({
+          eventType: 'nearby_listing',
+          recipientAccountId: recipient.accountId,
+          actorAccountId: ownerId,
+          listingId,
+          title: 'New nearby listing',
+          body: `${String(body.title || 'A listing')} is available within 2 km${body.area || body.city ? ` near ${[body.area, body.city].filter(Boolean).join(', ')}` : ''}.`,
+          dedupeKey: `nearby_listing:${listingId}:${recipient.accountId}:${today}`,
+          payload: {
+            category: String(body.category || ''),
+            distanceKm: Number(recipient.distanceKm.toFixed(2)),
+            area: String(body.area || ''),
+            city: String(body.city || ''),
+          },
+        });
+        if (result.accepted && !result.deduped) notifiedCount += 1;
+      }
+
+      return sendJson(res, 200, {
+        success: true,
+        persisted: true,
+        candidates: recipients.length,
+        notifiedCount,
+      });
+    } catch (error) {
+      return sendJson(res, 200, {
+        success: true,
+        persisted: false,
+        notifiedCount: 0,
+        error: error.message || 'nearby processing failed',
+      });
+    }
+  }
+
+  return null;
+}
+
 async function handleOrders(req, res) {
   const userId = getAuthUserId(req);
   if (req.method === 'GET') {
@@ -1062,6 +1422,11 @@ export default async function handler(req, res) {
 
   if (url === '/api/orders' || url === '/orders') {
     return handleOrders(req, res);
+  }
+
+  if (url.startsWith('/api/notifications') || url.startsWith('/notifications')) {
+    const handled = await handleNotifications(req, res, url);
+    if (handled !== null) return handled;
   }
 
   const routeHandler = await getAppHandler();
