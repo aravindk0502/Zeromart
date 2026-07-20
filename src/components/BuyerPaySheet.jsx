@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { X, ShoppingBag, CheckCircle, Zap, Star } from 'lucide-react';
 import { createBuyerAccessOrder, verifyBuyerAccessPayment } from '../lib/api';
 
@@ -33,6 +33,50 @@ function loadRazorpayScript() {
 export default function BuyerPaySheet({ open, onClose, onComplete }) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [preparing, setPreparing] = useState(false);
+  const [preparedOrder, setPreparedOrder] = useState(null);
+  const preparePromiseRef = useRef(null);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    if (!open) {
+      setLoading(false);
+      setError('');
+      setPreparing(false);
+      setPreparedOrder(null);
+      preparePromiseRef.current = null;
+      return undefined;
+    }
+
+    setError('');
+    setPreparing(true);
+
+    preparePromiseRef.current = Promise.all([
+      createBuyerAccessOrder(2900),
+      loadRazorpayScript(),
+    ])
+      .then(([order]) => {
+        if (cancelled) return null;
+        if (!order?.order_id || !order?.key_id || String(order.key_id).toLowerCase() === 'demo') {
+          throw new Error('Secure payment is not configured yet. Please try again shortly.');
+        }
+        setPreparedOrder(order);
+        return order;
+      })
+      .catch((err) => {
+        if (cancelled) return null;
+        setError(err.message || 'Payment failed. Try again.');
+        return null;
+      })
+      .finally(() => {
+        if (!cancelled) setPreparing(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [open]);
 
   if (!open) return null;
 
@@ -40,11 +84,10 @@ export default function BuyerPaySheet({ open, onClose, onComplete }) {
     setError('');
     setLoading(true);
     try {
-      const order = await createBuyerAccessOrder(2900);
+      const order = preparedOrder || await preparePromiseRef.current || await createBuyerAccessOrder(2900);
       if (!order?.order_id || !order?.key_id || String(order.key_id).toLowerCase() === 'demo') {
         throw new Error('Secure payment is not configured yet. Please try again shortly.');
       }
-      await loadRazorpayScript();
 
       if (!window.Razorpay) {
         throw new Error('Payments could not be prepared. Please try again.');
@@ -145,9 +188,9 @@ export default function BuyerPaySheet({ open, onClose, onComplete }) {
           className="btn btn-primary btn-full"
           style={{ fontSize: 16, padding: '15px' }}
           onClick={handlePay}
-          disabled={loading}
+          disabled={loading || preparing}
         >
-          {loading ? 'Preparing secure payment…' : 'Pay ₹29 for yearly access'}
+          {loading ? 'Opening payment…' : preparing ? 'Preparing secure payment…' : 'Pay ₹29 for yearly access'}
         </button>
 
         <button className="btn btn-ghost btn-full" style={{ marginTop: 8 }} onClick={onClose}>
