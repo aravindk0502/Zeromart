@@ -32,6 +32,12 @@ const isCorsLikeError = (error) => {
   return /failed to fetch|networkerror|load failed|cors|err_name_not_resolved/i.test(message);
 };
 
+const isRetryableBuyerAccessError = (error) => {
+  if (!error) return false;
+  if (Number.isFinite(Number(error.status))) return Number(error.status) >= 500;
+  return /timed out|failed to fetch|networkerror|load failed|cors|err_name_not_resolved|abort/i.test(String(error?.message || error));
+};
+
 const getCandidateBases = () => {
   const bases = [];
   const currentOrigin = typeof window !== 'undefined' && window.location?.origin
@@ -286,8 +292,7 @@ export async function createBuyerAccessOrder(amount = 2900) {
         const error = new Error(message);
         error.status = res.status;
         error.response = data;
-        lastError = error;
-        continue;
+        throw error;
       }
 
       if (base !== BASE) {
@@ -308,6 +313,9 @@ export async function createBuyerAccessOrder(amount = 2900) {
         possibleCorsError: isCorsLikeError(error),
       });
       lastError = error?.name === 'AbortError' ? new Error('Create-order request timed out.') : error;
+      if (!isRetryableBuyerAccessError(lastError)) {
+        throw lastError;
+      }
     } finally {
       clearTimeout(timeoutId);
     }
@@ -325,6 +333,9 @@ export async function verifyBuyerAccessPayment(payload) {
       return data;
     } catch (error) {
       lastError = error;
+      if (!isRetryableBuyerAccessError(error)) {
+        throw error;
+      }
     }
   }
 
@@ -341,6 +352,9 @@ export async function fetchBuyerAccessStatus() {
       return data;
     } catch (error) {
       lastError = error;
+      if (!isRetryableBuyerAccessError(error)) {
+        throw error;
+      }
     }
   }
 
