@@ -81,7 +81,9 @@ function toVisibleErrorMessage(error) {
   return `${FALLBACK_ERROR_MESSAGE}${message ? ` (${message})` : ''}`;
 }
 
-export default function BuyerPaySheet({ open, onClose, onComplete }) {
+const isAuthErrorMessage = (message = '') => /invalid token|not authenticated/i.test(String(message || ''));
+
+export default function BuyerPaySheet({ open, onClose, onComplete, onAuthRequired }) {
   const [preparing, setPreparing] = useState(false);
   const [error, setError] = useState('');
 
@@ -217,6 +219,9 @@ export default function BuyerPaySheet({ open, onClose, onComplete }) {
       await Promise.resolve(onComplete?.(payment));
       onClose?.();
     } catch (err) {
+      if (isAuthErrorMessage(err?.message)) {
+        onAuthRequired?.(err);
+      }
       console.error('[BuyerAccess] error', {
         step: String(err?.message || err),
         message: String(err?.message || err),

@@ -76,6 +76,25 @@ const getBuyerAccessBases = () => {
   return [...new Set(bases.map((value) => String(value || '').replace(/\/$/, '')).filter(Boolean))];
 };
 
+const getAuthBases = () => getBuyerAccessBases();
+
+async function requestAcrossBases(path, options = {}, bases = []) {
+  let lastError = null;
+
+  for (const base of bases) {
+    try {
+      return await requestJson(path, { ...options, baseOverride: base });
+    } catch (error) {
+      lastError = error;
+      if (!isRetryableBuyerAccessError(error)) {
+        throw error;
+      }
+    }
+  }
+
+  throw lastError || new Error('Request failed');
+}
+
 async function requestJson(path, options = {}) {
   const {
     method = 'GET',
@@ -199,11 +218,29 @@ async function put(path, body) {
 }
 
 // ── Auth ──────────────────────────────────────────────────────────────────────
-export const sendOtp    = (phone)      => post('/api/send-otp', { phone });
-export const verifyOtp  = (phone, otp) => post('/api/verify-otp', { phone, otp });
+export async function sendOtp(phone) {
+  return requestAcrossBases('/api/send-otp', {
+    method: 'POST',
+    body: { phone },
+    auth: false,
+  }, getAuthBases());
+}
+
+export async function verifyOtp(phone, otp) {
+  return requestAcrossBases('/api/verify-otp', {
+    method: 'POST',
+    body: { phone, otp },
+    auth: false,
+  }, getAuthBases());
+}
 
 // ── Profile ───────────────────────────────────────────────────────────────────
-export const fetchProfile  = ()      => get('/api/profile');
+export async function fetchProfile() {
+  return requestAcrossBases('/api/profile', {
+    method: 'GET',
+    auth: true,
+  }, getAuthBases());
+}
 export const updateProfile = (data)  => put('/api/profile', data);
 
 // ── Products ──────────────────────────────────────────────────────────────────

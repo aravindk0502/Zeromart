@@ -1,21 +1,55 @@
 import { useState } from 'react';
 import { MapPin } from 'lucide-react';
 import { useLocationEngine } from '../hooks/useLocationEngine';
+import { sendOtp, setToken, verifyOtp } from '../lib/api';
 
 export default function OtpModal({ onClose, onVerify }) {
   const locationEngine = useLocationEngine();
   const [step, setStep] = useState('phone');
   const [mobile, setMobile] = useState('');
   const [otp, setOtp] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState('');
 
-  const handleSendOtp = () => {
-    if (!mobile) return;
-    setStep('otp');
+  const handleSendOtp = async () => {
+    const normalizedMobile = String(mobile || '').replace(/\D/g, '');
+    if (!/^\d{10}$/.test(normalizedMobile)) {
+      setError('Enter a valid 10-digit mobile number.');
+      return;
+    }
+
+    setSubmitting(true);
+    setError('');
+    try {
+      await sendOtp(normalizedMobile);
+      setMobile(normalizedMobile);
+      setStep('otp');
+    } catch (nextError) {
+      setError(nextError?.message || 'Could not send OTP. Please try again.');
+    } finally {
+      setSubmitting(false);
+    }
   };
 
-  const handleVerify = () => {
-    if (otp === '123456') {
-      onVerify(mobile);
+  const handleVerify = async () => {
+    if (!/^\d{6}$/.test(String(otp || ''))) {
+      setError('Enter a valid 6-digit OTP.');
+      return;
+    }
+
+    setSubmitting(true);
+    setError('');
+    try {
+      const data = await verifyOtp(mobile, otp);
+      if (!data?.token) {
+        throw new Error('Login did not return a session token.');
+      }
+      setToken(data.token);
+      onVerify({ mobile, token: data.token, user: data.user || null });
+    } catch (nextError) {
+      setError(nextError?.message || 'Could not verify OTP. Please try again.');
+    } finally {
+      setSubmitting(false);
     }
   };
 
@@ -57,8 +91,9 @@ export default function OtpModal({ onClose, onVerify }) {
               </span>
               <span className="text-xs font-bold text-emerald-700">Change</span>
             </button>
-            <button onClick={handleSendOtp} className="w-full rounded-2xl bg-violet-600 px-4 py-3 font-semibold text-white">
-              Send OTP
+            {error && <p className="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">{error}</p>}
+            <button type="button" onClick={handleSendOtp} disabled={submitting} className="w-full rounded-2xl bg-violet-600 px-4 py-3 font-semibold text-white disabled:opacity-60">
+              {submitting ? 'Sending OTP…' : 'Send OTP'}
             </button>
             <p className="text-center text-sm text-slate-500">For now, use OTP 123456.</p>
           </div>
@@ -77,8 +112,9 @@ export default function OtpModal({ onClose, onVerify }) {
               <p className="text-sm font-medium text-slate-700">Drizn account</p>
               <p className="mt-1 text-sm font-semibold text-violet-700">Buy for ₹0. Sell for ₹0. Earn good karma.</p>
             </div>
-            <button onClick={handleVerify} className="w-full rounded-2xl bg-violet-600 px-4 py-3 font-semibold text-white">
-              Verify
+            {error && <p className="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">{error}</p>}
+            <button type="button" onClick={handleVerify} disabled={submitting} className="w-full rounded-2xl bg-violet-600 px-4 py-3 font-semibold text-white disabled:opacity-60">
+              {submitting ? 'Verifying…' : 'Verify'}
             </button>
           </div>
         )}

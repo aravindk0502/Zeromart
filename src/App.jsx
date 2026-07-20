@@ -33,6 +33,7 @@ import {
   getLiveListings, saveLiveListings, upsertLiveListing, removeLiveListing, normalizeLiveListing,
 } from './services/transactionService';
 import {
+  clearToken,
   emitNotificationEvent,
   fetchProfile,
   fetchOrders,
@@ -636,8 +637,14 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
           localStorage.setItem('zeromart-user', JSON.stringify(merged));
           return merged;
         });
-      } catch {
-        // Non-blocking; keep local session values when profile endpoint is unavailable.
+      } catch (error) {
+        if (cancelled) return;
+        if (Number(error?.status) === 401 || Number(error?.status) === 403) {
+          clearToken();
+          setUser(null);
+          localStorage.removeItem('zeromart-user');
+          setNotice('Your session expired. Log in again to continue.');
+        }
       }
     };
 
@@ -1095,27 +1102,42 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
     setShowOtpModal(true);
   };
 
-  const handleLogin = (mobile) => {
+  const handleLogin = (authResult) => {
+    const mobile = typeof authResult === 'string' ? authResult : String(authResult?.mobile || authResult?.user?.phone || '');
+    const serverUser = typeof authResult === 'object' ? authResult?.user || {} : {};
     const savedKarma = getKarmaLedger()[accountKey(mobile)];
-    const nextAccountId = mobile;
+    const nextAccountId = serverUser.id || mobile;
     const nextUser = {
       userId: nextAccountId,
-      name: 'Drizn User',
+      profileId: serverUser.id || mobile,
+      name: serverUser.name && serverUser.name !== 'Unknown' ? serverUser.name : 'Drizn User',
       mobile,
-      karma: Number(savedKarma ?? 0),
+      karma: Number(serverUser.karma ?? savedKarma ?? 0),
       listed: 0,
       collected: 0,
       activeListings: 0,
       givenAway: 0,
-      isBuyer: false,
+      isBuyer: Boolean(serverUser.is_buyer),
       profileImage: '',
       location: locationEngine.location,
+      buyerAccessExpiresAt: serverUser.buyer_access_expires_at || '',
+      buyerAccessActivatedAt: serverUser.buyer_access_activated_at || '',
     };
     setUser(nextUser);
     localStorage.setItem('zeromart-user', JSON.stringify(nextUser));
     setShowOtpModal(false);
     setNotice('Welcome! You can list for free and buy anything for ₹0 with a ₹29 yearly platform fee for buyer access.');
     requestPushAccessForAccount(nextAccountId);
+  };
+
+  const handleAuthExpired = () => {
+    buyerAccessBypassRef.current = false;
+    clearToken();
+    setUser(null);
+    localStorage.removeItem('zeromart-user');
+    setShowBuyerPaySheet(false);
+    setNotice('Your session expired. Log in again to continue secure payment.');
+    setShowOtpModal(true);
   };
 
   const handleNav = (view) => {
@@ -3489,7 +3511,7 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
         }}
         onSubmit={handleListingSubmit}
       />
-      <BuyerPaySheet open={showBuyerPaySheet} onClose={() => setShowBuyerPaySheet(false)} onComplete={handleBuyerUnlockComplete} />
+      <BuyerPaySheet open={showBuyerPaySheet} onClose={() => setShowBuyerPaySheet(false)} onComplete={handleBuyerUnlockComplete} onAuthRequired={handleAuthExpired} />
       {quantityItem && (
         <QuantityRequestModal
           item={quantityItem}
