@@ -152,11 +152,18 @@ export default function BuyerPaySheet({ open, onClose, onComplete, onAuthRequire
         hasRazorpay: Boolean(window.Razorpay),
       });
 
-      const payment = await withTimeout(new Promise((resolve, reject) => {
+      const payment = await new Promise((resolve, reject) => {
         let settled = false;
+        const initTimeoutId = window.setTimeout(() => {
+          if (settled) return;
+          settled = true;
+          reject(new Error('Checkout initialization timed out.'));
+        }, CHECKOUT_INIT_TIMEOUT_MS);
+
         const finish = (callback) => {
           if (settled) return;
           settled = true;
+          window.clearTimeout(initTimeoutId);
           callback();
         };
 
@@ -214,7 +221,8 @@ export default function BuyerPaySheet({ open, onClose, onComplete, onAuthRequire
         checkout.open();
         console.log('[BuyerAccess] checkout.open called');
         console.log('[BuyerAccess] checkout opened');
-      }), CHECKOUT_INIT_TIMEOUT_MS, 'Checkout initialization timed out.');
+        window.clearTimeout(initTimeoutId);
+      });
 
       await Promise.resolve(onComplete?.(payment));
       onClose?.();
