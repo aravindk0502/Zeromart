@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useState } from 'react';
 import { X, ShoppingBag, CheckCircle, Zap, Star } from 'lucide-react';
 import { createBuyerAccessOrder, verifyBuyerAccessPayment } from '../lib/api';
 
@@ -33,80 +33,71 @@ function loadRazorpayScript() {
 export default function BuyerPaySheet({ open, onClose, onComplete }) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
-  const [preparing, setPreparing] = useState(false);
-  const [preparedOrder, setPreparedOrder] = useState(null);
-  const preparePromiseRef = useRef(null);
-
-  useEffect(() => {
-    let cancelled = false;
-
-    if (!open) {
-      setLoading(false);
-      setError('');
-      setPreparing(false);
-      setPreparedOrder(null);
-      preparePromiseRef.current = null;
-      return undefined;
-    }
-
-    setError('');
-    setPreparing(true);
-
-    preparePromiseRef.current = Promise.all([
-      createBuyerAccessOrder(2900),
-      loadRazorpayScript(),
-    ])
-      .then(([order]) => {
-        if (cancelled) return null;
-        if (!order?.order_id || !order?.key_id || String(order.key_id).toLowerCase() === 'demo') {
-          throw new Error('Secure payment is not configured yet. Please try again shortly.');
-        }
-        setPreparedOrder(order);
-        return order;
-      })
-      .catch((err) => {
-        if (cancelled) return null;
-        setError(err.message || 'Payment failed. Try again.');
-        return null;
-      })
-      .finally(() => {
-        if (!cancelled) setPreparing(false);
-      });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [open]);
 
   if (!open) return null;
 
+  const normalizeOrderResponse = (order) => ({
+    orderId: order?.orderId || order?.order_id || order?.id || '',
+    amount: Number(order?.amount ?? 0),
+    currency: String(order?.currency || 'INR'),
+    keyId: order?.keyId || order?.key_id || '',
+  });
+
+  const loadCheckoutScript = async () => {
+    const script = await loadRazorpayScript();
+    console.log('[buyer-access] Razorpay script loaded', { loaded: Boolean(script) });
+    return script;
+  };
+
   async function handlePay() {
+    console.log('[buyer-access] button clicked');
     setError('');
     setLoading(true);
     try {
-      const order = preparedOrder || await preparePromiseRef.current || await createBuyerAccessOrder(2900);
-      if (!order?.order_id || !order?.key_id || String(order.key_id).toLowerCase() === 'demo') {
+      console.log('[buyer-access] create-order request started', { amount: 2900, planCode: 'buyer_access_annual_29' });
+      const orderResponse = await createBuyerAccessOrder(2900);
+      console.log('[buyer-access] create-order response received', orderResponse);
+
+      const order = normalizeOrderResponse(orderResponse);
+      if (!order.orderId) {
+        throw new Error('Missing orderId in create-order response');
+      }
+      if (!order.keyId) {
+        throw new Error('Missing keyId in create-order response');
+      }
+      if (!order.amount) {
+        throw new Error('Missing amount in create-order response');
+      }
+      if (!order.currency) {
+        throw new Error('Missing currency in create-order response');
+      }
+      if (String(order.keyId).toLowerCase() === 'demo') {
         throw new Error('Secure payment is not configured yet. Please try again shortly.');
       }
 
-      if (!window.Razorpay) {
-        throw new Error('Payments could not be prepared. Please try again.');
+      await loadCheckoutScript();
+
+      if (typeof window === 'undefined' || !window.Razorpay) {
+        throw new Error('Razorpay Checkout failed to load.');
       }
+
+      console.log('[buyer-access] checkout initializing', order);
 
       const payment = await new Promise((resolve, reject) => {
         const checkout = new window.Razorpay({
-          key: order.key_id,
+          key: order.keyId,
           amount: order.amount,
-          currency: order.currency || 'INR',
+          currency: order.currency,
           name: 'Drizn',
           description: 'Buyer access for ₹0 requests',
-          order_id: order.order_id,
+          order_id: order.orderId,
           prefill: order.prefill || undefined,
           notes: {
             plan: 'buyer_access_annual_29',
           },
           handler: async (response) => {
             try {
+              console.log('[buyer-access] payment success', response);
               const verification = await verifyBuyerAccessPayment({
                 planCode: 'buyer_access_annual_29',
                 amount: order.amount,
@@ -116,30 +107,42 @@ export default function BuyerPaySheet({ open, onClose, onComplete }) {
               });
               resolve({ response, verification });
             } catch (verificationError) {
+              console.error('[buyer-access] verification failed', verificationError);
               reject(verificationError);
             }
           },
           modal: {
-            ondismiss: () => reject(new Error('Payment cancelled.')),
+            ondismiss: () => {
+              console.log('[buyer-access] checkout dismissed');
+              reject(new Error('Payment cancelled.'));
+            },
           },
           theme: {
             color: '#f59e0b',
           },
         });
 
+        console.log('[buyer-access] checkout initialized');
+
         checkout.on('payment.failed', (response) => {
-          reject(new Error(response?.error?.description || 'Payment failed.'));
+          const failureMessage = response?.error?.description || response?.error?.reason || 'Payment failed.';
+          console.error('[buyer-access] payment failure', response);
+          reject(new Error(failureMessage));
         });
 
+        console.log('[buyer-access] opening checkout');
         checkout.open();
+        console.log('[buyer-access] checkout opened');
       });
 
       await Promise.resolve(onComplete?.(payment));
       onClose?.();
     } catch (err) {
+      console.error('[buyer-access] payment flow failed', err);
       setError(err.message || 'Payment failed. Try again.');
+    } finally {
+      setLoading(false);
     }
-    setLoading(false);
   }
 
   return (
@@ -188,9 +191,9 @@ export default function BuyerPaySheet({ open, onClose, onComplete }) {
           className="btn btn-primary btn-full"
           style={{ fontSize: 16, padding: '15px' }}
           onClick={handlePay}
-          disabled={loading || preparing}
+          disabled={loading}
         >
-          {loading ? 'Opening payment…' : preparing ? 'Preparing secure payment…' : 'Pay ₹29 for yearly access'}
+          {loading ? 'Preparing secure payment…' : 'Pay ₹29 for yearly access'}
         </button>
 
         <button className="btn btn-ghost btn-full" style={{ marginTop: 8 }} onClick={onClose}>
