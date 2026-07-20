@@ -12,6 +12,7 @@ const normalizeApiBase = (value = '') => {
 const BASE = normalizeApiBase(import.meta.env.VITE_API_URL);
 const IS_PRODUCTION = import.meta.env.PROD;
 const PROD_API_FALLBACK = 'https://drizn.com';
+const BUYER_ACCESS_CREATE_ORDER_TIMEOUT_MS = 15000;
 
 const apiUrl = (path, base = BASE) => `${String(base || '').replace(/\/$/, '')}${path}`;
 
@@ -218,10 +219,82 @@ export const saveOrder = (payload) => post('/api/orders', payload, isLoggedIn())
 export const markRequestHandover = (requestId, payload) => post(`/api/requests/${encodeURIComponent(requestId)}/handover`, payload, isLoggedIn());
 
 // ── Payment ───────────────────────────────────────────────────────────────────
-export const createBuyerAccessOrder = (amount = 2900) => post('/api/payments/create-order', {
-  amount,
-  planCode: 'buyer_access_annual_29',
-}, true);
+export async function createBuyerAccessOrder(amount = 2900) {
+  const path = '/api/payments/create-order';
+  const body = {
+    amount,
+    planCode: 'buyer_access_annual_29',
+  };
+  const bases = getCandidateBases();
+  let lastError = null;
+
+  for (const base of bases) {
+    const url = apiUrl(path, base);
+    const startedAt = Date.now();
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(new Error('Create-order request timed out.')), BUYER_ACCESS_CREATE_ORDER_TIMEOUT_MS);
+
+    try {
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...authHeaders(),
+        },
+        body: JSON.stringify(body),
+        signal: controller.signal,
+      });
+
+      const raw = await res.text();
+      let data;
+      try {
+        data = raw ? JSON.parse(raw) : {};
+      } catch {
+        data = { raw };
+      }
+
+      const elapsedMs = Date.now() - startedAt;
+      console.log('[BuyerAccess] create-order response', {
+        url,
+        status: res.status,
+        elapsedMs,
+        body: data,
+      });
+
+      if (!res.ok) {
+        const message = data?.message || data?.error?.message || data?.error || `Request failed (${res.status})`;
+        const error = new Error(message);
+        error.status = res.status;
+        error.response = data;
+        lastError = error;
+        continue;
+      }
+
+      if (base !== BASE) {
+        console.warn('[api] fallback base used', { base, path });
+      }
+      return data;
+    } catch (error) {
+      const elapsedMs = Date.now() - startedAt;
+      const message = error?.name === 'AbortError'
+        ? 'Create-order request timed out.'
+        : String(error?.message || error);
+      console.error('[BuyerAccess] error', {
+        step: 'create-order request',
+        url,
+        elapsedMs,
+        status: error?.status || null,
+        message,
+        possibleCorsError: isCorsLikeError(error),
+      });
+      lastError = error?.name === 'AbortError' ? new Error('Create-order request timed out.') : error;
+    } finally {
+      clearTimeout(timeoutId);
+    }
+  }
+
+  throw lastError || new Error('Create-order request failed.');
+}
 export const verifyBuyerAccessPayment = (payload) => post('/api/payments/verify', payload, true);
 export const fetchBuyerAccessStatus = () => get('/api/payments/status');
 

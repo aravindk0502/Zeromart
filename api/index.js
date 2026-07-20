@@ -28,6 +28,7 @@ const jsonHeaders = {
   'Cache-Control': 'no-store, max-age=0',
   Pragma: 'no-cache',
   Vary: 'Origin',
+  'Content-Security-Policy': "default-src 'self'; base-uri 'self'; object-src 'none'; script-src 'self' https://checkout.razorpay.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; font-src 'self' data: https:; connect-src 'self' https://api.razorpay.com https://checkout.razorpay.com https://drizn.com https://*.supabase.co wss://*.supabase.co; frame-src 'self' https://api.razorpay.com https://checkout.razorpay.com; frame-ancestors 'self';",
 };
 
 const DEFAULT_SELLER_NAME = 'Drizn User';
