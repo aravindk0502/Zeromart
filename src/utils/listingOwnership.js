@@ -9,6 +9,7 @@ export const getActorIdentifiers = (actor = {}) => {
     actor.userId,
     actor.id,
     actor.accountId,
+    actor.profileId,
     actor.businessId,
     actor.sellerId,
     actor.mobile,
@@ -28,7 +29,9 @@ export const getListingOwnerIdentifiers = (listing = {}) => {
     listing.business_id,
     listing.ownerMobile,
     listing.owner_mobile,
+    listing.profileId,
     listing.metadata?.ownerMobile,
+    listing.metadata?.profileId,
   ]);
 };
 
@@ -45,5 +48,5 @@ export const isListingOwnedByUser = (listing = {}, actor = null) => {
   const actorName = normalize(actor.name);
   const listingSeller = normalize(listing.sellerName || listing.storeName || listing.businessName);
   if (GENERIC_NAMES.has(actorName) || GENERIC_NAMES.has(listingSeller)) return false;
-  return Boolean(actorName && listingSeller && actorName === listingSeller);
+  return false;
 };

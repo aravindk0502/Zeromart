@@ -9,10 +9,16 @@ export default function QuantityRequestModal({ item, buyerId, collectionSettings
   const [quantity, setQuantity] = useState(1);
   const [slot, setSlot] = useState('');
   const [now, setNow] = useState(Date.now());
+  const [submitting, setSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState('');
   const expiryBadge = useMemo(() => getExpiryBadgeState(product, now), [product, now]);
   const allowance = getQuantityAllowance(product, buyerId, quantity, now);
   const maximum = Math.min(allowance.remainingLimit, allowance.requestableStock, product.maxQuantityPerUserPer24h);
   const isBusiness = product.listingType === 'business';
+  const canSubmit = allowance.allowedQuantity > 0
+    && quantity > 0
+    && quantity <= maximum
+    && (!isBusiness || collectionSettings?.allowAnytime || Boolean(slot));
 
   useEffect(() => {
     if (maximum > 0 && quantity > maximum) setQuantity(maximum);
@@ -25,12 +31,20 @@ export default function QuantityRequestModal({ item, buyerId, collectionSettings
 
   if (!item) return null;
 
-  const submit = () => {
-    if (allowance.allowedQuantity < 1) return;
-    onConfirm({
-      quantity: allowance.allowedQuantity,
-      collectionWindow: collectionSettings?.allowAnytime ? 'Anytime during store opening hours' : slot,
-    });
+  const submit = async () => {
+    if (!canSubmit) return;
+    setSubmitError('');
+    setSubmitting(true);
+    try {
+      await Promise.resolve(onConfirm({
+        quantity: allowance.allowedQuantity,
+        collectionWindow: collectionSettings?.allowAnytime ? 'Anytime during store opening hours' : slot,
+      }));
+    } catch (error) {
+      setSubmitError(error?.message || 'Could not send request right now. Please try again.');
+    } finally {
+      setSubmitting(false);
+    }
   };
 
   return (
@@ -62,12 +76,12 @@ export default function QuantityRequestModal({ item, buyerId, collectionSettings
             <div className="mt-5">
               <p className="text-sm font-bold text-slate-700">Choose quantity</p>
               <div className="mt-2 flex items-center justify-between rounded-2xl border border-slate-200 p-2">
-                <button onClick={() => setQuantity((value) => Math.max(1, value - 1))} className="flex h-11 w-11 items-center justify-center rounded-xl bg-slate-100 text-slate-700"><Minus size={18} /></button>
+                <button type="button" onClick={() => setQuantity((value) => Math.max(1, value - 1))} className="flex h-11 w-11 items-center justify-center rounded-xl bg-slate-100 text-slate-700"><Minus size={18} /></button>
                 <div className="text-center">
                   <p className="text-2xl font-extrabold text-slate-900">{quantity}</p>
                   <p className="text-[11px] text-slate-400">Maximum {maximum}</p>
                 </div>
-                <button onClick={() => setQuantity((value) => Math.min(maximum, value + 1))} className="flex h-11 w-11 items-center justify-center rounded-xl bg-emerald-700 text-white"><Plus size={18} /></button>
+                <button type="button" onClick={() => setQuantity((value) => Math.min(maximum, value + 1))} className="flex h-11 w-11 items-center justify-center rounded-xl bg-emerald-700 text-white"><Plus size={18} /></button>
               </div>
             </div>
 
@@ -84,10 +98,15 @@ export default function QuantityRequestModal({ item, buyerId, collectionSettings
               </label>
             )}
 
-            <button onClick={submit} disabled={isBusiness && !collectionSettings?.allowAnytime && !slot} className="mt-5 inline-flex w-full items-center justify-center gap-2 rounded-2xl bg-gradient-to-r from-amber-500 to-violet-600 px-4 py-3.5 font-bold text-white shadow-lg disabled:opacity-40">
+            <button type="button" onClick={submit} disabled={!canSubmit || submitting} className="mt-5 inline-flex w-full items-center justify-center gap-2 rounded-2xl bg-gradient-to-r from-amber-500 to-violet-600 px-4 py-3.5 font-bold text-white shadow-lg disabled:opacity-40">
               <PackageCheck size={18} />
-              {isBusiness ? 'Reserve & Collect' : 'Send Request'}
+              {submitting ? 'Sending request...' : (isBusiness ? 'Reserve & Collect' : 'Send Request')}
             </button>
+            {submitError && (
+              <p className="mt-3 rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-sm font-semibold text-rose-700">
+                {submitError}
+              </p>
+            )}
           </>
         ) : (
           <div className="mt-5 rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm leading-6 text-amber-900">

@@ -39,8 +39,8 @@ const getCandidateBases = () => {
   // In production, always prefer the configured shared API, then try the
   // deployed same-origin API before giving up. Never fall back to localStorage.
   if (IS_PRODUCTION) {
-    if (BASE) bases.push(BASE);
     if (currentOrigin) bases.push(currentOrigin);
+    if (BASE) bases.push(BASE);
     if (!BASE) bases.push(PROD_API_FALLBACK);
     return [...new Set(bases.map((value) => String(value || '').replace(/\/$/, '')).filter(Boolean))];
   }
@@ -87,7 +87,13 @@ async function requestJson(path, options = {}) {
 
       if (!res.ok) {
         console.error('[api] request failed', { url, status: res.status, responseBody: data });
-        lastError = new Error(data?.error?.message || data?.error || `Request failed (${res.status})`);
+        const message = data?.message || data?.error?.message || data?.error || `Request failed (${res.status})`;
+        const code = data?.code || data?.error?.code || '';
+        const error = new Error(code ? `${message} [${code}]` : message);
+        error.status = res.status;
+        error.code = code;
+        error.response = data;
+        lastError = error;
         continue;
       }
 
@@ -197,6 +203,7 @@ export const fetchPersistence = () => get('/api/persistence');
 
 // ── Live Listings ────────────────────────────────────────────────────────────
 export const fetchListings = () => requestJson('/api/listings', { method: 'GET', auth: false });
+export const fetchListingById = (id) => requestJson(`/api/listings/${encodeURIComponent(id)}`, { method: 'GET', auth: false });
 export const insertListing = (listing) => post('/api/listings', listing, isLoggedIn());
 export const updateListing = (id, listing) => put(`/api/listings/${encodeURIComponent(id)}`, listing);
 export const deleteListing = (id) => requestJson(`/api/listings/${encodeURIComponent(id)}`, { method: 'DELETE', auth: true });
@@ -207,10 +214,20 @@ export const toggleFavouriteAPI = (id) => post(`/api/favourites/${id}`, {}, true
 
 // ── Orders ────────────────────────────────────────────────────────────────────
 export const fetchOrders = () => get('/api/orders').catch(() => []);
+export const saveOrder = (payload) => post('/api/orders', payload, isLoggedIn());
+export const markRequestHandover = (requestId, payload) => post(`/api/requests/${encodeURIComponent(requestId)}/handover`, payload, isLoggedIn());
 
 // ── Payment ───────────────────────────────────────────────────────────────────
-export const createRazorpayOrder = (amount = 2900) => post('/api/create-order', { amount });
-export const verifyPayment = (payload) => post('/api/verify-payment', payload, true);
+export const createBuyerAccessOrder = (amount = 2900) => post('/api/payments/create-order', {
+  amount,
+  planCode: 'buyer_access_annual_29',
+}, true);
+export const verifyBuyerAccessPayment = (payload) => post('/api/payments/verify', payload, true);
+export const fetchBuyerAccessStatus = () => get('/api/payments/status');
+
+// Backwards-compatible aliases for older call sites.
+export const createRazorpayOrder = createBuyerAccessOrder;
+export const verifyPayment = verifyBuyerAccessPayment;
 
 // ── Notifications ─────────────────────────────────────────────────────────────
 export const registerPushToken = (payload) => post('/api/notifications/token', payload, isLoggedIn());
@@ -218,5 +235,8 @@ export const disablePushToken = (token) => post('/api/notifications/token/disabl
 export const fetchNotificationPreferences = (accountId) => requestJson(`/api/notifications/preferences/${encodeURIComponent(accountId)}`, { method: 'GET', auth: isLoggedIn() });
 export const updateNotificationPreferences = (accountId, payload) => requestJson(`/api/notifications/preferences/${encodeURIComponent(accountId)}`, { method: 'PUT', body: payload, auth: isLoggedIn() });
 export const fetchNotificationHistory = (accountId, limit = 50) => requestJson(`/api/notifications/history/${encodeURIComponent(accountId)}?limit=${encodeURIComponent(limit)}`, { method: 'GET', auth: isLoggedIn() });
+export const fetchPendingKarmaActions = (accountId) => requestJson(`/api/karma/pending/${encodeURIComponent(accountId)}`, { method: 'GET', auth: isLoggedIn() }).catch(() => []);
 export const emitNotificationEvent = (payload) => post('/api/notifications/events', payload, isLoggedIn());
 export const triggerNearbyListingAlerts = (payload) => post('/api/notifications/nearby-listing', payload, isLoggedIn());
+export const awardCommunityKarma = (payload) => post('/api/karma/community', payload, isLoggedIn());
+export const reserveListing = (listingId, payload) => post(`/api/listings/${encodeURIComponent(listingId)}/reserve`, payload, isLoggedIn());

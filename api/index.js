@@ -1,4 +1,7 @@
 import serverless from 'serverless-http';
+import { createHash } from 'node:crypto';
+import { cert, getApps as getFirebaseApps, initializeApp as initializeFirebaseApp } from 'firebase-admin/app';
+import { getMessaging } from 'firebase-admin/messaging';
 
 let appHandler;
 
@@ -29,6 +32,15 @@ const jsonHeaders = {
 
 const DEFAULT_SELLER_NAME = 'Drizn User';
 
+function isPlaceholderName(value = '') {
+  const normalized = String(value || '').trim().toLowerCase();
+  return !normalized
+    || normalized === 'unknown'
+    || normalized === 'undefined'
+    || normalized === 'null'
+    || normalized === 'guest';
+}
+
 function getInitialsFromName(name = '') {
   return String(name || '')
     .split(' ')
@@ -43,12 +55,7 @@ function getInitialsFromName(name = '') {
 function cleanSellerName(...names) {
   const value = names.find((name) => {
     const trimmed = String(name || '').trim();
-    const normalized = trimmed.toLowerCase();
-    return trimmed
-      && normalized !== 'unknown'
-      && normalized !== 'undefined'
-      && normalized !== 'null'
-      && normalized !== 'guest';
+    return !isPlaceholderName(trimmed);
   });
   return String(value || DEFAULT_SELLER_NAME).trim();
 }
@@ -205,7 +212,7 @@ function listingRowToClient(row) {
     metadata.businessName,
     metadata.storeName,
   );
-  const sellerAvatar = metadata.sellerLogo || metadata.logoUrl || metadata.sellerAvatar || metadata.profileImage || metadata.avatarUrl || '';
+  const sellerAvatar = metadata.sellerAvatar || metadata.profileImage || metadata.avatarUrl || metadata.sellerLogo || metadata.logoUrl || '';
   const sellerInitials = String(metadata.sellerInitials || getInitialsFromName(sellerName) || 'DU').trim().toUpperCase().slice(0, 2) || 'DU';
   const sellerProfileMetadata = parseJsonValue(metadata.sellerProfile, {});
   const quantity = Math.max(0, Number(row.quantity ?? metadata.quantity ?? row.available_quantity ?? metadata.availableQuantity ?? 1) || 0);
@@ -246,7 +253,7 @@ function listingRowToClient(row) {
     price: Number(row.price ?? metadata.price ?? 0) || 0,
     expiryDate: safeDate(row.expiry_date || row.expiry || metadata.expiryDate || metadata.validTill),
     expiryTime: row.expiry_time || '',
-    status: status === 'active' || status === 'available' || status === 'live' || status === 'published' ? 'Available' : status,
+    status: status === 'active' || status === 'available' || status === 'live' || status === 'published' || status === 'listed' || status === 'open' ? 'Available' : status,
     location: row.location || row.area || row.city || '',
     area: row.area || locationData.area || locationData.locality || '',
     city: row.city || locationData.city || '',
@@ -281,6 +288,7 @@ const CLOSED_LISTING_STATUSES = new Set([
   'sold',
   'sold_out',
   'sold-out',
+  'unavailable',
   'completed',
   'collected',
   'expired',
@@ -291,7 +299,15 @@ const CLOSED_LISTING_STATUSES = new Set([
   'cancelled',
   'canceled',
 ]);
-const PUBLIC_LISTING_STATUSES = new Set(['', 'active', 'available', 'live', 'published', 'reserved']);
+const HIDDEN_LISTING_STATUSES = new Set([
+  'expired',
+  'deleted',
+  'removed',
+  'hidden',
+  'inactive',
+  'cancelled',
+  'canceled',
+]);
 
 function listingStatusValue(row = {}) {
   const metadata = parseJsonValue(row.metadata, {});
@@ -312,16 +328,84 @@ function listingAvailableQuantity(row = {}) {
 
 function listingExpiryMs(row = {}) {
   const metadata = parseJsonValue(row.metadata, {});
-  const expiry = row.expiry_date
-    || row.expiry
-    || row.expires_at
+  const expiryDate = String(
+    row.expiry_date
     || metadata.expiryDate
+    || metadata.validTill
+    || ''
+  ).trim();
+  const expiryTime = String(
+    row.expiry_time
+    || metadata.expiryTime
+    || ''
+  ).trim();
+
+  // Date-only values should remain requestable for the full day.
+  if (expiryDate) {
+    const normalizedDate = expiryDate.slice(0, 10);
+    const normalizedTime = /^\d{2}:\d{2}/.test(expiryTime) ? expiryTime.slice(0, 5) : '23:59';
+    const ms = Date.parse(`${normalizedDate}T${normalizedTime}:59`);
+    if (Number.isFinite(ms)) return ms;
+  }
+
+  const expiry = row.expiry
+    || row.expires_at
     || metadata.expiry
-    || metadata.expiresAt
-    || metadata.validTill;
+    || metadata.expiresAt;
   if (!expiry) return Infinity;
   const ms = Date.parse(expiry);
   return Number.isFinite(ms) ? ms : Infinity;
+}
+
+const ACTIVE_REQUEST_STATUSES = new Set(['pending', 'confirmed', 'accepted', 'awaiting_collection', 'handed_over', 'karma_pending']);
+
+function logicalRequestStatus(row = {}) {
+  const details = parseJsonValue(row.details, {});
+  return String(details.orderStatus || details.status || row.status || 'pending').trim().toLowerCase();
+}
+
+function requestStatusPayload(status = '', extraDetails = {}) {
+  const logicalStatus = String(status || '').trim().toLowerCase();
+  if (logicalStatus === 'accepted' || logicalStatus === 'awaiting_collection') {
+    return {
+      rowStatus: 'confirmed',
+      details: {
+        ...extraDetails,
+        orderStatus: 'awaiting_collection',
+        status: 'awaiting_collection',
+      },
+    };
+  }
+  if (logicalStatus === 'karma_pending') {
+    return {
+      rowStatus: 'handed_over',
+      details: {
+        ...extraDetails,
+        orderStatus: 'karma_pending',
+        status: 'karma_pending',
+      },
+    };
+  }
+  if (logicalStatus === 'handed_over') {
+    return {
+      rowStatus: 'handed_over',
+      details: {
+        ...extraDetails,
+        orderStatus: 'handed_over',
+        status: 'handed_over',
+      },
+    };
+  }
+  return {
+    rowStatus: ['pending', 'confirmed', 'declined', 'handed_over', 'collected', 'completed', 'cancelled'].includes(logicalStatus)
+      ? logicalStatus
+      : 'pending',
+    details: {
+      ...extraDetails,
+      orderStatus: logicalStatus || 'pending',
+      status: logicalStatus || 'pending',
+    },
+  };
 }
 
 function isTestListingRow(row = {}) {
@@ -356,9 +440,7 @@ function isTestListingRow(row = {}) {
 function isPublicListingRow(row = {}) {
   if (isTestListingRow(row)) return false;
   const status = listingStatusValue(row);
-  if (CLOSED_LISTING_STATUSES.has(status)) return false;
-  if (status && !PUBLIC_LISTING_STATUSES.has(status)) return false;
-  if (listingAvailableQuantity(row) <= 0) return false;
+  if (HIDDEN_LISTING_STATUSES.has(status)) return false;
   const expiryMs = listingExpiryMs(row);
   if (Number.isFinite(expiryMs) && expiryMs < Date.now()) return false;
   return true;
@@ -462,18 +544,56 @@ function profileDisplayName(profile = {}) {
 
 function profileAvatar(profile = {}) {
   const metadata = parseJsonValue(profile.metadata, {});
-  return profile.logo_url
-    || metadata.logoUrl
+  return profile.profile_image
+    || metadata.profileImage
     || profile.avatar_url
     || metadata.avatarUrl
-    || profile.profile_image
-    || metadata.profileImage
+    || profile.logo_url
+    || metadata.logoUrl
     || '';
 }
 
 function profileKarma(profile = {}) {
   const metadata = parseJsonValue(profile.metadata, {});
   return Number(profile.karma_points ?? profile.karma ?? profile.store_karma ?? metadata.karma ?? metadata.storeKarma ?? 0) || 0;
+}
+
+function profileIdentity(profile = {}, fallbackName = DEFAULT_SELLER_NAME) {
+  const metadata = parseJsonValue(profile.metadata, {});
+  const name = cleanSellerName(
+    profileDisplayName(profile),
+    metadata.fullName,
+    metadata.displayName,
+    metadata.businessName,
+    metadata.name,
+    fallbackName,
+  );
+  const initials = String(
+    profile.initials
+      || metadata.initials
+      || getInitialsFromName(name)
+      || 'DU'
+  ).trim().toUpperCase().slice(0, 2) || 'DU';
+  return {
+    id: String(profile.id || '').trim(),
+    name,
+    initials,
+    avatarUrl: profileAvatar(profile),
+    karma: profileKarma(profile),
+    profile,
+  };
+}
+
+async function fetchProfilesByAccountIds(accountIds = []) {
+  const normalizedIds = [...new Set(
+    accountIds
+      .map((value) => String(value || '').trim())
+      .filter(Boolean)
+  )];
+  if (!normalizedIds.length || !SUPABASE_URL || !SUPABASE_KEY) return new Map();
+  const filter = normalizedIds.map((id) => encodeURIComponent(id)).join(',');
+  const rows = await supabaseFetch(`/profiles?id=in.(${filter})&select=*`).catch(() => []);
+  return new Map((Array.isArray(rows) ? rows : []).map((row) => [String(row.id || '').trim(), row]));
 }
 
 function enrichListingRow(row = {}, profileMap = new Map()) {
@@ -516,8 +636,8 @@ function enrichListingRow(row = {}, profileMap = new Map()) {
     || metadata.avatarUrl
     || metadata.profileImage
     || '';
-  const karma = Number(row.karma_score || 0)
-    || profileKarma(profile || {})
+  const karma = profileKarma(profile || {})
+    || Number(row.karma_score || 0)
     || Number(metadata.karma || metadata.storeKarma || metadata.sellerKarma || 0)
     || 0;
   const accountType = String(
@@ -733,6 +853,17 @@ async function handleListings(req, res) {
       return sendJson(res, response.status, { error: 'Could not save listing', details: text.slice(0, 200) });
     }
     const [row] = JSON.parse(text || '[]');
+    const nearbyPayload = buildNearbyDispatchPayload(row);
+    if (nearbyPayload && isPublicListingRow(row)) {
+      try {
+        await dispatchNearbyListingNotifications(nearbyPayload);
+      } catch (error) {
+        console.warn('[nearby-listing] dispatch failed after listing save', {
+          listingId: row?.id,
+          error: error?.message || String(error),
+        });
+      }
+    }
     return sendJson(res, 201, listingRowToClient(row));
   }
 
@@ -742,6 +873,14 @@ async function handleListings(req, res) {
 async function handleListingById(req, res, listingId) {
   if (!listingId) return sendJson(res, 400, { error: 'Missing listing id' });
 
+  if (req.method === 'GET' || req.method === 'HEAD') {
+    const rows = await supabaseFetch(`/listings?id=eq.${encodeURIComponent(listingId)}&select=*&limit=1`);
+    const listing = rows?.[0];
+    if (!listing) return sendJson(res, 404, { error: 'Listing not found' });
+    const [enriched] = await attachListingProfiles([listing]);
+    return sendJson(res, 200, listingRowToClient(enriched || listing));
+  }
+
   if (req.method === 'PUT') {
     const body = await readRequestJson(req);
     const payload = listingPayloadToSupabase({ ...body, id: listingId });
@@ -750,7 +889,19 @@ async function handleListingById(req, res, listingId) {
       headers: { Prefer: 'return=representation' },
       body: JSON.stringify(payload),
     });
-    return sendJson(res, 200, listingRowToClient(rows?.[0] || { ...payload, id: listingId }));
+    const updatedRow = rows?.[0] || { ...payload, id: listingId };
+    const nearbyPayload = buildNearbyDispatchPayload(updatedRow);
+    if (nearbyPayload && isPublicListingRow(updatedRow)) {
+      try {
+        await dispatchNearbyListingNotifications(nearbyPayload);
+      } catch (error) {
+        console.warn('[nearby-listing] dispatch failed after listing update', {
+          listingId,
+          error: error?.message || String(error),
+        });
+      }
+    }
+    return sendJson(res, 200, listingRowToClient(updatedRow));
   }
 
   if (req.method === 'DELETE') {
@@ -763,6 +914,215 @@ async function handleListingById(req, res, listingId) {
   }
 
   return sendJson(res, 405, { error: 'Method not allowed' });
+}
+
+async function handleListingReserve(req, res, listingId) {
+  if (!listingId) return sendJson(res, 400, { success: false, code: 'MISSING_LISTING_ID', message: 'Missing listing id' });
+  if (req.method !== 'POST') return sendJson(res, 405, { success: false, code: 'METHOD_NOT_ALLOWED', message: 'Method not allowed' });
+
+  const body = await readRequestJson(req);
+  const quantity = Math.max(1, Number(body.quantity || 1));
+  const buyerAccountId = String(body.buyerAccountId || body.actorAccountId || getAuthUserId(req) || '').trim();
+  const requestId = String(body.requestId || body.orderId || '').trim();
+
+  console.info('[reserve] request', {
+    listingId: String(listingId),
+    buyerAccountId: buyerAccountId || 'anonymous',
+    sellerAccountId: String(body.sellerAccountId || '').trim() || 'unknown',
+    quantity,
+  });
+
+  if (!SUPABASE_URL || !SUPABASE_KEY) {
+    return sendJson(res, 503, { success: false, code: 'PERSISTENCE_UNAVAILABLE', message: 'Supabase not configured' });
+  }
+
+  const rows = await supabaseFetch(`/listings?id=eq.${encodeURIComponent(listingId)}&select=*&limit=1`);
+  const listing = rows?.[0];
+  if (!listing) {
+    return sendJson(res, 404, { success: false, code: 'LISTING_NOT_FOUND', message: 'This item is no longer available.' });
+  }
+
+  const listingStatus = listingStatusValue(listing);
+  const listingExpired = Number.isFinite(listingExpiryMs(listing)) && listingExpiryMs(listing) < Date.now();
+  if (CLOSED_LISTING_STATUSES.has(listingStatus) || listingExpired) {
+    return sendJson(res, 409, { success: false, code: 'LISTING_UNAVAILABLE', message: 'This item is no longer available.' });
+  }
+
+  const sellerAccountId = String(body.sellerAccountId || listing.seller_id || listing.business_id || '').trim();
+  if (buyerAccountId && sellerAccountId && buyerAccountId === sellerAccountId) {
+    return sendJson(res, 403, { success: false, code: 'SELF_REQUEST_NOT_ALLOWED', message: 'You cannot request your own listing.' });
+  }
+
+  if (buyerAccountId) {
+    try {
+      const activeStatuses = [...ACTIVE_REQUEST_STATUSES].map((status) => encodeURIComponent(status)).join(',');
+      const activeRows = await supabaseFetch(
+        `/requests?listing_id=eq.${encodeURIComponent(listingId)}&buyer_id=eq.${encodeURIComponent(buyerAccountId)}&status=in.(${activeStatuses})&select=*&order=created_at.desc&limit=1`
+      );
+      const existing = activeRows?.[0];
+      if (existing) {
+        const existingId = String(existing.id || '').trim();
+        if (requestId && existingId && existingId === requestId) {
+          return sendJson(res, 200, {
+            success: true,
+            code: 'REQUEST_ALREADY_CREATED',
+            message: 'Request already created for this item.',
+            listing: listingRowToClient(listing),
+            request: requestRowToOrder(existing),
+          });
+        }
+        return sendJson(res, 409, {
+          success: false,
+          code: 'DUPLICATE_ACTIVE_REQUEST',
+          message: 'You already have an active request for this item.',
+          request: requestRowToOrder(existing),
+        });
+      }
+    } catch (error) {
+      console.warn('[reserve] active request precheck skipped', {
+        listingId: String(listingId),
+        buyerAccountId,
+        error: error?.message || String(error),
+      });
+    }
+  }
+
+  const available = listingAvailableQuantity(listing);
+  if (!Number.isFinite(available) || available <= 0) {
+    return sendJson(res, 409, { success: false, code: 'OUT_OF_STOCK', message: 'This item is no longer available.' });
+  }
+  if (quantity > available) {
+    return sendJson(res, 409, { success: false, code: 'INSUFFICIENT_STOCK', message: 'Requested quantity exceeds available stock.' });
+  }
+
+  const currentReserved = Math.max(0, Number(listing.reserved_quantity || 0) || 0);
+  const now = nowIso();
+  const nextAvailable = Math.max(0, available - quantity);
+  const nextReserved = currentReserved + quantity;
+
+  for (let attempt = 1; attempt <= 4; attempt += 1) {
+    const updatedRows = await supabaseFetch(
+      `/listings?id=eq.${encodeURIComponent(listingId)}&available_quantity=eq.${available}&select=*`,
+      {
+        method: 'PATCH',
+        headers: { Prefer: 'return=representation' },
+        body: JSON.stringify({
+          available_quantity: nextAvailable,
+          reserved_quantity: nextReserved,
+          updated_at: now,
+        }),
+      }
+    );
+
+    if (Array.isArray(updatedRows) && updatedRows.length > 0) {
+      const updatedListing = updatedRows[0];
+      let createdRequest = null;
+
+      if (requestId && buyerAccountId && sellerAccountId) {
+        const identityMap = await fetchProfilesByAccountIds([buyerAccountId, sellerAccountId]).catch(() => new Map());
+        const buyerIdentity = profileIdentity(identityMap.get(String(buyerAccountId).trim()) || {}, String(body.buyerName || '').trim() || 'Buyer');
+        const sellerIdentity = profileIdentity(identityMap.get(String(sellerAccountId).trim()) || {}, String(listing.seller_name || '').trim() || 'Seller');
+        try {
+          const requestPayload = {
+            id: requestId,
+            listing_id: String(listingId),
+            buyer_id: buyerAccountId,
+            seller_id: sellerAccountId,
+            quantity,
+            status: 'pending',
+            details: {
+              requestId,
+              listingId: String(listingId),
+              buyerAccountId,
+              sellerAccountId,
+              buyerName: buyerIdentity.name,
+              buyerAvatar: buyerIdentity.avatarUrl || '',
+              buyerProfileImage: buyerIdentity.avatarUrl || '',
+              buyerPhone: String(body.buyerPhone || '').trim(),
+              buyerLocation: String(body.buyerLocation || '').trim(),
+              sellerName: sellerIdentity.name,
+              sellerAvatar: sellerIdentity.avatarUrl || '',
+              sellerProfileImage: sellerIdentity.avatarUrl || '',
+              productName: String(listing.title || '').trim(),
+              source: 'reserve-endpoint',
+            },
+          };
+          const requestRows = await supabaseFetch('/requests?on_conflict=id&select=*', {
+            method: 'POST',
+            headers: { Prefer: 'resolution=merge-duplicates,return=representation' },
+            body: JSON.stringify(requestPayload),
+          });
+          createdRequest = requestRows?.[0] || null;
+        } catch (requestError) {
+          // Compensate stock reservation if canonical request creation fails.
+          await supabaseFetch(
+            `/listings?id=eq.${encodeURIComponent(listingId)}&available_quantity=eq.${Math.max(0, Number(updatedListing.available_quantity || 0))}&reserved_quantity=eq.${Math.max(0, Number(updatedListing.reserved_quantity || 0))}`,
+            {
+              method: 'PATCH',
+              headers: { Prefer: 'return=minimal' },
+              body: JSON.stringify({
+                available_quantity: available,
+                reserved_quantity: currentReserved,
+                updated_at: nowIso(),
+              }),
+            }
+          );
+          return sendJson(res, 409, {
+            success: false,
+            code: 'REQUEST_PERSIST_CONFLICT',
+            message: 'Could not create request record. Please try again.',
+            details: requestError?.message || 'request-persist-failed',
+          });
+        }
+      }
+
+      console.info('[reserve] success', {
+        listingId: String(listingId),
+        buyerAccountId: buyerAccountId || 'anonymous',
+        sellerAccountId: sellerAccountId || 'unknown',
+        quantity,
+        attempt,
+      });
+      if (createdRequest && sellerAccountId) {
+        const requestDetails = parseJsonValue(createdRequest.details, {});
+        await persistNotificationEvent({
+          eventType: 'new_request',
+          recipientAccountId: sellerAccountId,
+          actorAccountId: buyerAccountId,
+          listingId: String(listingId),
+          requestId,
+          title: '📦 New Collection Request',
+          body: `${requestDetails.buyerName || 'A buyer'} wants to collect ${requestDetails.productName || listing.title || 'your item'} × ${quantity}.`,
+          dedupeKey: `new_request:${requestId}`,
+          payload: {
+            buyerId: buyerAccountId,
+            buyerName: requestDetails.buyerName || '',
+            buyerAvatar: requestDetails.buyerAvatar || requestDetails.buyerProfileImage || '',
+            buyerPhone: requestDetails.buyerPhone || '',
+            buyerLocation: requestDetails.buyerLocation || '',
+            sellerId: sellerAccountId,
+            sellerName: requestDetails.sellerName || listing.seller_name || '',
+            sellerAvatar: requestDetails.sellerAvatar || requestDetails.sellerProfileImage || '',
+            productName: requestDetails.productName || listing.title || '',
+            quantity,
+          },
+        });
+      }
+      return sendJson(res, 200, {
+        success: true,
+        listing: listingRowToClient(updatedListing),
+        request: createdRequest ? requestRowToOrder(createdRequest) : null,
+      });
+    }
+  }
+
+  console.warn('[reserve] race conflict', {
+    listingId: String(listingId),
+    buyerAccountId: buyerAccountId || 'anonymous',
+    sellerAccountId: sellerAccountId || 'unknown',
+    quantity,
+  });
+  return sendJson(res, 409, { success: false, code: 'RACE_CONFLICT', message: 'This item was just claimed by someone else.' });
 }
 
 async function handleUpload(req, res) {
@@ -830,25 +1190,31 @@ async function handleProfile(req, res) {
   if (req.method === 'GET') {
     try {
       const rows = await supabaseFetch(`/profiles?id=eq.${encodeURIComponent(userId)}&select=*&limit=1`);
-      return sendJson(res, 200, rows?.[0] || { id: userId, name: 'Unknown' });
+      return sendJson(res, 200, rows?.[0] || { id: userId, name: DEFAULT_SELLER_NAME });
     } catch (error) {
-      if (error.status === 404) return sendJson(res, 200, { id: userId, name: 'Unknown' });
-      return sendJson(res, 200, { id: userId, name: 'Unknown' });
+      if (error.status === 404) return sendJson(res, 200, { id: userId, name: DEFAULT_SELLER_NAME });
+      return sendJson(res, 200, { id: userId, name: DEFAULT_SELLER_NAME });
     }
   }
 
   if (req.method === 'PUT' || req.method === 'POST') {
     const body = await readRequestJson(req);
+    const nextProfileImage = body.profileImage || body.profile_image || body.avatarUrl || body.avatar_url || '';
     const payload = {
       id: userId,
-      name: body.name || 'Unknown',
+      name: cleanSellerName(body.name, body.fullName, body.displayName, DEFAULT_SELLER_NAME),
       mobile: body.mobile || body.phone || '',
-      profile_image: body.profileImage || body.profile_image || '',
+      profile_image: nextProfileImage,
+      avatar_url: nextProfileImage,
       bio: body.bio || '',
       location_link: body.locationLink || body.location_link || '',
       website_link: body.websiteLink || body.website_link || '',
       instagram_link: body.instagramLink || body.instagram_link || '',
-      metadata: body,
+      metadata: {
+        ...(body && typeof body === 'object' ? body : {}),
+        profileImage: nextProfileImage,
+        avatarUrl: nextProfileImage,
+      },
       updated_at: new Date().toISOString(),
     };
     try {
@@ -923,6 +1289,18 @@ async function handleFavourites(req, res, productId = '') {
 
 function requestRowToOrder(row = {}) {
   const details = parseJsonValue(row.details, {});
+  const buyerAvatar = details.buyerAvatar
+    || details.buyerProfileImage
+    || details.buyerAvatarUrl
+    || details.buyer_profile_image
+    || details.buyer_avatar
+    || '';
+  const sellerAvatar = details.sellerAvatar
+    || details.sellerProfileImage
+    || details.sellerAvatarUrl
+    || details.seller_profile_image
+    || details.seller_avatar
+    || '';
   return {
     id: row.id,
     orderId: row.id,
@@ -933,8 +1311,13 @@ function requestRowToOrder(row = {}) {
     sellerId: row.seller_id,
     businessId: details.businessId || details.business_id || '',
     status: details.orderStatus || details.status || row.status,
-    requestStatus: row.status,
+    requestStatus: details.orderStatus || details.status || row.status,
+    rawRequestStatus: row.status,
     quantity: Number(row.quantity || details.quantity || 1),
+    buyerAvatar,
+    buyerProfileImage: buyerAvatar,
+    sellerAvatar,
+    sellerProfileImage: sellerAvatar,
     collectionCode: details.collectionCode || details.collection_code || row.id,
     qrCodeValue: details.qrCodeValue || details.collectionCode || row.id,
     createdAt: row.created_at,
@@ -949,6 +1332,17 @@ function nowIso() {
 
 function makeId(prefix = 'evt') {
   return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+function makeStableId(prefix = 'evt', key = '') {
+  const digest = createHash('sha1').update(String(key || '')).digest('hex').slice(0, 32);
+  return `${prefix}-${digest}`;
+}
+
+function isSupabaseDuplicateKeyError(error) {
+  const message = String(error?.message || error?.data?.message || error?.data?.error || '').toLowerCase();
+  const code = String(error?.data?.code || '').toLowerCase();
+  return code === '23505' || message.includes('duplicate key') || message.includes('already exists');
 }
 
 function toFiniteNumber(value) {
@@ -973,6 +1367,30 @@ function getLocationFromTokenMetadata(metadata = {}) {
   return { lat, lng };
 }
 
+function getLocationFromProfileRow(profile = {}) {
+  const locationData = parseJsonValue(profile.location_data || profile.locationData || profile.profile_location || profile.location, {});
+  const metadata = parseJsonValue(profile.metadata, {});
+  const metadataLocation = parseJsonValue(metadata.location || metadata.locationData || metadata.geo || metadata.profileLocation, {});
+  const lat = toFiniteNumber(
+    locationData.latitude
+    ?? locationData.lat
+    ?? metadataLocation.latitude
+    ?? metadataLocation.lat
+    ?? profile.latitude
+    ?? profile.lat
+  );
+  const lng = toFiniteNumber(
+    locationData.longitude
+    ?? locationData.lng
+    ?? metadataLocation.longitude
+    ?? metadataLocation.lng
+    ?? profile.longitude
+    ?? profile.lng
+  );
+  if (lat === null || lng === null) return null;
+  return { lat, lng };
+}
+
 function notificationOpenPath({ eventType = '', listingId = '', requestId = '', orderId = '' }) {
   const type = String(eventType || '').toLowerCase();
   if (type === 'new_request' || type === 'request_accepted' || type === 'request_declined') {
@@ -983,6 +1401,687 @@ function notificationOpenPath({ eventType = '', listingId = '', requestId = '', 
   }
   if (listingId) return `/listing/${encodeURIComponent(listingId)}`;
   return '/';
+}
+
+function formatDistanceText(distanceKm = 0) {
+  const value = Number(distanceKm || 0);
+  if (!Number.isFinite(value) || value <= 0) return 'nearby';
+  if (value < 1) return `${Math.max(1, Math.round(value * 1000))} m`;
+  return `${value.toFixed(1)} km`;
+}
+
+function formatExpiryTextFromListing(listing = {}) {
+  const expiryDate = safeDate(listing.expiry_date || listing.expiryDate || listing.validTill || '');
+  const expiryTime = String(listing.expiry_time || listing.expiryTime || '').trim();
+  if (!expiryDate) return 'soon';
+  const today = new Date().toISOString().slice(0, 10);
+  if (expiryDate === today) {
+    return expiryTime ? `today at ${expiryTime}` : 'today';
+  }
+  return expiryTime ? `at ${expiryTime}` : `on ${expiryDate}`;
+}
+
+function buildNearbyDispatchPayload(listingRow = {}) {
+  const listing = listingRowToClient(listingRow);
+  const coordinates = listing.coordinates || listing.locationData || {};
+  const latitude = toFiniteNumber(listing.latitude ?? coordinates.latitude ?? coordinates.lat);
+  const longitude = toFiniteNumber(listing.longitude ?? coordinates.longitude ?? coordinates.lng);
+  if (!listing.id || latitude === null || longitude === null) return null;
+  return {
+    ownerId: String(listing.sellerId || listing.businessId || listingRow.seller_id || listingRow.business_id || '').trim(),
+    listingId: String(listing.id),
+    title: listing.title || '',
+    category: listing.category || '',
+    area: listing.area || listing.locationData?.area || '',
+    city: listing.city || listing.locationData?.city || '',
+    latitude,
+    longitude,
+  };
+}
+
+async function dispatchNearbyListingNotifications(payload = {}) {
+  const ownerId = String(payload.ownerId || '').trim();
+  const listingId = String(payload.listingId || '').trim();
+  const lat = toFiniteNumber(payload.latitude);
+  const lng = toFiniteNumber(payload.longitude);
+  if (!ownerId || !listingId || lat === null || lng === null || !SUPABASE_URL || !SUPABASE_KEY) {
+    return { success: true, persisted: false, notifiedCount: 0 };
+  }
+
+  const radiusKm = 2;
+  const listingRows = await supabaseFetch(`/listings?id=eq.${encodeURIComponent(listingId)}&select=*&limit=1`);
+  const listing = listingRows?.[0];
+  if (!listing || !isPublicListingRow(listing)) {
+    return { success: true, persisted: true, notifiedCount: 0, skipped: 'listing-unavailable' };
+  }
+
+  let tokenRows = [];
+  try {
+    tokenRows = await supabaseFetch('/notification_devices?enabled=eq.true&select=account_id,token,metadata');
+  } catch {
+    try {
+      tokenRows = await supabaseFetch('/push_tokens?enabled=eq.true&select=account_id,token,metadata');
+    } catch {
+      tokenRows = [];
+    }
+  }
+
+  let preferenceRows = [];
+  try {
+    preferenceRows = await supabaseFetch('/notification_preferences?select=account_id,nearby_enabled,muted_account_ids,blocked_account_ids,max_nearby_per_day');
+  } catch {
+    preferenceRows = [];
+  }
+  const preferenceByAccount = new Map((preferenceRows || []).map((row) => [String(row.account_id || ''), row]));
+
+  const tokenCountsByAccount = new Map();
+  (tokenRows || []).forEach((row) => {
+    const accountId = String(row.account_id || '').trim();
+    if (!accountId) return;
+    tokenCountsByAccount.set(accountId, (tokenCountsByAccount.get(accountId) || 0) + 1);
+  });
+
+  const diagnostics = {
+    candidateUsers: 0,
+    usersWithinRadius: 0,
+    eligibleDevices: 0,
+    preferenceSkips: 0,
+    invalidLocationSkips: 0,
+    dedupeSkips: 0,
+    sendsSucceeded: 0,
+    sendsFailed: 0,
+  };
+
+  const isBlockedByPreference = (accountId) => {
+    const pref = preferenceByAccount.get(String(accountId)) || {};
+    if (pref.nearby_enabled === false) return true;
+    const muted = Array.isArray(pref.muted_account_ids) ? pref.muted_account_ids.map((entry) => String(entry)) : [];
+    const blocked = Array.isArray(pref.blocked_account_ids) ? pref.blocked_account_ids.map((entry) => String(entry)) : [];
+    return muted.includes(ownerId) || blocked.includes(ownerId);
+  };
+
+  const recipientByAccount = new Map();
+  const trackRecipient = (accountId, coordinates) => {
+    if (!accountId || accountId === ownerId) return;
+    if (isBlockedByPreference(accountId)) {
+      diagnostics.preferenceSkips += 1;
+      return;
+    }
+    if (!coordinates) {
+      diagnostics.invalidLocationSkips += 1;
+      return;
+    }
+    const distanceKm = haversineKm({ lat, lng }, coordinates);
+    if (!Number.isFinite(distanceKm) || distanceKm > radiusKm) return;
+    const existing = recipientByAccount.get(accountId);
+    if (!existing || distanceKm < existing.distanceKm) {
+      recipientByAccount.set(accountId, { accountId, distanceKm });
+    }
+  };
+
+  (tokenRows || []).forEach((row) => {
+    const accountId = String(row.account_id || '').trim();
+    trackRecipient(accountId, getLocationFromTokenMetadata(parseJsonValue(row.metadata, {})));
+  });
+
+  const profileRows = await supabaseFetch('/profiles?select=*');
+  (profileRows || []).forEach((profile) => {
+    const accountId = String(profile.id || '').trim();
+    trackRecipient(accountId, getLocationFromProfileRow(profile));
+  });
+
+  const recipients = [...recipientByAccount.values()].sort((a, b) => a.distanceKm - b.distanceKm);
+  diagnostics.candidateUsers = recipients.length;
+  diagnostics.usersWithinRadius = recipients.length;
+  diagnostics.eligibleDevices = recipients.reduce((sum, recipient) => sum + Number(tokenCountsByAccount.get(recipient.accountId) || 0), 0);
+
+  const baseListing = listingRowToClient(listing);
+  const productName = String(baseListing.title || payload.title || 'item');
+  const sellerLabel = String(baseListing.isBusinessProduct ? (baseListing.storeName || baseListing.sellerName || 'A store') : (baseListing.sellerName || 'Someone'));
+  const expiryText = formatExpiryTextFromListing(listing);
+  const action = baseListing.isBusinessProduct ? 'reserve' : 'request';
+  const today = new Date().toISOString().slice(0, 10);
+  let notifiedCount = 0;
+
+  for (const recipient of recipients) {
+    const distanceText = formatDistanceText(recipient.distanceKm);
+    const bodyText = baseListing.isBusinessProduct
+      ? `${sellerLabel} listed "${productName}" ${distanceText} away. Expires ${expiryText}. Want to reserve it now?`
+      : `${sellerLabel} listed "${productName}" ${distanceText} away. Expires ${expiryText}. Want to claim it now?`;
+    const result = await persistNotificationEvent({
+      eventType: 'nearby_listing',
+      recipientAccountId: recipient.accountId,
+      actorAccountId: ownerId,
+      listingId,
+      title: 'New free item near you',
+      body: bodyText,
+      dedupeKey: `nearby_listing:${listingId}:${recipient.accountId}:${today}`,
+      payload: {
+        category: String(payload.category || ''),
+        distanceKm: Number(recipient.distanceKm.toFixed(2)),
+        area: String(payload.area || ''),
+        city: String(payload.city || ''),
+        listingId,
+        sellerId: String(baseListing.sellerId || baseListing.businessId || ownerId),
+        sellerName: sellerLabel,
+        productName,
+        expiryText,
+        action,
+        openPath: `/listing/${encodeURIComponent(listingId)}?action=${action}`,
+      },
+    });
+    if (result.accepted && !result.deduped) {
+      notifiedCount += 1;
+      diagnostics.sendsSucceeded += Number(result.push?.successCount || (result.push?.sent ? 1 : 0));
+      diagnostics.sendsFailed += Number(result.push?.failureCount || 0);
+    } else if (result.deduped) {
+      diagnostics.dedupeSkips += 1;
+    } else {
+      diagnostics.sendsFailed += 1;
+    }
+  }
+
+  console.info('[nearby-listing] dispatch summary', {
+    listingId,
+    ownerId,
+    radiusKm,
+    ...diagnostics,
+    notifiedCount,
+  });
+
+  return {
+    success: true,
+    persisted: true,
+    candidates: recipients.length,
+    notifiedCount,
+    diagnostics,
+  };
+}
+
+async function getPendingKarmaActionByRequestId(requestId) {
+  const rows = await supabaseFetch(`/pending_karma_actions?request_id=eq.${encodeURIComponent(requestId)}&select=*&limit=1`);
+  return rows?.[0] || null;
+}
+
+function mergeRequestDetails(row = {}, nextDetails = {}) {
+  const current = parseJsonValue(row.details, {});
+  return {
+    ...current,
+    ...nextDetails,
+  };
+}
+
+async function updateRequestLifecycleRow(row = {}, logicalStatus, detailPatch = {}) {
+  const mergedDetails = mergeRequestDetails(row, detailPatch);
+  const statusPayload = requestStatusPayload(logicalStatus, mergedDetails);
+  const rows = await supabaseFetch(`/requests?id=eq.${encodeURIComponent(row.id)}&select=*`, {
+    method: 'PATCH',
+    headers: { Prefer: 'return=representation' },
+    body: JSON.stringify({
+      status: statusPayload.rowStatus,
+      details: statusPayload.details,
+      updated_at: nowIso(),
+    }),
+  });
+  return rows?.[0] || null;
+}
+
+async function handlePendingKarma(req, res, accountId) {
+  if (req.method !== 'GET') return sendJson(res, 405, { error: 'Method not allowed' });
+  if (!accountId) return sendJson(res, 400, { error: 'Missing account id' });
+  const rows = await supabaseFetch(`/pending_karma_actions?buyer_account_id=eq.${encodeURIComponent(accountId)}&status=eq.pending&select=*&order=created_at.desc`);
+  return sendJson(res, 200, rows || []);
+}
+
+async function handleRequestHandover(req, res, requestId) {
+  if (req.method !== 'POST') return sendJson(res, 405, { success: false, code: 'METHOD_NOT_ALLOWED', message: 'Method not allowed' });
+  const body = await readRequestJson(req);
+  const authAccountId = String(getAuthUserId(req) || '').trim();
+  const actorAccountId = authAccountId && authAccountId !== 'guest'
+    ? authAccountId
+    : String(body.actorAccountId || '').trim();
+  if (!requestId || !actorAccountId) {
+    return sendJson(res, 400, { success: false, code: 'MISSING_FIELDS', message: 'requestId and actorAccountId are required' });
+  }
+
+  const requestRows = await supabaseFetch(`/requests?id=eq.${encodeURIComponent(requestId)}&select=*&limit=1`);
+  const requestRow = requestRows?.[0];
+  if (!requestRow) return sendJson(res, 404, { success: false, code: 'REQUEST_NOT_FOUND', message: 'Request not found.' });
+
+  const listingRows = await supabaseFetch(`/listings?id=eq.${encodeURIComponent(requestRow.listing_id)}&select=*&limit=1`);
+  const listingRow = listingRows?.[0];
+  const listingOwnerId = String(listingRow?.seller_id || listingRow?.business_id || requestRow.seller_id || '').trim();
+  if (!listingOwnerId || listingOwnerId !== actorAccountId) {
+    return sendJson(res, 403, { success: false, code: 'HANDOVER_FORBIDDEN', message: 'Only the seller or store can mark handover.' });
+  }
+
+  const currentLogicalStatus = logicalRequestStatus(requestRow);
+  if (currentLogicalStatus === 'completed') {
+    const pendingAction = await getPendingKarmaActionByRequestId(requestId).catch(() => null);
+    return sendJson(res, 200, {
+      success: true,
+      code: 'HANDOVER_ALREADY_COMPLETED',
+      request: requestRowToOrder(requestRow),
+      pendingAction,
+    });
+  }
+  if (currentLogicalStatus === 'karma_pending' || currentLogicalStatus === 'handed_over') {
+    const pendingAction = await getPendingKarmaActionByRequestId(requestId).catch(() => null);
+    return sendJson(res, 200, {
+      success: true,
+      code: 'HANDOVER_ALREADY_RECORDED',
+      request: requestRowToOrder(requestRow),
+      pendingAction,
+    });
+  }
+  if (!['accepted', 'awaiting_collection', 'confirmed', 'pending'].includes(currentLogicalStatus)) {
+    return sendJson(res, 409, { success: false, code: 'INVALID_REQUEST_STATUS', message: 'This request is not ready for handover.' });
+  }
+
+  const updatedRequestRow = await updateRequestLifecycleRow(requestRow, 'karma_pending', {
+    handedOverAt: nowIso(),
+    sellerGave: true,
+  });
+
+  const identityMap = await fetchProfilesByAccountIds([requestRow.seller_id, requestRow.buyer_id]).catch(() => new Map());
+  const sellerIdentity = profileIdentity(identityMap.get(String(requestRow.seller_id || '').trim()) || {}, listingRowToClient(listingRow || {}).sellerName || 'Seller');
+  const buyerIdentity = profileIdentity(identityMap.get(String(requestRow.buyer_id || '').trim()) || {}, 'Buyer');
+
+  const pendingActionId = `karma:${requestId}`;
+  const actionPayload = {
+    id: pendingActionId,
+    request_id: requestId,
+    listing_id: requestRow.listing_id,
+    buyer_account_id: requestRow.buyer_id,
+    seller_account_id: requestRow.seller_id,
+    status: 'pending',
+    payload: {
+      productName: parseJsonValue(updatedRequestRow?.details, {}).productName || listingRow?.title || 'your item',
+      sellerName: sellerIdentity.name,
+      sellerAvatar: sellerIdentity.avatarUrl || '',
+      buyerName: buyerIdentity.name,
+      buyerAvatar: buyerIdentity.avatarUrl || '',
+      pickupAddress: parseJsonValue(updatedRequestRow?.details, {}).pickupAddress || listingRowToClient(listingRow || {}).location || '',
+      collectionDate: parseJsonValue(updatedRequestRow?.details, {}).collectionDate || '',
+      collectionTime: parseJsonValue(updatedRequestRow?.details, {}).collectionTime || '',
+      quantity: Number(requestRow.quantity || 1),
+    },
+    created_at: nowIso(),
+  };
+
+  const pendingRows = await supabaseFetch('/pending_karma_actions?on_conflict=id&select=*', {
+    method: 'POST',
+    headers: { Prefer: 'resolution=merge-duplicates,return=representation' },
+    body: JSON.stringify(actionPayload),
+  });
+  const pendingAction = pendingRows?.[0] || actionPayload;
+
+  const buyerNotification = await persistNotificationEvent({
+    eventType: 'karma_required',
+    recipientAccountId: requestRow.buyer_id,
+    actorAccountId,
+    requestId,
+    listingId: requestRow.listing_id,
+    title: 'Good Karma required',
+    body: `Collection complete for ${actionPayload.payload.productName || 'your item'}. Please send Good Karma to the seller.`,
+    dedupeKey: `karma_required:${requestId}`,
+    payload: {
+      buyerId: requestRow.buyer_id,
+      buyerName: buyerIdentity.name,
+      buyerAvatar: actionPayload.payload.buyerAvatar,
+      sellerId: requestRow.seller_id,
+      sellerName: actionPayload.payload.sellerName,
+      sellerAvatar: actionPayload.payload.sellerAvatar,
+      productName: actionPayload.payload.productName,
+      pickupAddress: actionPayload.payload.pickupAddress,
+      collectionDate: actionPayload.payload.collectionDate,
+      collectionTime: actionPayload.payload.collectionTime,
+      quantity: actionPayload.payload.quantity,
+    },
+  });
+
+  return sendJson(res, 200, {
+    success: true,
+    request: requestRowToOrder(updatedRequestRow || requestRow),
+    pendingAction,
+    notification: buyerNotification,
+  });
+}
+
+async function computeCanonicalKarmaForSeller(sellerId) {
+  const rows = await supabaseFetch(`/karma_events?receiver_id=eq.${encodeURIComponent(sellerId)}&select=points`).catch(() => []);
+  return (Array.isArray(rows) ? rows : []).reduce((sum, row) => sum + (Number(row.points || 0) || 0), 0);
+}
+
+async function syncCanonicalKarmaReadModels(sellerId, canonicalKarma, options = {}) {
+  const normalizedKarma = Math.max(0, Number(canonicalKarma || 0));
+  const now = nowIso();
+  const listingId = String(options.listingId || '').trim();
+
+  // Canonical source for public karma visibility.
+  try {
+    await supabaseFetch(`/profiles?id=eq.${encodeURIComponent(sellerId)}&select=id`, {
+      method: 'PATCH',
+      headers: { Prefer: 'return=minimal' },
+      body: JSON.stringify({
+        karma: normalizedKarma,
+        updated_at: now,
+      }),
+    });
+  } catch {
+    // Keep compatibility for tenants where profiles can be lazily created.
+    await supabaseFetch('/profiles?on_conflict=id&select=id', {
+      method: 'POST',
+      headers: { Prefer: 'resolution=merge-duplicates,return=minimal' },
+      body: JSON.stringify({
+        id: sellerId,
+        name: DEFAULT_SELLER_NAME,
+        karma: normalizedKarma,
+        updated_at: now,
+      }),
+    }).catch(() => null);
+  }
+
+  const sellerListings = await supabaseFetch(
+    `/listings?or=(seller_id.eq.${encodeURIComponent(sellerId)},business_id.eq.${encodeURIComponent(sellerId)})&select=id,metadata`
+  ).catch(() => []);
+  const requestListing = listingId
+    ? await supabaseFetch(`/listings?id=eq.${encodeURIComponent(listingId)}&select=id,metadata`).catch(() => [])
+    : [];
+  const listingMap = new Map();
+  [...(sellerListings || []), ...(requestListing || [])].forEach((row) => {
+    if (!row?.id) return;
+    listingMap.set(String(row.id), row);
+  });
+
+  for (const row of listingMap.values()) {
+    const metadata = parseJsonValue(row.metadata, {});
+    const sellerProfile = parseJsonValue(metadata.sellerProfile, {});
+    const nextMetadata = {
+      ...metadata,
+      karma: normalizedKarma,
+      storeKarma: normalizedKarma,
+      sellerKarma: normalizedKarma,
+      sellerProfile: {
+        ...sellerProfile,
+        karma: normalizedKarma,
+      },
+    };
+    await supabaseFetch(`/listings?id=eq.${encodeURIComponent(row.id)}&select=id`, {
+      method: 'PATCH',
+      headers: { Prefer: 'return=minimal' },
+      body: JSON.stringify({
+        karma_score: normalizedKarma,
+        metadata: nextMetadata,
+        updated_at: now,
+      }),
+    }).catch(() => null);
+  }
+
+  const listingIds = [...listingMap.keys()];
+  if (!listingIds.length) {
+    return { karma: normalizedKarma, listings: [] };
+  }
+
+  const listingFilter = listingIds.map((id) => encodeURIComponent(id)).join(',');
+  const refreshedRows = await supabaseFetch(`/listings?id=in.(${listingFilter})&select=*`).catch(() => []);
+  const enrichedRows = await attachListingProfiles(Array.isArray(refreshedRows) ? refreshedRows : []).catch(() => refreshedRows || []);
+
+  return {
+    karma: normalizedKarma,
+    listings: (Array.isArray(enrichedRows) ? enrichedRows : []).map((row) => listingRowToClient(row)),
+  };
+}
+
+async function handleCommunityKarma(req, res) {
+  if (req.method !== 'POST') return sendJson(res, 405, { error: 'Method not allowed' });
+  const body = await readRequestJson(req);
+  const authAccountId = String(getAuthUserId(req) || '').trim();
+  const buyerAccountId = authAccountId && authAccountId !== 'guest'
+    ? authAccountId
+    : String(body.buyerId || body.actorAccountId || '').trim();
+  const requestId = String(body.requestId || '').trim();
+  if (!buyerAccountId || !requestId) {
+    return sendJson(res, 400, { success: false, code: 'MISSING_FIELDS', message: 'buyerId and requestId are required.' });
+  }
+
+  const pendingRows = await supabaseFetch(`/pending_karma_actions?request_id=eq.${encodeURIComponent(requestId)}&buyer_account_id=eq.${encodeURIComponent(buyerAccountId)}&select=*&limit=1`);
+  const pendingAction = pendingRows?.[0];
+  if (!pendingAction) {
+    return sendJson(res, 404, { success: false, code: 'PENDING_KARMA_NOT_FOUND', message: 'No pending Good Karma action was found.' });
+  }
+
+  const requestRows = await supabaseFetch(`/requests?id=eq.${encodeURIComponent(requestId)}&select=*&limit=1`);
+  const requestRow = requestRows?.[0];
+  if (!requestRow) {
+    return sendJson(res, 404, { success: false, code: 'REQUEST_NOT_FOUND', message: 'Request not found.' });
+  }
+  if (String(requestRow.buyer_id || '') !== buyerAccountId) {
+    return sendJson(res, 403, { success: false, code: 'KARMA_FORBIDDEN', message: 'Only the receiving buyer can submit Good Karma.' });
+  }
+  const logicalStatus = logicalRequestStatus(requestRow);
+  if (String(pendingAction.status || '') === 'completed' || logicalStatus === 'completed') {
+    const sellerId = String(requestRow.seller_id || pendingAction.seller_account_id || '').trim();
+    const canonicalKarma = sellerId ? await computeCanonicalKarmaForSeller(sellerId) : 0;
+    const syncResult = sellerId
+      ? await syncCanonicalKarmaReadModels(sellerId, canonicalKarma, { listingId: requestRow.listing_id }).catch(() => ({ karma: canonicalKarma, listings: [] }))
+      : { karma: canonicalKarma, listings: [] };
+    return sendJson(res, 200, {
+      success: true,
+      code: 'KARMA_ALREADY_SUBMITTED',
+      sellerId,
+      karma: Number(syncResult.karma ?? canonicalKarma) || 0,
+      request: requestRowToOrder(requestRow),
+      listings: Array.isArray(syncResult.listings) ? syncResult.listings : [],
+    });
+  }
+  if (!['karma_pending', 'handed_over'].includes(logicalStatus)) {
+    return sendJson(res, 409, { success: false, code: 'HANDOVER_NOT_CONFIRMED', message: 'Good Karma is only available after handover.' });
+  }
+  if (String(requestRow.seller_id || '') === buyerAccountId) {
+    return sendJson(res, 403, { success: false, code: 'SELF_KARMA_NOT_ALLOWED', message: 'You cannot award Good Karma to yourself.' });
+  }
+
+  const sellerId = String(requestRow.seller_id || pendingAction.seller_account_id || '').trim();
+  if (!sellerId) {
+    return sendJson(res, 400, { success: false, code: 'MISSING_SELLER_ID', message: 'Seller account missing for this request.' });
+  }
+
+  const eventId = makeStableId('karma', `karma_submit:${requestId}`);
+  let insertedEvent = false;
+  try {
+    await supabaseFetch('/karma_events', {
+      method: 'POST',
+      headers: { Prefer: 'return=minimal' },
+      body: JSON.stringify({
+        id: eventId,
+        giver_id: buyerAccountId,
+        receiver_id: sellerId,
+        listing_id: requestRow.listing_id || null,
+        request_id: requestId,
+        points: 1,
+        note: String(body.note || '').trim() || null,
+        created_at: nowIso(),
+      }),
+    });
+    insertedEvent = true;
+  } catch (error) {
+    if (!isSupabaseDuplicateKeyError(error)) {
+      return sendJson(res, 500, { success: false, code: 'KARMA_EVENT_WRITE_FAILED', message: error.message || 'Could not save karma event.' });
+    }
+  }
+
+  const canonicalKarma = await computeCanonicalKarmaForSeller(sellerId);
+  const syncResult = await syncCanonicalKarmaReadModels(sellerId, canonicalKarma, { listingId: requestRow.listing_id });
+  const nextKarma = Number(syncResult?.karma ?? canonicalKarma) || 0;
+  const updatedListings = Array.isArray(syncResult?.listings) ? syncResult.listings : [];
+
+  await supabaseFetch(`/pending_karma_actions?id=eq.${encodeURIComponent(pendingAction.id)}&status=eq.pending&select=*`, {
+    method: 'PATCH',
+    headers: { Prefer: 'return=minimal' },
+    body: JSON.stringify({
+      status: 'completed',
+      completed_at: nowIso(),
+    }),
+  });
+
+  const completedRequest = await updateRequestLifecycleRow(requestRow, 'completed', {
+    karmaSubmittedAt: nowIso(),
+    karmaGiven: true,
+  });
+
+  const profileMap = await fetchProfilesByAccountIds([buyerAccountId, sellerId]).catch(() => new Map());
+  const buyerIdentity = profileIdentity(profileMap.get(String(buyerAccountId).trim()) || {}, body.buyerName || 'Buyer');
+  const sellerIdentity = profileIdentity(profileMap.get(String(sellerId).trim()) || {}, parseJsonValue(requestRow.details, {}).sellerName || 'Seller');
+
+  const sellerNotification = await persistNotificationEvent({
+    eventType: 'karma_received',
+    recipientAccountId: sellerId,
+    actorAccountId: buyerAccountId,
+    requestId,
+    listingId: requestRow.listing_id,
+    title: 'You received Good Karma',
+    body: `${buyerIdentity.name} sent you Good Karma.`,
+    dedupeKey: `karma_received:${requestId}`,
+    payload: {
+      buyerId: buyerAccountId,
+      buyerName: buyerIdentity.name,
+      buyerAvatar: buyerIdentity.avatarUrl || '',
+      sellerId,
+      sellerName: sellerIdentity.name,
+      sellerAvatar: sellerIdentity.avatarUrl || '',
+      productName: parseJsonValue(requestRow.details, {}).productName || '',
+      karma: nextKarma,
+    },
+  });
+
+  return sendJson(res, 200, {
+    success: true,
+    code: insertedEvent ? 'KARMA_SUBMITTED' : 'KARMA_ALREADY_SUBMITTED',
+    sellerId,
+    karma: nextKarma,
+    request: requestRowToOrder(completedRequest || requestRow),
+    listings: updatedListings,
+    notification: sellerNotification,
+  });
+}
+
+function getFirebaseCredential() {
+  const cleanSecret = (value = '') => String(value || '').trim().replace(/^['\"]|['\"]$/g, '');
+
+  const serviceAccountBase64 = cleanSecret(process.env.FIREBASE_SERVICE_ACCOUNT_BASE64);
+  if (serviceAccountBase64) {
+    try {
+      const decoded = Buffer.from(serviceAccountBase64, 'base64').toString('utf8');
+      return cert(JSON.parse(decoded));
+    } catch {
+      console.warn('[fcm] invalid FIREBASE_SERVICE_ACCOUNT_BASE64');
+    }
+  }
+
+  const serviceAccountJson = cleanSecret(process.env.FIREBASE_SERVICE_ACCOUNT_JSON);
+  if (serviceAccountJson) {
+    try {
+      return cert(JSON.parse(serviceAccountJson));
+    } catch {
+      console.warn('[fcm] invalid FIREBASE_SERVICE_ACCOUNT_JSON');
+    }
+  }
+
+  const projectId = cleanSecret(process.env.FIREBASE_PROJECT_ID);
+  const clientEmail = cleanSecret(process.env.FIREBASE_CLIENT_EMAIL);
+  const privateKey = cleanSecret(process.env.FIREBASE_PRIVATE_KEY).replace(/\\n/g, '\n');
+  if (!projectId || !clientEmail || !privateKey) return null;
+  try {
+    return cert({ projectId, clientEmail, privateKey });
+  } catch {
+    return null;
+  }
+}
+
+function ensureFirebaseAdmin() {
+  const existingApps = getFirebaseApps();
+  if (existingApps.length > 0) return true;
+  const credential = getFirebaseCredential();
+  if (!credential) return false;
+  try {
+    initializeFirebaseApp({ credential });
+    return true;
+  } catch (error) {
+    console.warn('[fcm] init failed', error?.message || error);
+    return false;
+  }
+}
+
+async function getPushTokensForAccount(accountId) {
+  try {
+    const rows = await supabaseFetch(`/notification_devices?enabled=eq.true&account_id=eq.${encodeURIComponent(accountId)}&select=token&order=last_seen_at.desc`);
+    return (rows || []).map((row) => String(row.token || '')).filter(Boolean);
+  } catch {
+    try {
+      const rows = await supabaseFetch(`/push_tokens?enabled=eq.true&account_id=eq.${encodeURIComponent(accountId)}&select=token&order=last_seen_at.desc`);
+      return (rows || []).map((row) => String(row.token || '')).filter(Boolean);
+    } catch {
+      return [];
+    }
+  }
+}
+
+async function markInvalidTokens(tokens = []) {
+  if (!tokens.length) return;
+  try {
+    await supabaseFetch(`/notification_devices?token=in.(${tokens.map((token) => encodeURIComponent(token)).join(',')})`, {
+      method: 'PATCH',
+      body: JSON.stringify({ enabled: false, invalidated_at: nowIso(), updated_at: nowIso() }),
+    });
+  } catch {
+    await supabaseFetch(`/push_tokens?token=in.(${tokens.map((token) => encodeURIComponent(token)).join(',')})`, {
+      method: 'PATCH',
+      body: JSON.stringify({ enabled: false, invalidated_at: nowIso(), updated_at: nowIso() }),
+    });
+  }
+}
+
+async function sendPushToAccount({ recipientAccountId, eventType, title, body, data = {} }) {
+  if (!ensureFirebaseAdmin()) return { attempted: false, sent: false, reason: 'fcm-not-configured' };
+  const rawTokens = await getPushTokensForAccount(String(recipientAccountId));
+  const tokens = Array.isArray(rawTokens) ? rawTokens.filter(Boolean) : [];
+  if (!tokens.length) return { attempted: false, sent: false, reason: 'no-tokens' };
+
+  const message = {
+    tokens,
+    notification: {
+      title: String(title || 'Drizn update'),
+      body: String(body || 'You have a new update.'),
+    },
+    data: Object.fromEntries(Object.entries({ ...data, eventType }).map(([key, value]) => [key, String(value ?? '')])),
+    webpush: {
+      fcmOptions: {
+        link: data?.openPath ? `https://drizn.com${data.openPath}` : 'https://drizn.com/',
+      },
+    },
+  };
+
+  try {
+    const response = await getMessaging().sendEachForMulticast(message);
+    const invalidTokens = [];
+    response.responses.forEach((entry, index) => {
+      if (entry.success) return;
+      const code = String(entry.error?.code || '');
+      if (code.includes('registration-token-not-registered') || code.includes('invalid-registration-token')) {
+        invalidTokens.push(tokens[index]);
+      }
+    });
+    if (invalidTokens.length) await markInvalidTokens(invalidTokens);
+    return {
+      attempted: true,
+      sent: response.successCount > 0,
+      successCount: response.successCount,
+      failureCount: response.failureCount,
+    };
+  } catch (error) {
+    return { attempted: true, sent: false, reason: error?.message || 'push-send-failed' };
+  }
 }
 
 async function persistNotificationEvent(payload = {}) {
@@ -1003,14 +2102,38 @@ async function persistNotificationEvent(payload = {}) {
     payload: metadataPayload = {},
   } = payload;
 
-  const eventId = makeId('evt');
-  const openPath = notificationOpenPath({ eventType, listingId, requestId, orderId });
-  const mergedPayload = {
-    ...(metadataPayload || {}),
-    openPath,
-  };
+  const eventId = dedupeKey ? makeStableId('evt', dedupeKey) : makeId('evt');
+  const computedOpenPath = notificationOpenPath({ eventType, listingId, requestId, orderId });
+  const openPath = typeof metadataPayload?.openPath === 'string' && metadataPayload.openPath.startsWith('/')
+    ? metadataPayload.openPath
+    : computedOpenPath;
 
   const isMissingTableError = (error) => /could not find the table/i.test(String(error?.message || ''));
+
+  const profileMap = await fetchProfilesByAccountIds([
+    recipientAccountId,
+    actorAccountId,
+    metadataPayload?.buyerId,
+    metadataPayload?.sellerId,
+  ]).catch(() => new Map());
+  const actorIdentity = profileIdentity(profileMap.get(String(actorAccountId || '').trim()) || {}, 'Drizn user');
+  const recipientIdentity = profileIdentity(profileMap.get(String(recipientAccountId || '').trim()) || {}, 'Drizn user');
+  const buyerIdentity = profileIdentity(profileMap.get(String(metadataPayload?.buyerId || '').trim()) || {}, metadataPayload?.buyerName || 'Buyer');
+  const sellerIdentity = profileIdentity(profileMap.get(String(metadataPayload?.sellerId || '').trim()) || {}, metadataPayload?.sellerName || 'Seller');
+
+  const mergedPayload = {
+    ...(metadataPayload || {}),
+    dedupeKey: dedupeKey || metadataPayload?.dedupeKey || '',
+    openPath,
+    actorName: isPlaceholderName(metadataPayload?.actorName) ? actorIdentity.name : metadataPayload?.actorName,
+    recipientName: isPlaceholderName(metadataPayload?.recipientName) ? recipientIdentity.name : metadataPayload?.recipientName,
+    buyerName: isPlaceholderName(metadataPayload?.buyerName) ? buyerIdentity.name : metadataPayload?.buyerName,
+    sellerName: isPlaceholderName(metadataPayload?.sellerName) ? sellerIdentity.name : metadataPayload?.sellerName,
+    actorAvatar: metadataPayload?.actorAvatar || actorIdentity.avatarUrl || '',
+    recipientAvatar: metadataPayload?.recipientAvatar || recipientIdentity.avatarUrl || '',
+    buyerAvatar: metadataPayload?.buyerAvatar || buyerIdentity.avatarUrl || '',
+    sellerAvatar: metadataPayload?.sellerAvatar || sellerIdentity.avatarUrl || '',
+  };
 
   const insertAppNotification = async () => {
     await supabaseFetch('/app_notifications', {
@@ -1036,7 +2159,6 @@ async function persistNotificationEvent(payload = {}) {
       persisted: true,
       id: eventId,
       openPath,
-      push: { attempted: false, sent: false },
     };
   };
 
@@ -1055,7 +2177,6 @@ async function persistNotificationEvent(payload = {}) {
       persisted: true,
       id: eventId,
       openPath,
-      push: { attempted: false, sent: false },
       compatibilityMode: 'legacy_notifications',
     };
   };
@@ -1070,7 +2191,7 @@ async function persistNotificationEvent(payload = {}) {
             accepted: true,
             deduped: true,
             persisted: true,
-            id: existing[0].id,
+            id: String(existing[0].id || eventId),
             openPath,
             push: { attempted: false, sent: false },
           };
@@ -1093,22 +2214,83 @@ async function persistNotificationEvent(payload = {}) {
           order_id: orderId || null,
           dedupe_key: dedupeKey || null,
           payload: mergedPayload,
-          push_attempted: false,
-          push_sent: false,
           created_at: nowIso(),
         }),
       });
     } catch (error) {
+      if (dedupeKey && isSupabaseDuplicateKeyError(error)) {
+        const existing = await supabaseFetch(`/notification_events?select=id&dedupe_key=eq.${encodeURIComponent(dedupeKey)}&limit=1`).catch(() => []);
+        return {
+          success: true,
+          accepted: true,
+          deduped: true,
+          persisted: true,
+          id: String(existing?.[0]?.id || eventId),
+          openPath,
+          push: { attempted: false, sent: false },
+        };
+      }
       if (!isMissingTableError(error)) throw error;
+    }
+
+    let persistedResult = null;
+    try {
+      persistedResult = await insertAppNotification();
+    } catch (error) {
+      if (dedupeKey && isSupabaseDuplicateKeyError(error)) {
+        return {
+          success: true,
+          accepted: true,
+          deduped: true,
+          persisted: true,
+          id: eventId,
+          openPath,
+          push: { attempted: false, sent: false },
+        };
+      }
+      if (!isMissingTableError(error)) throw error;
+    }
+
+    if (!persistedResult) {
+      persistedResult = await insertLegacyNotification();
+    }
+
+    let push = { attempted: false, sent: false, reason: 'push-skipped' };
+    try {
+      push = await sendPushToAccount({
+        recipientAccountId,
+        eventType,
+        title,
+        body,
+        data: {
+          eventId,
+          eventType,
+          listingId,
+          requestId,
+          orderId,
+          openPath,
+        },
+      });
+    } catch (pushError) {
+      push = { attempted: false, sent: false, reason: pushError?.message || 'push-send-failed' };
     }
 
     try {
-      return await insertAppNotification();
-    } catch (error) {
-      if (!isMissingTableError(error)) throw error;
+      await supabaseFetch(`/notification_events?id=eq.${encodeURIComponent(eventId)}`, {
+        method: 'PATCH',
+        body: JSON.stringify({
+          push_attempted: Boolean(push.attempted),
+          push_sent: Boolean(push.sent),
+        }),
+      });
+    } catch {
+      // Non-blocking update for optional columns in mixed schema states.
     }
 
-    return await insertLegacyNotification();
+    return {
+      ...persistedResult,
+      push,
+    };
   } catch (error) {
     return {
       success: true,
@@ -1316,52 +2498,151 @@ async function handleNotifications(req, res, url) {
     }
 
     try {
-      const radiusKm = Math.max(0.5, Math.min(10, Number(body.radiusKm || 2)));
+      const radiusKm = 2;
+      const listingRows = await supabaseFetch(`/listings?id=eq.${encodeURIComponent(listingId)}&select=*&limit=1`);
+      const listing = listingRows?.[0];
+      if (!listing || !isPublicListingRow(listing)) {
+        return sendJson(res, 200, { success: true, persisted: true, notifiedCount: 0, skipped: 'listing-unavailable' });
+      }
+
       let tokenRows = [];
       try {
         tokenRows = await supabaseFetch('/notification_devices?enabled=eq.true&select=account_id,metadata');
       } catch {
         tokenRows = await supabaseFetch('/push_tokens?enabled=eq.true&select=account_id,metadata');
       }
-      const recipients = (tokenRows || [])
-        .map((row) => {
-          const accountId = String(row.account_id || '');
-          if (!accountId || accountId === ownerId) return null;
-          const coordinates = getLocationFromTokenMetadata(parseJsonValue(row.metadata, {}));
-          if (!coordinates) return null;
-          const distanceKm = haversineKm({ lat, lng }, coordinates);
-          if (!Number.isFinite(distanceKm) || distanceKm > radiusKm) return null;
-          return { accountId, distanceKm };
-        })
-        .filter(Boolean)
-        .sort((a, b) => a.distanceKm - b.distanceKm);
+
+      let preferenceRows = [];
+      try {
+        preferenceRows = await supabaseFetch('/notification_preferences?select=account_id,nearby_enabled,muted_account_ids,blocked_account_ids,max_nearby_per_day');
+      } catch {
+        preferenceRows = [];
+      }
+      const preferenceByAccount = new Map((preferenceRows || []).map((row) => [String(row.account_id || ''), row]));
+
+      const recipientByAccount = new Map();
+      const diagnostics = {
+        candidateTokens: Number(tokenRows?.length || 0),
+        withinRadius: 0,
+        preferenceSkips: 0,
+        invalidLocationSkips: 0,
+        dedupeSkips: 0,
+        sent: 0,
+        failed: 0,
+      };
+
+      const isBlockedByPreference = (accountId) => {
+        const pref = preferenceByAccount.get(String(accountId)) || {};
+        if (pref.nearby_enabled === false) return true;
+        const muted = Array.isArray(pref.muted_account_ids) ? pref.muted_account_ids.map((entry) => String(entry)) : [];
+        const blocked = Array.isArray(pref.blocked_account_ids) ? pref.blocked_account_ids.map((entry) => String(entry)) : [];
+        return muted.includes(ownerId) || blocked.includes(ownerId);
+      };
+
+      (tokenRows || []).forEach((row) => {
+        const accountId = String(row.account_id || '').trim();
+        if (!accountId || accountId === ownerId) return;
+        if (isBlockedByPreference(accountId)) {
+          diagnostics.preferenceSkips += 1;
+          return;
+        }
+        const coordinates = getLocationFromTokenMetadata(parseJsonValue(row.metadata, {}));
+        if (!coordinates) {
+          diagnostics.invalidLocationSkips += 1;
+          return;
+        }
+        const distanceKm = haversineKm({ lat, lng }, coordinates);
+        if (!Number.isFinite(distanceKm) || distanceKm > radiusKm) return;
+        diagnostics.withinRadius += 1;
+        const existing = recipientByAccount.get(accountId);
+        if (!existing || distanceKm < existing.distanceKm) {
+          recipientByAccount.set(accountId, { accountId, distanceKm });
+        }
+      });
+
+      // Include nearby users even if they do not currently have push-token metadata.
+      const profileRows = await supabaseFetch('/profiles?select=*');
+      (profileRows || []).forEach((profile) => {
+        const accountId = String(profile.id || '').trim();
+        if (!accountId || accountId === ownerId) return;
+        if (isBlockedByPreference(accountId)) {
+          diagnostics.preferenceSkips += 1;
+          return;
+        }
+        const coordinates = getLocationFromProfileRow(profile);
+        if (!coordinates) {
+          diagnostics.invalidLocationSkips += 1;
+          return;
+        }
+        const distanceKm = haversineKm({ lat, lng }, coordinates);
+        if (!Number.isFinite(distanceKm) || distanceKm > radiusKm) return;
+        diagnostics.withinRadius += 1;
+        const existing = recipientByAccount.get(accountId);
+        if (!existing || distanceKm < existing.distanceKm) {
+          recipientByAccount.set(accountId, { accountId, distanceKm });
+        }
+      });
+
+      const recipients = [...recipientByAccount.values()].sort((a, b) => a.distanceKm - b.distanceKm);
+      const baseListing = listingRowToClient(listing);
+      const productName = String(baseListing.title || body.title || 'item');
+      const sellerLabel = String(baseListing.isBusinessProduct ? (baseListing.storeName || baseListing.sellerName || 'A store') : (baseListing.sellerName || 'Someone'));
+      const expiryText = formatExpiryTextFromListing(listing);
+      const action = baseListing.isBusinessProduct ? 'reserve' : 'request';
 
       const today = new Date().toISOString().slice(0, 10);
       let notifiedCount = 0;
       for (const recipient of recipients) {
+        const distanceText = formatDistanceText(recipient.distanceKm);
+        const bodyText = baseListing.isBusinessProduct
+          ? `${sellerLabel} listed "${productName}" ${distanceText} away. Expires ${expiryText}. Want to reserve it now?`
+          : `${sellerLabel} listed "${productName}" ${distanceText} away. Expires ${expiryText}. Want to claim it now?`;
         const result = await persistNotificationEvent({
           eventType: 'nearby_listing',
           recipientAccountId: recipient.accountId,
           actorAccountId: ownerId,
           listingId,
-          title: 'New nearby listing',
-          body: `${String(body.title || 'A listing')} is available within 2 km${body.area || body.city ? ` near ${[body.area, body.city].filter(Boolean).join(', ')}` : ''}.`,
+          title: 'New free item near you',
+          body: bodyText,
           dedupeKey: `nearby_listing:${listingId}:${recipient.accountId}:${today}`,
           payload: {
             category: String(body.category || ''),
             distanceKm: Number(recipient.distanceKm.toFixed(2)),
             area: String(body.area || ''),
             city: String(body.city || ''),
+            listingId,
+            sellerId: String(baseListing.sellerId || baseListing.businessId || ownerId),
+            openPath: `/listing/${encodeURIComponent(listingId)}?action=${action}`,
+            action,
+            expiryText,
+            sellerName: sellerLabel,
+            productName,
           },
         });
-        if (result.accepted && !result.deduped) notifiedCount += 1;
+        if (result.accepted && !result.deduped) {
+          notifiedCount += 1;
+          diagnostics.sent += 1;
+        } else if (result.deduped) {
+          diagnostics.dedupeSkips += 1;
+        } else {
+          diagnostics.failed += 1;
+        }
       }
+
+      console.info('[nearby-listing] dispatch summary', {
+        listingId,
+        ownerId,
+        radiusKm,
+        recipientCandidates: recipients.length,
+        ...diagnostics,
+      });
 
       return sendJson(res, 200, {
         success: true,
         persisted: true,
         candidates: recipients.length,
         notifiedCount,
+        diagnostics,
       });
     } catch (error) {
       return sendJson(res, 200, {
@@ -1392,22 +2673,32 @@ async function handleOrders(req, res) {
     const id = body.id || body.orderId || `order-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     const listingId = body.productId || body.product_id || body.listingId || body.listing_id || id;
     const sellerId = body.sellerId || body.seller_id || body.businessId || body.business_id || 'unknown-seller';
+    const buyerId = String(body.buyerId || body.buyer_id || userId);
     const quantity = Number(body.quantity || 1) || 1;
+    const identityMap = await fetchProfilesByAccountIds([buyerId, sellerId]).catch(() => new Map());
+    const buyerIdentity = profileIdentity(identityMap.get(String(buyerId).trim()) || {}, body.buyerName || 'Buyer');
+    const sellerIdentity = profileIdentity(identityMap.get(String(sellerId).trim()) || {}, body.sellerName || 'Seller');
+    const currentDetails = body.details && typeof body.details === 'object' ? body.details : {};
+    const nextStatus = requestStatusPayload(body.status, {
+      ...currentDetails,
+      ...body,
+      buyerName: buyerIdentity.name,
+      buyerAvatar: body.buyerAvatar || body.buyerProfileImage || buyerIdentity.avatarUrl || '',
+      buyerProfileImage: body.buyerProfileImage || body.buyerAvatar || buyerIdentity.avatarUrl || '',
+      sellerName: sellerIdentity.name,
+      sellerAvatar: body.sellerAvatar || body.sellerProfileImage || sellerIdentity.avatarUrl || '',
+      sellerProfileImage: body.sellerProfileImage || body.sellerAvatar || sellerIdentity.avatarUrl || '',
+      collectionCode: body.collectionCode || body.collection_code || body.qrCodeValue || id,
+      quantity,
+    });
     const payload = {
       id,
       listing_id: String(listingId),
-      buyer_id: String(body.buyerId || body.buyer_id || userId),
+      buyer_id: buyerId,
       seller_id: String(sellerId),
       quantity,
-      status: ['pending', 'confirmed', 'declined', 'handed_over', 'collected', 'completed', 'cancelled'].includes(String(body.status || '').toLowerCase())
-        ? String(body.status).toLowerCase()
-        : 'pending',
-      details: {
-        ...body,
-        orderStatus: body.status || 'reserved',
-        collectionCode: body.collectionCode || body.collection_code || body.qrCodeValue || id,
-        quantity,
-      },
+      status: nextStatus.rowStatus,
+      details: nextStatus.details,
     };
     try {
       const rows = await supabaseFetch('/requests?on_conflict=id&select=*', {
@@ -1460,6 +2751,53 @@ export default async function handler(req, res) {
       return await handleListings(req, res);
     } catch (error) {
       return sendJson(res, 500, { error: 'Listings route failed', message: error.message || 'Unknown error' });
+    }
+  }
+
+  const listingReserveMatch = url.match(/^\/(?:api\/)?listings\/([^/]+)\/reserve$/);
+  if (listingReserveMatch) {
+    try {
+      return await handleListingReserve(req, res, decodeURIComponent(listingReserveMatch[1]));
+    } catch (error) {
+      return sendJson(res, error.status || 500, {
+        success: false,
+        code: 'RESERVE_FAILED',
+        message: error.message || 'Could not reserve listing',
+      });
+    }
+  }
+
+  const requestHandoverMatch = url.match(/^\/(?:api\/)?requests\/([^/]+)\/handover$/);
+  if (requestHandoverMatch) {
+    try {
+      return await handleRequestHandover(req, res, decodeURIComponent(requestHandoverMatch[1]));
+    } catch (error) {
+      return sendJson(res, error.status || 500, {
+        success: false,
+        code: 'HANDOVER_FAILED',
+        message: error.message || 'Could not record handover',
+      });
+    }
+  }
+
+  const pendingKarmaMatch = url.match(/^\/(?:api\/)?karma\/pending\/([^/]+)$/);
+  if (pendingKarmaMatch) {
+    try {
+      return await handlePendingKarma(req, res, decodeURIComponent(pendingKarmaMatch[1]));
+    } catch (error) {
+      return sendJson(res, error.status || 500, { error: 'Pending karma route failed', message: error.message || 'Unknown error' });
+    }
+  }
+
+  if (url === '/api/karma/community' || url === '/karma/community') {
+    try {
+      return await handleCommunityKarma(req, res);
+    } catch (error) {
+      return sendJson(res, error.status || 500, {
+        success: false,
+        code: 'KARMA_SUBMIT_FAILED',
+        message: error.message || 'Could not submit Good Karma',
+      });
     }
   }
 

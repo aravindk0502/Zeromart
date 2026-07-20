@@ -1,15 +1,13 @@
 import { getApp, getApps, initializeApp } from 'firebase/app';
+import { getFirebaseConfig, getMissingFirebaseEnvKeys, hasFirebaseConfig } from './firebaseConfig';
 
 // Firebase app is initialized exactly once and re-used across the app.
-const firebaseConfig = {
-  apiKey: String(import.meta.env.VITE_FIREBASE_API_KEY || '').trim(),
-  authDomain: String(import.meta.env.VITE_FIREBASE_AUTH_DOMAIN || '').trim(),
-  projectId: String(import.meta.env.VITE_FIREBASE_PROJECT_ID || '').trim(),
-  storageBucket: String(import.meta.env.VITE_FIREBASE_STORAGE_BUCKET || '').trim(),
-  messagingSenderId: String(import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID || '').trim(),
-  appId: String(import.meta.env.VITE_FIREBASE_APP_ID || '').trim(),
-};
+const firebaseConfig = getFirebaseConfig();
 
-export const firebaseApp = getApps().length ? getApp() : initializeApp(firebaseConfig);
+if (!hasFirebaseConfig()) {
+  console.warn('[firebase] missing env vars', getMissingFirebaseEnvKeys());
+}
+
+export const firebaseApp = hasFirebaseConfig() ? (getApps().length ? getApp() : initializeApp(firebaseConfig)) : null;
 
 export default firebaseApp;

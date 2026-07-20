@@ -1,5 +1,34 @@
 import React, { useState } from 'react';
 import { X, ShoppingBag, CheckCircle, Zap, Star } from 'lucide-react';
+import { createBuyerAccessOrder, verifyBuyerAccessPayment } from '../lib/api';
+
+const RAZORPAY_SCRIPT_SRC = 'https://checkout.razorpay.com/v1/checkout.js';
+
+let razorpayScriptPromise = null;
+
+function loadRazorpayScript() {
+  if (typeof window === 'undefined') return Promise.reject(new Error('Payments are only available in the browser.'));
+  if (window.Razorpay) return Promise.resolve(true);
+  if (razorpayScriptPromise) return razorpayScriptPromise;
+
+  razorpayScriptPromise = new Promise((resolve, reject) => {
+    const existing = document.querySelector(`script[src="${RAZORPAY_SCRIPT_SRC}"]`);
+    if (existing) {
+      existing.addEventListener('load', () => resolve(true), { once: true });
+      existing.addEventListener('error', () => reject(new Error('Could not load Razorpay checkout.')), { once: true });
+      return;
+    }
+
+    const script = document.createElement('script');
+    script.src = RAZORPAY_SCRIPT_SRC;
+    script.async = true;
+    script.onload = () => resolve(true);
+    script.onerror = () => reject(new Error('Could not load Razorpay checkout.'));
+    document.head.appendChild(script);
+  });
+
+  return razorpayScriptPromise;
+}
 
 export default function BuyerPaySheet({ open, onClose, onComplete }) {
   const [loading, setLoading] = useState(false);
@@ -11,14 +40,63 @@ export default function BuyerPaySheet({ open, onClose, onComplete }) {
     setError('');
     setLoading(true);
     try {
-      setTimeout(() => {
-        onComplete();
-        setLoading(false);
-      }, 900);
+      const order = await createBuyerAccessOrder(2900);
+      if (!order?.order_id || !order?.key_id || String(order.key_id).toLowerCase() === 'demo') {
+        throw new Error('Secure payment is not configured yet. Please try again shortly.');
+      }
+      await loadRazorpayScript();
+
+      if (!window.Razorpay) {
+        throw new Error('Payments could not be prepared. Please try again.');
+      }
+
+      const payment = await new Promise((resolve, reject) => {
+        const checkout = new window.Razorpay({
+          key: order.key_id,
+          amount: order.amount,
+          currency: order.currency || 'INR',
+          name: 'Drizn',
+          description: 'Buyer access for ₹0 requests',
+          order_id: order.order_id,
+          prefill: order.prefill || undefined,
+          notes: {
+            plan: 'buyer_access_annual_29',
+          },
+          handler: async (response) => {
+            try {
+              const verification = await verifyBuyerAccessPayment({
+                planCode: 'buyer_access_annual_29',
+                amount: order.amount,
+                razorpay_order_id: response.razorpay_order_id,
+                razorpay_payment_id: response.razorpay_payment_id,
+                razorpay_signature: response.razorpay_signature,
+              });
+              resolve({ response, verification });
+            } catch (verificationError) {
+              reject(verificationError);
+            }
+          },
+          modal: {
+            ondismiss: () => reject(new Error('Payment cancelled.')),
+          },
+          theme: {
+            color: '#f59e0b',
+          },
+        });
+
+        checkout.on('payment.failed', (response) => {
+          reject(new Error(response?.error?.description || 'Payment failed.'));
+        });
+
+        checkout.open();
+      });
+
+      await Promise.resolve(onComplete?.(payment));
+      onClose?.();
     } catch (err) {
       setError(err.message || 'Payment failed. Try again.');
-      setLoading(false);
     }
+    setLoading(false);
   }
 
   return (
@@ -69,7 +147,7 @@ export default function BuyerPaySheet({ open, onClose, onComplete }) {
           onClick={handlePay}
           disabled={loading}
         >
-          {loading ? 'Opening payment…' : 'Pay ₹29 for yearly access'}
+          {loading ? 'Preparing secure payment…' : 'Pay ₹29 for yearly access'}
         </button>
 
         <button className="btn btn-ghost btn-full" style={{ marginTop: 8 }} onClick={onClose}>

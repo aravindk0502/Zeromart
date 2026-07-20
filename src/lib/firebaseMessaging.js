@@ -1,24 +1,19 @@
 import { getMessaging, getToken, isSupported, onMessage } from 'firebase/messaging';
 import { firebaseApp } from './firebase';
+import { getFirebaseConfig, getMissingFirebaseEnvKeys, hasFirebaseConfig } from './firebaseConfig';
 
 const SW_FILE = '/firebase-messaging-sw.js';
 
 let cachedMessaging = null;
 
 // Shared public Firebase config values used by the SW via query params.
-const getPublicFirebaseConfig = () => ({
-  apiKey: String(import.meta.env.VITE_FIREBASE_API_KEY || '').trim(),
-  authDomain: String(import.meta.env.VITE_FIREBASE_AUTH_DOMAIN || '').trim(),
-  projectId: String(import.meta.env.VITE_FIREBASE_PROJECT_ID || '').trim(),
-  storageBucket: String(import.meta.env.VITE_FIREBASE_STORAGE_BUCKET || '').trim(),
-  messagingSenderId: String(import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID || '').trim(),
-  appId: String(import.meta.env.VITE_FIREBASE_APP_ID || '').trim(),
-});
+const getPublicFirebaseConfig = () => getFirebaseConfig();
 
 const getVapidKey = () => String(import.meta.env.VITE_FIREBASE_VAPID_KEY || '').trim();
 
 async function getMessagingInstance() {
   if (typeof window === 'undefined') return null;
+  if (!hasFirebaseConfig() || !firebaseApp) return null;
   const firebaseMessagingSupported = await isSupported().catch(() => false);
   if (!firebaseMessagingSupported) return null;
   if (!cachedMessaging) cachedMessaging = getMessaging(firebaseApp);
@@ -42,6 +37,11 @@ export async function requestPushPermission() {
   };
 
   try {
+    if (!hasFirebaseConfig()) {
+      result.error = `Missing Firebase env vars: ${getMissingFirebaseEnvKeys().join(', ')}`;
+      return result;
+    }
+
     const basicBrowserSupport = typeof window !== 'undefined'
       && 'Notification' in window
       && 'serviceWorker' in navigator

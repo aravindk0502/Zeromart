@@ -59,7 +59,13 @@ app.use(cors({
     callback(new Error('Origin is not allowed by ZeroMart CORS policy.'));
   },
 }));
-app.use(express.json());
+app.use(express.json({
+  verify(req, _res, buffer) {
+    if (req.originalUrl === '/api/payments/webhook') {
+      req.rawBody = buffer.toString('utf8');
+    }
+  },
+}));
 app.get('/api/health', (_req, res) => res.json({ status: 'ok', service: 'zeromart-api' }));
 
 // ── Database ──────────────────────────────────────────────────────────────────
@@ -163,6 +169,8 @@ export async function initDB() {
   try {
     pool = await createDbPool();
     await pool.query(`
+    CREATE EXTENSION IF NOT EXISTS pgcrypto;
+
     CREATE TABLE IF NOT EXISTS users (
       id          SERIAL PRIMARY KEY,
       phone       TEXT UNIQUE NOT NULL,
@@ -170,12 +178,21 @@ export async function initDB() {
       initials    TEXT NOT NULL DEFAULT 'ZM',
       mode        TEXT NOT NULL DEFAULT 'seller',
       is_buyer    BOOLEAN NOT NULL DEFAULT false,
+      buyer_access_activated_at TIMESTAMPTZ,
+      buyer_access_expires_at TIMESTAMPTZ,
+      buyer_access_order_id TEXT,
+      buyer_access_payment_id TEXT,
       karma       INTEGER NOT NULL DEFAULT 0,
       credits     INTEGER NOT NULL DEFAULT 0,
       vouchers    INTEGER NOT NULL DEFAULT 0,
       has_seen_tour BOOLEAN NOT NULL DEFAULT false,
       created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
     );
+
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS buyer_access_activated_at TIMESTAMPTZ;
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS buyer_access_expires_at TIMESTAMPTZ;
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS buyer_access_order_id TEXT;
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS buyer_access_payment_id TEXT;
 
     CREATE TABLE IF NOT EXISTS products (
       id              SERIAL PRIMARY KEY,
@@ -219,6 +236,28 @@ export async function initDB() {
       steps            JSONB NOT NULL DEFAULT '[]',
       created_at       TIMESTAMPTZ NOT NULL DEFAULT now()
     );
+
+    CREATE TABLE IF NOT EXISTS buyer_access_payments (
+      id                     TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
+      user_id                INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      plan_code              TEXT NOT NULL DEFAULT 'buyer_access_annual_29',
+      amount_paise           INTEGER NOT NULL DEFAULT 2900,
+      currency               TEXT NOT NULL DEFAULT 'INR',
+      razorpay_order_id      TEXT UNIQUE,
+      razorpay_payment_id    TEXT UNIQUE,
+      razorpay_signature     TEXT,
+      signature_verified     BOOLEAN NOT NULL DEFAULT false,
+      status                 TEXT NOT NULL DEFAULT 'created',
+      access_expires_at      TIMESTAMPTZ,
+      metadata               JSONB NOT NULL DEFAULT '{}'::jsonb,
+      created_at             TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at             TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+
+    CREATE UNIQUE INDEX IF NOT EXISTS buyer_access_payments_order_idx ON buyer_access_payments(razorpay_order_id);
+    CREATE UNIQUE INDEX IF NOT EXISTS buyer_access_payments_payment_idx ON buyer_access_payments(razorpay_payment_id);
+
+    CREATE INDEX IF NOT EXISTS buyer_access_payments_user_idx ON buyer_access_payments(user_id);
 
     CREATE TABLE IF NOT EXISTS profiles (
       id            TEXT PRIMARY KEY,
@@ -344,6 +383,121 @@ function optionalAuthMiddleware(req, _res, next) {
     req.user = null;
   }
   return next();
+}
+
+const BUYER_ACCESS_PLAN_CODE = 'buyer_access_annual_29';
+const BUYER_ACCESS_AMOUNT_PAISE = 2900;
+const BUYER_ACCESS_DURATION_MS = 365 * 24 * 60 * 60 * 1000;
+
+function getBuyerAccessExpiry(base = Date.now()) {
+  return new Date(Number(base) + BUYER_ACCESS_DURATION_MS);
+}
+
+function isDateExpired(value) {
+  if (!value) return false;
+  const timestamp = new Date(value).getTime();
+  return Number.isFinite(timestamp) && timestamp <= Date.now();
+}
+
+function serializeUserBuyerAccess(row = {}) {
+  const expiresAt = row.buyer_access_expires_at || null;
+  const activatedAt = row.buyer_access_activated_at || null;
+  const expired = isDateExpired(expiresAt);
+  return {
+    isBuyer: Boolean(row.is_buyer && !expired),
+    buyerAccessActivatedAt: activatedAt,
+    buyerAccessExpiresAt: expired ? null : expiresAt,
+    buyerAccessOrderId: row.buyer_access_order_id || '',
+    buyerAccessPaymentId: row.buyer_access_payment_id || '',
+  };
+}
+
+async function normalizeExpiredBuyerAccess(userId, row) {
+  if (!dbEnabled || !pool || !row || !row.is_buyer) return row;
+  if (!isDateExpired(row.buyer_access_expires_at)) return row;
+  const cleared = await pool.query(
+    `UPDATE users
+     SET is_buyer = false,
+         buyer_access_activated_at = NULL,
+         buyer_access_expires_at = NULL
+     WHERE id = $1
+     RETURNING *`,
+    [userId]
+  );
+  return cleared.rows[0] || row;
+}
+
+async function upsertBuyerAccessPayment({ userId, planCode, amountPaise, currency = 'INR', razorpayOrderId = null, razorpayPaymentId = null, razorpaySignature = null, signatureVerified = false, status = 'created', accessExpiresAt = null, metadata = {} }) {
+  if (!dbEnabled || !pool) return null;
+  const { rows } = await pool.query(
+    `INSERT INTO buyer_access_payments (
+       user_id,
+       plan_code,
+       amount_paise,
+       currency,
+       razorpay_order_id,
+       razorpay_payment_id,
+       razorpay_signature,
+       signature_verified,
+       status,
+       access_expires_at,
+       metadata,
+       updated_at
+     ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,now())
+     ON CONFLICT (razorpay_order_id) DO UPDATE SET
+       razorpay_payment_id = COALESCE(EXCLUDED.razorpay_payment_id, buyer_access_payments.razorpay_payment_id),
+       razorpay_signature = COALESCE(EXCLUDED.razorpay_signature, buyer_access_payments.razorpay_signature),
+       signature_verified = EXCLUDED.signature_verified,
+       status = EXCLUDED.status,
+       access_expires_at = COALESCE(EXCLUDED.access_expires_at, buyer_access_payments.access_expires_at),
+       metadata = buyer_access_payments.metadata || EXCLUDED.metadata,
+       updated_at = now()
+     RETURNING *`,
+    [
+      userId,
+      planCode,
+      amountPaise,
+      currency,
+      razorpayOrderId,
+      razorpayPaymentId,
+      razorpaySignature,
+      signatureVerified,
+      status,
+      accessExpiresAt,
+      JSON.stringify(metadata || {}),
+    ]
+  );
+  return rows[0] || null;
+}
+
+async function activateBuyerAccess({ userId, orderId, paymentId, signature = '', verified = false, metadata = {}, planCode = BUYER_ACCESS_PLAN_CODE, amountPaise = BUYER_ACCESS_AMOUNT_PAISE }) {
+  const accessExpiresAt = getBuyerAccessExpiry();
+  if (dbEnabled && pool) {
+    await pool.query(
+      `UPDATE users
+       SET is_buyer = true,
+           mode = 'buyer',
+           buyer_access_activated_at = now(),
+           buyer_access_expires_at = $2,
+           buyer_access_order_id = $3,
+           buyer_access_payment_id = $4
+       WHERE id = $1`,
+      [userId, accessExpiresAt, orderId || null, paymentId || null]
+    );
+    await upsertBuyerAccessPayment({
+      userId,
+      planCode,
+      amountPaise,
+      razorpayOrderId: orderId,
+      razorpayPaymentId: paymentId,
+      razorpaySignature: signature,
+      signatureVerified: verified,
+      status: 'verified',
+      accessExpiresAt,
+      metadata,
+    });
+  }
+  return { accessExpiresAt };
 }
 
 function parseJsonValue(value, fallback = {}) {
@@ -982,22 +1136,129 @@ async function fetchListingsViaSupabase() {
   const { data, error } = await supabase
     .from('listings')
     .select('*')
-    .in('status', ['active', 'available', 'live'])
+    .in('status', ['active', 'available', 'live', 'requested', 'reserved'])
     .gt('available_quantity', 0)
     .order('created_at', { ascending: false });
   if (error) throw error;
-  const today = new Date().toISOString().slice(0, 10);
+
+  const notExpired = (row) => {
+    if (!row.expiry_date) return true;
+    const expiryDate = String(row.expiry_date).slice(0, 10);
+    const expiryTime = String(row.expiry_time || '23:59').slice(0, 5);
+    const expiryTs = new Date(`${expiryDate}T${expiryTime}:00`).getTime();
+    return Number.isFinite(expiryTs) ? expiryTs > Date.now() : true;
+  };
+
   return (data || [])
     .filter((row) => !isTestListingRow(row))
-    .filter((row) => !row.expiry_date || String(row.expiry_date).slice(0, 10) >= today)
+    .filter((row) => !['sold_out', 'expired', 'removed', 'hidden', 'deleted', 'inactive'].includes(String(row.status || '').toLowerCase()))
+    .filter((row) => Number(row.available_quantity || 0) > 0)
+    .filter(notExpired)
     .sort((a, b) => {
-      const aRescue = a.expiry_date && String(a.expiry_date).slice(0, 10) <= today ? 0 : 1;
-      const bRescue = b.expiry_date && String(b.expiry_date).slice(0, 10) <= today ? 0 : 1;
+      const nowDate = new Date().toISOString().slice(0, 10);
+      const aRescue = a.expiry_date && String(a.expiry_date).slice(0, 10) <= nowDate ? 0 : 1;
+      const bRescue = b.expiry_date && String(b.expiry_date).slice(0, 10) <= nowDate ? 0 : 1;
       if (aRescue !== bRescue) return aRescue - bRescue;
       if (a.seller_type !== b.seller_type) return a.seller_type === 'business' ? -1 : 1;
       return new Date(b.created_at || 0) - new Date(a.created_at || 0);
     })
     .map(listingRowToClient);
+}
+
+async function reserveListingViaSupabase(listingId, quantity = 1) {
+  if (!canUseSupabaseTable()) return null;
+  const reserveQty = Math.max(1, Number(quantity || 1));
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    const current = await supabase
+      .from('listings')
+      .select('*')
+      .eq('id', listingId)
+      .maybeSingle();
+
+    if (current.error) throw current.error;
+    if (!current.data) {
+      const notFound = new Error('This item is no longer available.');
+      notFound.status = 404;
+      throw notFound;
+    }
+
+    const row = current.data;
+    const status = String(row.status || '').toLowerCase();
+    if (['sold_out', 'expired', 'removed', 'hidden', 'deleted', 'inactive'].includes(status)) {
+      const unavailable = new Error('This item is no longer available.');
+      unavailable.status = 409;
+      throw unavailable;
+    }
+    const available = Number(row.available_quantity || 0);
+    if (available < reserveQty) {
+      const soldOut = new Error('This item is no longer available.');
+      soldOut.status = 409;
+      throw soldOut;
+    }
+
+    const expiryDate = row.expiry_date ? String(row.expiry_date).slice(0, 10) : '';
+    const expiryTime = String(row.expiry_time || '23:59').slice(0, 5);
+    if (expiryDate) {
+      const expiryTs = new Date(`${expiryDate}T${expiryTime}:00`).getTime();
+      if (Number.isFinite(expiryTs) && expiryTs <= Date.now()) {
+        const expired = new Error('This item is expired and no longer available.');
+        expired.status = 409;
+        throw expired;
+      }
+    }
+
+    const nextAvailable = Math.max(0, available - reserveQty);
+    const nextReserved = Math.max(0, Number(row.reserved_quantity || 0) + reserveQty);
+    const nextStatus = nextAvailable === 0 ? 'sold_out' : row.status;
+    const updatedAt = row.updated_at;
+
+    const update = await supabase
+      .from('listings')
+      .update({
+        available_quantity: nextAvailable,
+        reserved_quantity: nextReserved,
+        status: nextStatus,
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', listingId)
+      .eq('updated_at', updatedAt)
+      .select('*')
+      .maybeSingle();
+
+    if (!update.error && update.data) return listingRowToClient(update.data);
+  }
+
+  const race = new Error('This item was just claimed by someone else.');
+  race.status = 409;
+  throw race;
+}
+
+async function reserveListingViaDb(listingId, quantity = 1) {
+  if (!dbEnabled || !pool) return null;
+  const reserveQty = Math.max(1, Number(quantity || 1));
+  const result = await pool.query(
+    `UPDATE listings
+     SET available_quantity = available_quantity - $2,
+         reserved_quantity = reserved_quantity + $2,
+         status = CASE WHEN available_quantity - $2 <= 0 THEN 'sold_out' ELSE status END,
+         updated_at = now()
+     WHERE id = $1
+       AND status NOT IN ('sold_out','expired','removed','hidden','deleted','inactive')
+       AND available_quantity >= $2
+       AND (
+         expiry_date IS NULL
+         OR (expiry_date + COALESCE(NULLIF(expiry_time,''), '23:59')::time) > now()
+       )
+     RETURNING *`,
+    [listingId, reserveQty]
+  );
+
+  if (!result.rows[0]) {
+    const unavailable = new Error('This item is no longer available.');
+    unavailable.status = 409;
+    throw unavailable;
+  }
+  return listingRowToClient(result.rows[0]);
 }
 
 async function upsertListingViaSupabase(listing) {
@@ -1064,6 +1325,67 @@ async function hideListingViaSupabase(id, user = null) {
     .eq('id', id);
   if (error) throw error;
   return { success: true };
+}
+
+async function awardCommunityKarmaViaSupabase(sellerId) {
+  if (!canUseSupabaseTable()) return [];
+  const rows = await supabase
+    .from('listings')
+    .select('*')
+    .eq('seller_id', sellerId);
+  if (rows.error) throw rows.error;
+
+  const nextRows = [];
+  for (const row of rows.data || []) {
+    const metadata = parseJsonValue(row.metadata, {});
+    const sellerProfile = parseJsonValue(metadata.sellerProfile, {});
+    const nextKarma = Number(row.karma_score || 0) + 1;
+    const nextMetadata = {
+      ...metadata,
+      sellerProfile: {
+        ...sellerProfile,
+        karma: nextKarma,
+      },
+    };
+    const updated = await supabase
+      .from('listings')
+      .update({ karma_score: nextKarma, metadata: nextMetadata, updated_at: new Date().toISOString() })
+      .eq('id', row.id)
+      .select('*')
+      .single();
+    if (updated.error) throw updated.error;
+    nextRows.push(listingRowToClient(updated.data));
+  }
+  return nextRows;
+}
+
+async function awardCommunityKarmaViaDb(sellerId) {
+  if (!dbEnabled || !pool) return [];
+  const rows = await pool.query('SELECT * FROM listings WHERE seller_id = $1', [sellerId]);
+  const updatedRows = [];
+  for (const row of rows.rows || []) {
+    const metadata = parseJsonValue(row.metadata, {});
+    const sellerProfile = parseJsonValue(metadata.sellerProfile, {});
+    const nextKarma = Number(row.karma_score || 0) + 1;
+    const nextMetadata = {
+      ...metadata,
+      sellerProfile: {
+        ...sellerProfile,
+        karma: nextKarma,
+      },
+    };
+    const updated = await pool.query(
+      `UPDATE listings
+       SET karma_score = $2,
+           metadata = $3,
+           updated_at = now()
+       WHERE id = $1
+       RETURNING *`,
+      [row.id, nextKarma, JSON.stringify(nextMetadata)]
+    );
+    if (updated.rows[0]) updatedRows.push(listingRowToClient(updated.rows[0]));
+  }
+  return updatedRows;
 }
 
 // ── OTP store (in-memory for demo; persists in DB when available) ─────────────
@@ -1149,7 +1471,11 @@ app.get('/api/profile', authMiddleware, async (req, res) => {
   if (!dbEnabled) return res.json({ id: req.user.id, phone: req.user.phone });
   const result = await pool.query('SELECT * FROM users WHERE id = $1', [req.user.id]);
   if (!result.rows[0]) return res.status(404).json({ error: 'User not found' });
-  return res.json(result.rows[0]);
+  const row = await normalizeExpiredBuyerAccess(req.user.id, result.rows[0]);
+  return res.json({
+    ...row,
+    ...serializeUserBuyerAccess(row),
+  });
 });
 
 // Update profile
@@ -1360,6 +1686,52 @@ app.delete('/api/listings/:id', optionalAuthMiddleware, async (req, res) => {
   } catch (err) {
     console.error('[LISTINGS] delete failed', err.message || err);
     return res.status(500).json({ error: 'Could not delete listing' });
+  }
+});
+
+app.post('/api/listings/:id/reserve', optionalAuthMiddleware, async (req, res) => {
+  try {
+    const listingId = String(req.params.id || '').trim();
+    if (!listingId) {
+      return res.status(400).json({ success: false, error: 'Listing id is required.' });
+    }
+
+    const quantity = Math.max(1, Number(req.body?.quantity || 1));
+
+    let listing = null;
+    if (canUseSupabaseTable()) {
+      listing = await reserveListingViaSupabase(listingId, quantity);
+    } else if (dbEnabled && pool) {
+      listing = await reserveListingViaDb(listingId, quantity);
+    }
+
+    if (!listing) {
+      return res.status(503).json({ success: false, error: 'Reservation backend unavailable.' });
+    }
+
+    return res.json({ success: true, listing });
+  } catch (error) {
+    const code = Number(error?.status || 500);
+    const safeCode = Number.isFinite(code) && code >= 400 && code < 600 ? code : 500;
+    const message = safeCode < 500 ? error.message : 'Unable to reserve listing right now.';
+    if (safeCode >= 500) {
+      console.error('reserve listing error', error);
+    }
+    return res.status(safeCode).json({ success: false, error: message });
+  }
+});
+
+app.post('/api/karma/community', authMiddleware, async (req, res) => {
+  const sellerId = String(req.body?.sellerId || '').trim();
+  if (!sellerId) return res.status(400).json({ error: 'sellerId is required' });
+  try {
+    const listings = dbEnabled
+      ? await awardCommunityKarmaViaDb(sellerId)
+      : await awardCommunityKarmaViaSupabase(sellerId);
+    return res.json({ success: true, sellerId, listings });
+  } catch (error) {
+    console.error('[KARMA] community award failed', error.message || error);
+    return res.status(500).json({ error: 'Could not award community karma' });
   }
 });
 
@@ -1743,37 +2115,201 @@ app.get('/api/orders', authMiddleware, async (req, res) => {
   return res.json(result.rows);
 });
 
-// Create Razorpay order
-app.post('/api/create-order', async (req, res) => {
-  const keyId     = process.env.RAZORPAY_KEY_ID;
+// Buyer access payment flow
+app.post(['/api/payments/create-order', '/api/create-order'], authMiddleware, async (req, res) => {
+  const keyId = process.env.RAZORPAY_KEY_ID;
   const keySecret = process.env.RAZORPAY_KEY_SECRET;
-  if (!keyId || !keySecret) {
-    return res.json({ demo: true, order_id: 'demo_order', amount: 2900, currency: 'INR', key_id: 'demo' });
+  const planCode = String(req.body?.planCode || '').trim() || BUYER_ACCESS_PLAN_CODE;
+  const requestedAmount = Number(req.body?.amount ?? BUYER_ACCESS_AMOUNT_PAISE);
+  if (planCode !== BUYER_ACCESS_PLAN_CODE) {
+    return res.status(400).json({ error: 'Unsupported payment plan' });
   }
+  if (requestedAmount !== BUYER_ACCESS_AMOUNT_PAISE) {
+    return res.status(400).json({ error: 'Invalid payment amount' });
+  }
+
+  if (!keyId || !keySecret) {
+    return res.status(503).json({
+      error: 'Razorpay is not configured on the server',
+      code: 'RAZORPAY_NOT_CONFIGURED',
+    });
+  }
+
   try {
-    const rzp   = new Razorpay({ key_id: keyId, key_secret: keySecret });
-    const order = await rzp.orders.create({ amount: 2900, currency: 'INR', receipt: `zm_${Date.now()}` });
-    return res.json({ order_id: order.id, amount: order.amount, currency: order.currency, key_id: keyId });
+    const rzp = new Razorpay({ key_id: keyId, key_secret: keySecret });
+    const receipt = `buyer_access_${req.user.id}_${Date.now()}`;
+    const order = await rzp.orders.create({
+      amount: BUYER_ACCESS_AMOUNT_PAISE,
+      currency: 'INR',
+      receipt,
+      notes: {
+        planCode: BUYER_ACCESS_PLAN_CODE,
+        purpose: BUYER_ACCESS_PLAN_CODE,
+        userId: String(req.user.id),
+      },
+    });
+
+    if (dbEnabled) {
+      await upsertBuyerAccessPayment({
+        userId: req.user.id,
+        planCode: BUYER_ACCESS_PLAN_CODE,
+        amountPaise: BUYER_ACCESS_AMOUNT_PAISE,
+        currency: 'INR',
+        razorpayOrderId: order.id,
+        signatureVerified: false,
+        status: 'created',
+        metadata: { receipt },
+      });
+    }
+
+    return res.json({
+      order_id: order.id,
+      amount: order.amount,
+      currency: order.currency,
+      key_id: keyId,
+      planCode: BUYER_ACCESS_PLAN_CODE,
+      purpose: BUYER_ACCESS_PLAN_CODE,
+    });
   } catch (err) {
+    console.error('[PAYMENTS] order creation failed', err.message || err);
     return res.status(500).json({ error: 'Could not create payment order' });
   }
 });
 
-// Verify Razorpay payment → mark user as buyer
-app.post('/api/verify-payment', authMiddleware, async (req, res) => {
-  const { razorpay_order_id, razorpay_payment_id, razorpay_signature } = req.body || {};
+app.post(['/api/payments/verify', '/api/verify-payment'], authMiddleware, async (req, res) => {
+  const {
+    planCode,
+    amount,
+    razorpay_order_id,
+    razorpay_payment_id,
+    razorpay_signature,
+  } = req.body || {};
+
+  if (String(planCode || BUYER_ACCESS_PLAN_CODE) !== BUYER_ACCESS_PLAN_CODE) {
+    return res.status(400).json({ error: 'Unsupported payment plan' });
+  }
+  if (Number(amount || BUYER_ACCESS_AMOUNT_PAISE) !== BUYER_ACCESS_AMOUNT_PAISE) {
+    return res.status(400).json({ error: 'Invalid payment amount' });
+  }
+  if (!razorpay_order_id || !razorpay_payment_id) {
+    return res.status(400).json({ error: 'Payment details are incomplete' });
+  }
+
+  if (dbEnabled && pool) {
+    const existingPayment = await pool.query(
+      `SELECT *
+       FROM buyer_access_payments
+       WHERE razorpay_order_id = $1
+       LIMIT 1`,
+      [razorpay_order_id]
+    );
+    const row = existingPayment.rows[0];
+    if (row?.signature_verified) {
+      return res.json({
+        success: true,
+        buyerAccessActivated: true,
+        buyerAccessActivatedAt: row.updated_at ? new Date(row.updated_at).toISOString() : new Date().toISOString(),
+        buyerAccessExpiresAt: row.access_expires_at ? new Date(row.access_expires_at).toISOString() : null,
+        planCode: BUYER_ACCESS_PLAN_CODE,
+        idempotent: true,
+      });
+    }
+  }
+
   const keySecret = process.env.RAZORPAY_KEY_SECRET;
-
-  if (keySecret && razorpay_signature) {
-    const body     = `${razorpay_order_id}|${razorpay_payment_id}`;
+  if (keySecret) {
+    if (!razorpay_signature) {
+      return res.status(400).json({ error: 'Payment signature missing' });
+    }
+    const body = `${razorpay_order_id}|${razorpay_payment_id}`;
     const expected = crypto.createHmac('sha256', keySecret).update(body).digest('hex');
-    if (expected !== razorpay_signature) return res.status(400).json({ error: 'Payment signature mismatch' });
+    if (expected !== razorpay_signature) {
+      return res.status(400).json({ error: 'Payment signature mismatch' });
+    }
   }
 
-  if (dbEnabled) {
-    await pool.query('UPDATE users SET is_buyer=true, mode=$1 WHERE id=$2', ['buyer', req.user.id]);
+  const activation = await activateBuyerAccess({
+    userId: req.user.id,
+    orderId: razorpay_order_id,
+    paymentId: razorpay_payment_id,
+    signature: razorpay_signature || '',
+    verified: true,
+    metadata: {
+      source: 'checkout',
+      verifiedAt: new Date().toISOString(),
+    },
+  });
+
+  return res.json({
+    success: true,
+    buyerAccessActivated: true,
+    buyerAccessActivatedAt: new Date().toISOString(),
+    buyerAccessExpiresAt: activation.accessExpiresAt.toISOString(),
+    planCode: BUYER_ACCESS_PLAN_CODE,
+  });
+});
+
+app.get('/api/payments/status', authMiddleware, async (req, res) => {
+  if (!dbEnabled || !pool) {
+    return res.json({
+      isBuyer: false,
+      buyerAccessActivatedAt: null,
+      buyerAccessExpiresAt: null,
+      planCode: BUYER_ACCESS_PLAN_CODE,
+    });
   }
-  return res.json({ success: true });
+
+  const result = await pool.query('SELECT * FROM users WHERE id = $1', [req.user.id]);
+  if (!result.rows[0]) return res.status(404).json({ error: 'User not found' });
+  const row = await normalizeExpiredBuyerAccess(req.user.id, result.rows[0]);
+  return res.json({
+    ...serializeUserBuyerAccess(row),
+    planCode: BUYER_ACCESS_PLAN_CODE,
+  });
+});
+
+app.post(['/api/payments/webhook', '/api/webhook/razorpay'], async (req, res) => {
+  const webhookSecret = process.env.RAZORPAY_WEBHOOK_SECRET;
+  const signature = req.headers['x-razorpay-signature'];
+  const payload = String(req.rawBody || '');
+
+  if (webhookSecret) {
+    if (!signature) return res.status(400).json({ error: 'Webhook signature missing' });
+    const expected = crypto.createHmac('sha256', webhookSecret).update(payload).digest('hex');
+    if (expected !== signature) return res.status(400).json({ error: 'Webhook signature mismatch' });
+  }
+
+  let event = null;
+  try {
+    event = payload ? JSON.parse(payload) : null;
+  } catch {
+    return res.status(400).json({ error: 'Invalid webhook payload' });
+  }
+
+  const paymentEntity = event?.payload?.payment?.entity || null;
+  const orderEntity = event?.payload?.order?.entity || null;
+  const orderId = paymentEntity?.order_id || orderEntity?.id || '';
+  const paymentId = paymentEntity?.id || '';
+  if (!orderId || !paymentId || String(paymentEntity?.notes?.planCode || orderEntity?.notes?.planCode || BUYER_ACCESS_PLAN_CODE) !== BUYER_ACCESS_PLAN_CODE) {
+    return res.json({ received: true, ignored: true });
+  }
+
+  if (dbEnabled && pool) {
+    const paymentRows = await pool.query('SELECT * FROM buyer_access_payments WHERE razorpay_order_id = $1 LIMIT 1', [orderId]);
+    const userId = paymentRows.rows[0]?.user_id;
+    if (userId) {
+      await activateBuyerAccess({
+        userId,
+        orderId,
+        paymentId,
+        signature: event?.payload?.payment?.entity?.notes?.razorpay_signature || '',
+        verified: true,
+        metadata: { source: 'webhook', event: event?.event || 'payment.captured' },
+      });
+    }
+  }
+
+  return res.json({ received: true });
 });
 
 // ── Optional local/static frontend serving ───────────────────────────────────

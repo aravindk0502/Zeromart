@@ -8,9 +8,10 @@ import { locationLabel } from '../services/locationService';
 
 const requestStatusLabel = (item) => {
   if (item.requestStatus === 'completed') return 'Collected';
+  if (item.requestStatus === 'karma_pending') return 'Good Karma required';
   if (item.requestStatus === 'declined') return 'Declined';
-  if (item.requestStatus === 'accepted' && item.sellerGave) return 'Awaiting buyer confirmation';
-  if (item.requestStatus === 'accepted') return item.type === 'request' ? 'Awaiting collection' : 'Ready to collect';
+  if (['accepted', 'awaiting_collection', 'confirmed'].includes(item.requestStatus) && item.sellerGave) return 'Handed over';
+  if (['accepted', 'awaiting_collection', 'confirmed'].includes(item.requestStatus)) return item.type === 'request' ? 'Awaiting collection' : 'Ready to collect';
   return 'Awaiting decision';
 };
 
@@ -54,6 +55,13 @@ export default function NotificationsPage({
     optionalMessage: '',
   });
 
+  const canConfirmRequest = Boolean(
+    confirmation.collectionDate
+    && confirmation.collectionTime
+    && String(confirmation.pickupAddress || '').trim()
+    && String(confirmation.sellerPhone || '').trim()
+  );
+
   const openConfirmation = (item) => {
     setConfirmRequest(item);
     setConfirmation({
@@ -80,7 +88,7 @@ export default function NotificationsPage({
         </div>
       );
     }
-    if (item.type === 'request' && item.requestStatus === 'accepted' && item.isDemo && !item.sellerGave) {
+    if (item.type === 'request' && ['accepted', 'awaiting_collection', 'confirmed'].includes(item.requestStatus) && !item.sellerGave) {
       return (
         <button
           type="button"
@@ -94,15 +102,15 @@ export default function NotificationsPage({
         </button>
       );
     }
-    if (item.type === 'request' && item.requestStatus === 'accepted' && item.isDemo && item.sellerGave) {
-      return <p className="mt-3 rounded-xl bg-emerald-100 px-3 py-2.5 text-center text-sm font-bold text-emerald-800">Handed over · awaiting buyer confirmation</p>;
+    if (item.type === 'request' && item.requestStatus === 'karma_pending') {
+      return <p className="mt-3 rounded-xl bg-amber-100 px-3 py-2.5 text-center text-sm font-bold text-amber-900">Handed over · waiting for buyer Good Karma</p>;
     }
     return null;
   };
 
   return (
     <div className="space-y-4">
-      <button onClick={onBack} className="inline-flex items-center gap-2 rounded-full border border-amber-200 bg-white/80 px-3 py-2 text-sm font-semibold text-slate-600 shadow-sm transition hover:bg-amber-50">
+      <button onClick={() => { setConfirmRequest(null); setShowPickupPicker(false); onCloseNotification(); onBack(); }} className="inline-flex items-center gap-2 rounded-full border border-amber-200 bg-white/80 px-3 py-2 text-sm font-semibold text-slate-600 shadow-sm transition hover:bg-amber-50">
         <ArrowLeft size={16} /> Back
       </button>
       <section className="rounded-[2rem] border border-amber-100 bg-white p-5 shadow-sm">
@@ -193,10 +201,10 @@ export default function NotificationsPage({
                     {selectedNotification.whatsappLink && <a href={selectedNotification.whatsappLink} target="_blank" rel="noreferrer" className="inline-flex items-center justify-center gap-2 rounded-xl border border-emerald-200 bg-white px-3 py-2.5 font-bold text-emerald-700"><MessageCircle size={15} /> WhatsApp</a>}
                     {selectedNotification.emailLink && <a href={selectedNotification.emailLink} className="inline-flex items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2.5 font-bold text-slate-700"><Mail size={15} /> Email draft</a>}
                   </div>
-                  {selectedNotification.requestStatus === 'accepted' ? (
-                    <button type="button" onClick={() => onMarkCollected(selectedNotification)} className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-emerald-700 px-3 py-3 font-bold text-white"><Check size={16} /> Mark collected</button>
-                  ) : selectedNotification.requestStatus === 'completed' ? (
+                  {selectedNotification.requestStatus === 'completed' ? (
                     <p className="rounded-xl bg-emerald-100 px-3 py-3 text-center font-bold text-emerald-800">Collection completed</p>
+                  ) : selectedNotification.requestStatus === 'karma_pending' ? (
+                    <p className="rounded-xl bg-amber-100 px-3 py-3 text-center font-bold text-amber-900">Good Karma is now required to finish this exchange</p>
                   ) : null}
                 </div>
               )}
@@ -270,9 +278,7 @@ export default function NotificationsPage({
                 onRequestDecision(confirmRequest, 'accepted', confirmation);
                 setConfirmRequest(null);
               }}
-              disabled={!confirmation.collectionDate || !confirmation.collectionTime
-                || !confirmation.pickupLocationData?.doorNo || !confirmation.pickupLocationData?.buildingName
-                || !confirmation.pickupLocationData?.landmark || !confirmation.sellerPhone}
+              disabled={!canConfirmRequest}
               className="mt-5 w-full rounded-xl bg-emerald-700 px-4 py-3 font-bold text-white disabled:opacity-40"
             >
               Confirm Collection

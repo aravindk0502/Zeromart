@@ -24,6 +24,10 @@ const hasRequiredConfig = firebaseConfig.apiKey
   && firebaseConfig.messagingSenderId
   && firebaseConfig.appId;
 
+if (!hasRequiredConfig) {
+  console.warn('[firebase-sw] missing config', Object.keys(firebaseConfig).filter((key) => !firebaseConfig[key]));
+}
+
 if (hasRequiredConfig) {
   firebase.initializeApp(firebaseConfig);
 

@@ -34,10 +34,19 @@ import {
 } from './services/transactionService';
 import {
   emitNotificationEvent,
+  fetchProfile,
+  fetchOrders,
+  fetchListingById,
   fetchNotificationHistory,
+  fetchPendingKarmaActions,
   isLoggedIn,
+  markRequestHandover,
   registerPushToken,
   triggerNearbyListingAlerts,
+  awardCommunityKarma,
+  reserveListing,
+  saveOrder,
+  updateProfile,
   uploadImage,
 } from './lib/api';
 import {
@@ -80,6 +89,17 @@ const DISCOVERY_STAGES = [
 const platformSearchKeywords = 'drizn drizn ai good things nearby karma good karma free 0 rs ₹0 rupees local business b2b marketplace listing list item seller buyer pickup delivery in person collect product item movie movies ticket tickets food electronics books cosmetics home furniture';
 const isProductionRuntime = import.meta.env.PROD;
 const FCM_TOKEN_STORAGE_KEY = 'drizn-fcm-token';
+const ACTIVE_REQUEST_STATUSES = ['pending', 'accepted', 'awaiting_collection', 'handed_over', 'karma_pending'];
+const REMOTE_SYNC_INTERVAL_MS = 3000;
+const REMOTE_LISTING_SYNC_INTERVAL_MS = 2500;
+
+const isRequestActiveForLock = (request, now = Date.now()) => {
+  const status = String(request?.status || '').toLowerCase();
+  if (!ACTIVE_REQUEST_STATUSES.includes(status)) return false;
+  if (status !== 'pending') return true;
+  const expiryMs = new Date(request?.expiresAt || 0).getTime();
+  return !Number.isFinite(expiryMs) || expiryMs > now;
+};
 
 const getItemCoordinates = (item) => item.coordinates
   || (item.locationData ? { latitude: item.locationData.latitude, longitude: item.locationData.longitude } : null)
@@ -150,6 +170,36 @@ const normalizeListingsForMarketplace = (listings = []) => {
   return applyProductExpiry(catalog);
 };
 
+const isLegacyDemoNotification = (record) => {
+  if (!record) return false;
+  const identifiers = [
+    record.id,
+    record.requestId,
+    record.orderId,
+    record.listingId,
+    record.itemId,
+    record.recipientId,
+  ].filter(Boolean).map((value) => String(value).toLowerCase());
+  const searchableText = [
+    record.title,
+    record.body,
+    record.buyerName,
+    record.sellerName,
+    ...identifiers,
+  ].filter(Boolean).map((value) => String(value).toLowerCase());
+  return searchableText.some((value) => (
+    value.startsWith('zm-diag')
+    || value.startsWith('zm-final')
+    || value.includes('dummy')
+    || value.includes('verification')
+    || value.includes('codex')
+    || value.includes('diag')
+    || value.includes('e2e')
+    || value.includes('liveflow')
+    || value.includes('nearbydeniedpermissiontest')
+  ));
+};
+
 // Single source of truth: production comes from the live listing API, with local
 // memory only acting as the current-session cache after a successful fetch.
 const loadMarketplaceItems = () => normalizeListingsForMarketplace(getLiveListings());
@@ -171,6 +221,28 @@ const getKarmaLedger = () => {
 };
 
 const accountKey = (value) => String(value || '').replace(/\D/g, '') || String(value || '');
+
+const normalizeNotificationType = (value) => {
+  const type = String(value || '').trim();
+  if (type === 'new_request') return 'request';
+  if (type === 'request_accepted') return 'requestAccepted';
+  if (type === 'request_declined') return 'requestDeclined';
+  return type || 'platform';
+};
+
+const canonicalNotificationId = ({ id, dedupeKey = '', type, requestId = '', orderId = '' }) => {
+  if (dedupeKey) return String(dedupeKey);
+  if (id) return String(id);
+  const normalizedType = normalizeNotificationType(type);
+  if (requestId && normalizedType === 'request') return `request-${requestId}`;
+  if (requestId && normalizedType === 'requestAccepted') return `accepted-${requestId}`;
+  if (requestId && normalizedType === 'requestDeclined') return `declined-${requestId}`;
+  if (requestId && normalizedType === 'karma_required') return `karma-required-${requestId}`;
+  if (requestId && normalizedType === 'karma_received') return `karma-received-${requestId}`;
+  if (orderId && normalizedType === 'businessOrderUpdate') return `business-update-${orderId}`;
+  if (orderId && normalizedType === 'businessOrderReceived') return `business-received-${orderId}`;
+  return String(id || `${normalizedType || 'notification'}-${requestId || orderId || Date.now()}`);
+};
 
 const createOrderId = () => {
   const date = new Date().toISOString().slice(0, 10).replaceAll('-', '');
@@ -248,12 +320,16 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
   const [editingItem, setEditingItem] = useState(null);
   const [showBuyerPaySheet, setShowBuyerPaySheet] = useState(false);
   const [showKarmaPopup, setShowKarmaPopup] = useState(false);
+  const [karmaSubmitting, setKarmaSubmitting] = useState(false);
+  const [karmaError, setKarmaError] = useState('');
   const [showBotAssistant, setShowBotAssistant] = useState(false);
   const [showBusinessAuth, setShowBusinessAuth] = useState(false);
   const [karmaTarget, setKarmaTarget] = useState(null);
   const [selectedNotification, setSelectedNotification] = useState(null);
   const [notifications, setNotifications] = useState(loadNotifications);
   const skipTransactionPersistRef = useRef(false);
+  const buyerAccessPendingRequestRef = useRef(null);
+  const buyerAccessBypassRef = useRef(false);
   const [requestClock, setRequestClock] = useState(Date.now());
   const [hasSeenTour, setHasSeenTour] = useState(() => {
     if (typeof window === 'undefined') return false;
@@ -268,6 +344,8 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
     location: businessSession.locationData,
     businessId: businessSession.id,
     isBusinessAccount: true,
+    profileId: businessSession.profileId || businessSession.id,
+    profileImage: businessSession.profileImage || businessSession.avatarUrl || '',
   } : null);
   const activeAccountId = activeBuyer?.userId || activeBuyer?.businessId || activeBuyer?.mobile || activeBuyer?.name || '';
   const commitNotifications = (updater) => {
@@ -387,33 +465,59 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
 
     const mapRemoteNotification = (entry) => {
       const payload = entry?.payload && typeof entry.payload === 'object' ? entry.payload : {};
-      return {
-        id: String(entry.id || `remote-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`),
-        type: entry.event_type || entry.type || 'platform',
+      const type = normalizeNotificationType(entry.event_type || entry.type || 'platform');
+      const requestId = entry.request_id || payload.requestId || '';
+      const orderId = entry.order_id || payload.orderId || '';
+      const dedupeKey = entry.dedupe_key || payload.dedupeKey || '';
+      const mapped = {
+        id: canonicalNotificationId({ id: entry.id, dedupeKey, type, requestId, orderId }),
+        type,
         title: entry.title || 'Drizn update',
         body: entry.body || entry.text || '',
         itemId: entry.listing_id || payload.listingId || '',
         listingId: entry.listing_id || payload.listingId || '',
-        requestId: entry.request_id || payload.requestId || '',
-        orderId: entry.order_id || payload.orderId || '',
+        requestId,
+        orderId,
+        buyerId: payload.buyerId || entry.actor_account_id || payload.actorAccountId || '',
+        sellerId: payload.sellerId || '',
+        buyerName: payload.buyerName || payload.actorName || '',
+        buyerPhone: payload.buyerPhone || '',
+        buyerLocation: payload.buyerLocation || '',
+        sellerName: payload.sellerName || payload.recipientName || '',
+        sellerPhone: payload.sellerPhone || '',
+        productName: payload.productName || '',
+        quantity: Number(payload.quantity || 1),
+        collectionDate: payload.collectionDate || '',
+        collectionTime: payload.collectionTime || '',
+        pickupAddress: payload.pickupAddress || '',
+        optionalMessage: payload.optionalMessage || '',
+        mapsLink: payload.pickupAddress ? `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(payload.pickupAddress)}` : '',
         payload,
         createdAt: entry.created_at || '',
         read: Boolean(entry.read),
         recipientId: activeAccountId,
+        requestStatus: payload.requestStatus || payload.orderStatus || (type === 'request' ? 'pending' : undefined),
         time: entry.created_at ? new Date(entry.created_at).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' }) : 'Just now',
       };
+      return isLegacyDemoNotification(mapped) ? null : mapped;
     };
 
     const syncRemoteNotifications = async () => {
       try {
         const rows = await fetchNotificationHistory(activeAccountId, 100);
         if (cancelled || !Array.isArray(rows)) return;
-        const remote = rows.map(mapRemoteNotification);
+        const remote = rows.map(mapRemoteNotification).filter(Boolean);
         commitNotifications((current) => {
           const merged = new Map();
           remote.forEach((entry) => merged.set(String(entry.id), entry));
           current.forEach((entry) => {
-            if (!merged.has(String(entry.id))) merged.set(String(entry.id), entry);
+            if (isLegacyDemoNotification(entry)) return;
+            const id = String(entry.id);
+            if (!merged.has(id)) {
+              merged.set(id, entry);
+              return;
+            }
+            merged.set(id, { ...merged.get(id), ...entry });
           });
           return [...merged.values()].sort((first, second) => (
             new Date(second.createdAt || second.time || 0).getTime() - new Date(first.createdAt || first.time || 0).getTime()
@@ -425,12 +529,63 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
     };
 
     syncRemoteNotifications();
-    const timer = window.setInterval(syncRemoteNotifications, 30000);
+    const timer = window.setInterval(syncRemoteNotifications, REMOTE_SYNC_INTERVAL_MS);
     return () => {
       cancelled = true;
       window.clearInterval(timer);
     };
   }, [activeAccountId]);
+
+  useEffect(() => {
+    if (!activeAccountId) return undefined;
+    let cancelled = false;
+
+    const syncRemoteOrders = async () => {
+      try {
+        const rows = await fetchOrders();
+        if (cancelled || !Array.isArray(rows)) return;
+        const scoped = rows.filter((entry) => (
+          accountKey(entry.buyerId) === accountKey(activeAccountId)
+          || accountKey(entry.sellerId) === accountKey(activeAccountId)
+        ));
+        if (scoped.length) saveRequests(scoped);
+      } catch (error) {
+        console.warn('[orders] remote sync failed', error?.message || error);
+      }
+    };
+
+    syncRemoteOrders();
+    const timer = window.setInterval(syncRemoteOrders, REMOTE_SYNC_INTERVAL_MS);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [activeAccountId]);
+
+  useEffect(() => {
+    if (!activeBuyer) return;
+    const ownedItems = items.filter((item) => isListingOwnedByUser(item, activeBuyer));
+    if (!ownedItems.length) return;
+    const nextKarma = ownedItems.reduce((highest, item) => Math.max(highest, Number(item.sellerKarma || 0)), 0);
+    if (businessSession) {
+      if (Number(businessSession.karma || 0) === nextKarma) return;
+      const nextSession = { ...businessSession, karma: nextKarma };
+      setBusinessSession(nextSession);
+      saveBusinessSession(nextSession);
+      saveBusinessAccounts([
+        nextSession,
+        ...getBusinessAccounts().filter((account) => account.id !== nextSession.id),
+      ]);
+      return;
+    }
+    if (Number(user?.karma || 0) === nextKarma) return;
+    setUser((current) => {
+      if (!current) return current;
+      const nextUser = { ...current, karma: nextKarma };
+      localStorage.setItem('zeromart-user', JSON.stringify(nextUser));
+      return nextUser;
+    });
+  }, [activeBuyer, businessSession, items, user]);
 
   useEffect(() => {
     const timer = window.setInterval(() => setRequestClock(Date.now()), 1000);
@@ -439,10 +594,58 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
 
   useEffect(() => {
     const savedUser = localStorage.getItem('zeromart-user');
-    if (savedUser && !getBusinessSession()) {
-      setUser(JSON.parse(savedUser));
+    if (!savedUser) return;
+    try {
+      const parsedUser = JSON.parse(savedUser);
+      if (parsedUser && typeof parsedUser === 'object') {
+        setUser((current) => ({
+          ...parsedUser,
+          ...current,
+          userId: parsedUser.userId || parsedUser.id || parsedUser.mobile || current?.userId || current?.mobile || '',
+          profileId: parsedUser.profileId || parsedUser.id || parsedUser.userId || current?.profileId || current?.id || '',
+          profileImage: parsedUser.profileImage || parsedUser.avatarUrl || current?.profileImage || '',
+        }));
+      }
+    } catch {
+      localStorage.removeItem('zeromart-user');
     }
   }, []);
+
+  useEffect(() => {
+    if (!user || !isLoggedIn()) return;
+    let cancelled = false;
+
+    const resolveProfileValue = async () => {
+      try {
+        const profile = await fetchProfile();
+        if (cancelled || !profile || typeof profile !== 'object') return;
+        const metadata = profile.metadata && typeof profile.metadata === 'object' ? profile.metadata : {};
+        const nextName = profile.name || profile.display_name || profile.full_name || metadata.displayName || metadata.fullName || '';
+        const nextImage = profile.profile_image || profile.avatar_url || metadata.profileImage || metadata.avatarUrl || '';
+        setUser((current) => {
+          if (!current) return current;
+          const merged = {
+            ...current,
+            name: nextName || current.name,
+            profileImage: nextImage || current.profileImage,
+            isBuyer: typeof profile.is_buyer === 'boolean' ? profile.is_buyer : current.isBuyer,
+            buyerAccessExpiresAt: profile.buyer_access_expires_at || current.buyerAccessExpiresAt || '',
+            buyerAccessActivatedAt: profile.buyer_access_activated_at || current.buyerAccessActivatedAt || '',
+            userId: current.userId || profile.id || current.mobile,
+          };
+          localStorage.setItem('zeromart-user', JSON.stringify(merged));
+          return merged;
+        });
+      } catch {
+        // Non-blocking; keep local session values when profile endpoint is unavailable.
+      }
+    };
+
+    resolveProfileValue();
+    return () => {
+      cancelled = true;
+    };
+  }, [user?.mobile]);
 
   // Merge server-side listings into the local live cache so every user sees the same marketplace.
   useEffect(() => {
@@ -474,9 +677,13 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
     window.addEventListener('focus', refreshOnFocus);
     document.addEventListener('visibilitychange', refreshWhenVisible);
     window.addEventListener('drizn_listings_updated', refreshOnLocalWrite);
+    const periodicRefresh = window.setInterval(() => {
+      if (document.visibilityState === 'visible') refreshListings({ force: true });
+    }, REMOTE_LISTING_SYNC_INTERVAL_MS);
 
     return () => {
       mounted = false;
+      window.clearInterval(periodicRefresh);
       window.removeEventListener('focus', refreshOnFocus);
       document.removeEventListener('visibilitychange', refreshWhenVisible);
       window.removeEventListener('drizn_listings_updated', refreshOnLocalWrite);
@@ -526,52 +733,80 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
   useEffect(() => {
     const showPendingBuyerKarma = () => {
       if (!activeAccountId) return;
-      try {
-        const unifiedPending = getPendingKarmaActions().find((entry) => (
-          accountKey(entry.buyerId) === accountKey(activeAccountId)
-        ));
-        if (unifiedPending) {
-          setKarmaTarget({
-            ...unifiedPending,
-            mandatory: true,
-            initials: unifiedPending.initials || unifiedPending.name?.split(' ').map((part) => part[0]).join('').slice(0, 2).toUpperCase(),
-          });
-          setShowKarmaPopup(true);
+      const applyPendingAction = (pendingAction) => {
+        if (!pendingAction) {
+          setShowKarmaPopup(false);
+          setKarmaTarget(null);
+          setKarmaError('');
           return;
         }
-        const pendingCommunity = JSON.parse(localStorage.getItem('zeromart-pending-community-karma'));
-        if (pendingCommunity && accountKey(pendingCommunity.buyerId) === accountKey(activeAccountId)) {
-          setKarmaTarget({ ...pendingCommunity, type: 'user', mandatory: true });
-          setShowKarmaPopup(true);
-          return;
-        }
-        const pendingBusiness = JSON.parse(localStorage.getItem('zeromart-pending-business-karma'));
-        const relatedOrder = pendingBusiness
-          ? getBusinessOrders().find((order) => order.id === pendingBusiness.orderId || order.orderId === pendingBusiness.orderId)
-          : null;
-        const buyerId = pendingBusiness?.buyerId || relatedOrder?.buyerId || relatedOrder?.buyerMobile;
-        if (pendingBusiness && buyerId && accountKey(buyerId) === accountKey(activeAccountId)) {
-          setKarmaTarget({
-            ...pendingBusiness,
-            buyerId,
-            type: 'business',
-            mandatory: true,
-            initials: pendingBusiness.name?.split(' ').map((part) => part[0]).join('').slice(0, 2).toUpperCase(),
-          });
-          setShowKarmaPopup(true);
-        }
-      } catch {
-        // Invalid pending records should not block the buyer journey.
-      }
+        const payload = pendingAction.payload && typeof pendingAction.payload === 'object' ? pendingAction.payload : {};
+        const sellerName = pendingAction.name || payload.sellerName || payload.businessName || 'Seller';
+        setKarmaTarget({
+          ...pendingAction,
+          id: pendingAction.id || pendingAction.pendingActionId,
+          pendingActionId: pendingAction.id || pendingAction.pendingActionId,
+          sellerId: pendingAction.seller_account_id || pendingAction.sellerId || payload.sellerId,
+          buyerId: pendingAction.buyer_account_id || pendingAction.buyerId,
+          requestId: pendingAction.request_id || pendingAction.requestId,
+          itemId: pendingAction.listing_id || pendingAction.listingId,
+          name: sellerName,
+          initials: pendingAction.initials || sellerName.split(' ').map((part) => part[0]).join('').slice(0, 2).toUpperCase(),
+          productName: payload.productName || pendingAction.productName || '',
+          pickupAddress: payload.pickupAddress || pendingAction.pickupAddress || '',
+          collectionDate: payload.collectionDate || pendingAction.collectionDate || '',
+          collectionTime: payload.collectionTime || pendingAction.collectionTime || '',
+          quantity: Number(payload.quantity || pendingAction.quantity || 1),
+          mandatory: true,
+        });
+        setKarmaError('');
+        setShowKarmaPopup(true);
+      };
+
+      fetchPendingKarmaActions(activeAccountId)
+        .then((rows) => {
+          if (Array.isArray(rows) && rows.length > 0) {
+            savePendingKarmaAction(rows[0]);
+            applyPendingAction(rows[0]);
+            return;
+          }
+          const unifiedPending = getPendingKarmaActions().find((entry) => (
+            accountKey(entry.buyerId || entry.buyer_account_id) === accountKey(activeAccountId)
+          ));
+          applyPendingAction(unifiedPending || null);
+        })
+        .catch(() => {
+          const unifiedPending = getPendingKarmaActions().find((entry) => (
+            accountKey(entry.buyerId || entry.buyer_account_id) === accountKey(activeAccountId)
+          ));
+          applyPendingAction(unifiedPending || null);
+        });
     };
     showPendingBuyerKarma();
+    const timer = window.setInterval(showPendingBuyerKarma, REMOTE_SYNC_INTERVAL_MS);
     window.addEventListener('storage', showPendingBuyerKarma);
     window.addEventListener('zeromart-karma-pending', showPendingBuyerKarma);
     return () => {
+      window.clearInterval(timer);
       window.removeEventListener('storage', showPendingBuyerKarma);
       window.removeEventListener('zeromart-karma-pending', showPendingBuyerKarma);
     };
   }, [activeAccountId]);
+
+  useEffect(() => {
+    if (!(showKarmaPopup && karmaTarget?.mandatory)) return undefined;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    const enforceCurrentRoute = () => {
+      window.history.pushState({}, '', window.location.pathname + window.location.search);
+      setNotice('Good Karma is required before you continue.');
+    };
+    window.addEventListener('popstate', enforceCurrentRoute);
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      window.removeEventListener('popstate', enforceCurrentRoute);
+    };
+  }, [karmaTarget?.mandatory, showKarmaPopup]);
 
   useEffect(() => {
     const syncMarketplaceItems = () => {
@@ -707,8 +942,9 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
     const match = path.match(/^\/request\/([^/]+)/);
     if (!match) return;
     const requestId = decodeURIComponent(match[1]);
+    const requestNotification = notifications.find((entry) => entry.requestId === requestId && entry.type === 'request');
     const request = getRequests().find((entry) => entry.requestId === requestId);
-    if (!request) {
+    if (!request && !requestNotification) {
       setNotice('This collection request could not be found or is no longer available.');
       return;
     }
@@ -718,22 +954,72 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
       setShowOtpModal(true);
       return;
     }
-    if (String(request.sellerId) !== String(activeAccountId)) {
+    if (request && String(request.sellerId) !== String(activeAccountId)) {
       setNotice('This request link belongs to the seller. Log in with the seller account to continue.');
       return;
     }
-    const requestNotification = notifications.find((entry) => entry.requestId === requestId && entry.type === 'request');
     if (requestNotification) {
       localStorage.removeItem('zeromart-pending-request-route');
       setActiveView('notifications');
       setSelectedNotification(requestNotification);
+      setNotice('');
     }
-  }, [path, activeAccountId]);
+  }, [path, activeAccountId, activeBuyer, notifications]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const resolveListingRoute = async () => {
+      const [pathname = '', rawQuery = ''] = String(path || '/').split('?');
+      const match = pathname.match(/^\/listing\/([^/]+)/);
+      if (!match) return;
+      const listingId = decodeURIComponent(match[1]);
+      const query = new URLSearchParams(rawQuery || '');
+      const action = String(query.get('action') || '').toLowerCase();
+      let listing = items.find((entry) => String(entry.id) === String(listingId));
+
+      if (!listing) {
+        try {
+          const fetchedListing = await fetchListingById(listingId);
+          if (cancelled || !fetchedListing) return;
+          listing = normalizeProductStock(fetchedListing);
+          setItems((prev) => (
+            prev.some((entry) => String(entry.id) === String(listing.id))
+              ? prev
+              : [listing, ...prev]
+          ));
+        } catch {
+          // Keep user-facing behavior stable if the listing lookup fails.
+        }
+      }
+
+      if (!listing || cancelled) {
+        setNotice('This item is no longer available');
+        return;
+      }
+
+      const normalizedListing = normalizeProductStock(listing);
+      const requestState = getProductRequestState(normalizedListing, activeAccountId, requestClock);
+      setSelectedItem(normalizedListing);
+      if (!requestState.canRequest) {
+        setNotice(requestState.soldOut || requestState.expired ? 'This item is no longer available' : (requestState.buttonLabel || 'Request unavailable right now'));
+        return;
+      }
+      if ((action === 'request' && !normalizedListing.isBusinessProduct) || (action === 'reserve' && normalizedListing.isBusinessProduct)) {
+        setQuantityItem(normalizedListing);
+      }
+    };
+
+    resolveListingRoute();
+    return () => {
+      cancelled = true;
+    };
+  }, [activeAccountId, items, path, requestClock]);
 
   useEffect(() => {
     if (!activeAccountId) return;
     const acceptedRequests = getRequests().filter((request) => (
-      ['accepted', 'completed'].includes(request.status)
+      ['accepted', 'awaiting_collection', 'karma_pending', 'completed'].includes(request.status)
       && (
         accountKey(request.buyerId) === accountKey(activeAccountId)
         || accountKey(request.sellerId) === accountKey(activeAccountId)
@@ -746,7 +1032,11 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
       let next = [...current];
       acceptedRequests.forEach((request) => {
         const isBuyer = accountKey(request.buyerId) === accountKey(activeAccountId);
-        const status = request.status === 'completed' ? 'completed' : 'accepted';
+        const status = request.status === 'completed'
+          ? 'completed'
+          : request.status === 'karma_pending'
+            ? 'karma_pending'
+            : 'awaiting_collection';
         if (isBuyer) {
           const acceptedId = `accepted-${request.requestId}`;
           const existing = next.find((entry) => entry.id === acceptedId);
@@ -765,6 +1055,8 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
               title: `${request.sellerName} accepted your request`,
               body: status === 'completed'
                 ? `${request.productName} was collected successfully.`
+                : status === 'karma_pending'
+                  ? `Collection complete for ${request.productName}. Good Karma is now required.`
                 : `Accepted. Collect ${request.productName}${collectionSummary ? ` on ${collectionSummary}` : ''}.`,
               requestStatus: status,
               collectionDate: request.collectionDate || '',
@@ -787,6 +1079,8 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
               requestStatus: status,
               body: status === 'completed'
                 ? `${request.buyerName} collected ${request.productName}.`
+                : status === 'karma_pending'
+                  ? `You handed over ${request.productName}. Good Karma is now required from ${request.buyerName}.`
                 : `Awaiting collection from ${request.buyerName}. Collection details were sent to the buyer.`,
             };
           });
@@ -804,8 +1098,9 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
   const handleLogin = (mobile) => {
     const savedKarma = getKarmaLedger()[accountKey(mobile)];
     const nextAccountId = mobile;
-    setUser({
-      name: 'Unknown',
+    const nextUser = {
+      userId: nextAccountId,
+      name: 'Drizn User',
       mobile,
       karma: Number(savedKarma ?? 0),
       listed: 0,
@@ -815,16 +1110,24 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
       isBuyer: false,
       profileImage: '',
       location: locationEngine.location,
-    });
+    };
+    setUser(nextUser);
+    localStorage.setItem('zeromart-user', JSON.stringify(nextUser));
     setShowOtpModal(false);
     setNotice('Welcome! You can list for free and buy anything for ₹0 with a ₹29 yearly platform fee for buyer access.');
     requestPushAccessForAccount(nextAccountId);
   };
 
   const handleNav = (view) => {
+    if (showKarmaPopup && karmaTarget?.mandatory) {
+      setNotice('Good Karma is required before you continue.');
+      return;
+    }
     if (view === 'home') {
+      if (path !== '/') navigate('/');
       setActiveView('home');
       setSelectedNotification(null);
+      setSelectedItem(null);
       setNotice('');
       setItems(loadMarketplaceItems());
       requestAnimationFrame(() => window.scrollTo({ top: 0, behavior: 'auto' }));
@@ -850,13 +1153,25 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
   };
 
   const handleLogout = () => {
+    buyerAccessPendingRequestRef.current = null;
+    buyerAccessBypassRef.current = false;
     setUser(null);
+    setFavorites([]);
+    setOrderHistory([]);
+    setNotifications([]);
+    localStorage.removeItem('zeromart-user');
     setActiveView('home');
     setNotice('You are logged out. Sign up / Login to request items, list items, and keep your karma.');
   };
 
   const handleBack = () => {
+    if (showKarmaPopup && karmaTarget?.mandatory) {
+      setNotice('Good Karma is required before you continue.');
+      return;
+    }
+    if (path !== '/') navigate('/');
     setActiveView('home');
+    setSelectedNotification(null);
     setSelectedItem(null);
     setNotice('');
   };
@@ -865,19 +1180,34 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
     setHasSeenTour(true);
   };
 
-  const handleRequest = (itemId, requestDetails = null) => {
+  const handleRequest = async (itemId, requestDetails = null) => {
     const requestedItem = normalizeProductStock(items.find((item) => item.id === itemId) ?? selectedItem);
+    const requestDiagnostic = {
+      listingId: String(itemId || ''),
+      buyerAccountId: String(activeAccountId || ''),
+      sellerAccountId: String(requestedItem?.sellerId || requestedItem?.businessId || requestedItem?.ownerMobile || ''),
+      quantity: Number(requestDetails?.quantity || 1),
+      endpoint: '/api/listings/:id/reserve',
+    };
+    console.info('[request-submit] start', requestDiagnostic);
     const isOwnListing = isOwnedByActiveAccount(requestedItem);
     if (isOwnListing) {
+      setQuantityItem(null);
+      console.info('[request-submit] blocked own listing', requestDiagnostic);
       setNotice('This is your listing. You can edit or delete it, but you cannot purchase it.');
       return;
     }
     if (!activeBuyer) {
+      setQuantityItem(null);
+      console.info('[request-submit] blocked unauthenticated buyer', requestDiagnostic);
       setSelectedItem(items.find((item) => item.id === itemId) ?? null);
       requireLogin('request');
       return;
     }
-    if (!activeBuyer.isBuyer) {
+    if (!activeBuyer.isBuyer && !buyerAccessBypassRef.current) {
+      setQuantityItem(null);
+      console.info('[request-submit] blocked buyer access not unlocked', requestDiagnostic);
+      buyerAccessPendingRequestRef.current = { itemId, requestDetails };
       setShowBuyerPaySheet(true);
       return;
     }
@@ -887,14 +1217,78 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
     }
     const allowance = getQuantityAllowance(requestedItem, activeAccountId, requestDetails.quantity);
     if (allowance.allowedQuantity < 1) {
+      const message = allowance.requestableStock <= 0
+        ? 'This item is no longer available.'
+        : 'Request limit reached. Please try again later.';
+      console.info('[request-submit] blocked by allowance', {
+        ...requestDiagnostic,
+        requestableStock: allowance.requestableStock,
+        remainingLimit: allowance.remainingLimit,
+      });
+      setNotice(message);
       setQuantityItem(requestedItem);
-      return;
+      throw new Error(message);
     }
     const quantity = allowance.allowedQuantity;
+    const existingOpenRequest = getRequests().find((request) => (
+      String(request.productId) === String(itemId)
+      && accountKey(request.buyerId) === accountKey(activeAccountId)
+      && isRequestActiveForLock(request)
+    ));
+    if (existingOpenRequest) {
+      setQuantityItem(null);
+      console.info('[request-submit] blocked duplicate active request', {
+        ...requestDiagnostic,
+        existingRequestId: existingOpenRequest.requestId,
+      });
+      setNotice('You already have an active request for this item.');
+      const existingNotification = notifications.find((entry) => String(entry.requestId) === String(existingOpenRequest.requestId));
+      if (existingNotification) {
+        setActiveView('notifications');
+        setSelectedNotification(existingNotification);
+      }
+      return;
+    }
     const orderId = createOrderId();
+    try {
+      const reserveResult = await reserveListing(itemId, {
+        quantity,
+        requestId: orderId,
+        buyerAccountId: String(activeAccountId || ''),
+        buyerName: activeBuyer?.name || 'Buyer',
+        buyerPhone: activeBuyer?.mobile || '',
+        buyerLocation: formatShortAddress(locationEngine.location) || '',
+        sellerAccountId: String(requestedItem?.sellerId || requestedItem?.businessId || requestedItem?.ownerMobile || ''),
+      });
+      if (!reserveResult?.success) throw new Error(reserveResult?.error || 'reservation failed');
+      console.info('[request-submit] reserve success', {
+        ...requestDiagnostic,
+        requestId: orderId,
+        httpStatus: 200,
+      });
+      if (reserveResult?.listing) {
+        setItems((prev) => prev.map((item) => (
+          String(item.id) === String(reserveResult.listing.id)
+            ? normalizeProductStock({ ...item, ...reserveResult.listing })
+            : item
+        )));
+      }
+    } catch (error) {
+      console.warn('[request-submit] reserve failed', {
+        ...requestDiagnostic,
+        requestId: orderId,
+        safeError: error?.message || 'request failed',
+      });
+      setNotice(error?.message || 'This item is no longer available.');
+      throw error;
+    }
+
     const requestUrl = `${window.location.origin}/request/${encodeURIComponent(orderId)}`;
     const createdAtIso = new Date().toISOString();
     const createdAt = new Date().toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' });
+    const buyerDisplayName = String(activeBuyer?.name || '').trim().toLowerCase() === 'unknown'
+      ? (activeBuyer?.mobile ? `User ${String(activeBuyer.mobile).slice(-4)}` : 'Buyer')
+      : (activeBuyer?.name || 'Buyer');
     const historyEntry = {
       id: orderId,
       orderId,
@@ -910,7 +1304,7 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
       status: 'Pending seller approval',
       quantity,
       deliveryStatus: '',
-      buyerName: requestDetails?.buyerName || activeBuyer.name,
+      buyerName: requestDetails?.buyerName || buyerDisplayName,
       buyerPhone: requestDetails?.buyerPhone || activeBuyer.mobile,
       buyerAddress: requestDetails?.buyerAddress,
       buyerLocationData: requestDetails?.buyerLocationData || activeBuyer.location || locationEngine.location,
@@ -982,23 +1376,53 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
       body: requestNotification.body,
       dedupeKey: `new_request:${orderId}`,
       payload: {
+        buyerId: activeAccountId,
         buyerName: historyEntry.buyerName,
         buyerPhone: historyEntry.buyerPhone,
+        buyerLocation: requestRecord.buyerLocation,
+        sellerId: requestNotification.recipientId,
+        sellerName: historyEntry.sellerName,
+        sellerPhone: requestRecord.sellerPhone,
+        productName: historyEntry.title,
         quantity,
       },
     });
   };
 
-  const handleQuantityConfirm = ({ quantity, collectionWindow }) => {
+  const handleQuantityConfirm = async ({ quantity, collectionWindow }) => {
     const requestedItem = normalizeProductStock(quantityItem);
     if (!requestedItem?.isBusinessProduct) {
-      handleRequest(requestedItem.id, { quantity });
+      await handleRequest(requestedItem.id, { quantity });
       return;
     }
     const allowance = getQuantityAllowance(requestedItem, activeAccountId, quantity);
-    if (allowance.allowedQuantity < 1) return;
+    if (allowance.allowedQuantity < 1) {
+      const message = allowance.requestableStock <= 0
+        ? 'This item is no longer available.'
+        : 'Request limit reached. Please try again later.';
+      setNotice(message);
+      throw new Error(message);
+    }
     const reservedQuantity = allowance.allowedQuantity;
     const orderId = createOrderId();
+    try {
+      const reserveResult = await reserveListing(requestedItem.id, {
+        quantity: reservedQuantity,
+        requestId: orderId,
+      });
+      if (!reserveResult?.success) throw new Error(reserveResult?.error || 'reservation failed');
+      if (reserveResult?.listing) {
+        setItems((prev) => prev.map((item) => (
+          String(item.id) === String(reserveResult.listing.id)
+            ? normalizeProductStock({ ...item, ...reserveResult.listing })
+            : item
+        )));
+      }
+    } catch (error) {
+      setNotice(error?.message || 'This item is no longer available.');
+      throw error;
+    }
+
     const collectionCode = createCollectionCode();
     const reservedAt = new Date().toISOString();
     const reservationExpiresAt = new Date(Date.now() + 2 * 60 * 60 * 1000).toISOString();
@@ -1168,15 +1592,40 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
     setSelectedItem(item);
   };
 
-  const handleRequestDecision = (notification, decision, confirmation = {}) => {
+  const handleRequestDecision = async (notification, decision, confirmation = {}) => {
     const accepted = decision === 'accepted';
+    const persistedStatus = accepted ? 'awaiting_collection' : 'declined';
     const nextStatus = accepted ? 'Seller confirmed' : 'Request declined';
     const currentRequest = getRequests().find((request) => request.requestId === notification.requestId);
+    try {
+      await saveOrder({
+        id: notification.requestId,
+        orderId: notification.requestId,
+        requestId: notification.requestId,
+        listingId: notification.itemId,
+        productId: notification.itemId,
+        buyerId: notification.buyerId,
+        sellerId: notification.recipientId,
+        status: persistedStatus,
+        quantity: Number(currentRequest?.quantity || notification.quantity || 1),
+        productName: notification.productName || notification.title.replace('Request for ', ''),
+        buyerName: notification.buyerName,
+        sellerName: notification.sellerName,
+        sellerPhone: accepted ? (confirmation.sellerPhone || notification.sellerPhone || '') : '',
+        pickupAddress: confirmation.pickupAddress || '',
+        collectionDate: confirmation.collectionDate || '',
+        collectionTime: confirmation.collectionTime || '',
+        optionalMessage: confirmation.optionalMessage || '',
+      });
+    } catch (error) {
+      setNotice(error?.message || 'Could not update this request right now.');
+      return;
+    }
     saveRequests(getRequests().map((request) => (
       request.requestId === notification.requestId
         ? {
             ...request,
-            status: decision,
+          status: persistedStatus,
             collectionDate: confirmation.collectionDate || '',
             collectionTime: confirmation.collectionTime || '',
             pickupAddress: confirmation.pickupAddress || '',
@@ -1186,7 +1635,7 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
           }
         : request
     )));
-    updatePurchaseHistoryStatus(notification.requestId, decision);
+      updatePurchaseHistoryStatus(notification.requestId, persistedStatus);
     if (accepted) {
       const productName = notification.productName || notification.title.replace('Request for ', '');
       const sellerPhone = confirmation.sellerPhone || notification.sellerPhone || '';
@@ -1208,7 +1657,7 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
         sellerPhone,
         title: `${notification.sellerName} accepted your request`,
         body: `Accepted. Collect ${productName} on ${collectionSummary}. Phone, pickup address, and seller note are available here.`,
-        requestStatus: 'accepted',
+        requestStatus: 'awaiting_collection',
         collectionDate: confirmation.collectionDate || '',
         collectionTime: confirmation.collectionTime || '',
         pickupAddress: confirmation.pickupAddress || '',
@@ -1226,7 +1675,7 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
             ? {
                 ...entry,
                 read: true,
-                requestStatus: 'accepted',
+                requestStatus: 'awaiting_collection',
                 body: `Awaiting collection from ${notification.buyerName}. Collection details were sent to the buyer.`,
               }
             : entry
@@ -1260,7 +1709,7 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
         ? {
             ...current,
             read: true,
-            requestStatus: decision,
+            requestStatus: persistedStatus,
             body: accepted
               ? `Awaiting collection from ${notification.buyerName}. Collection details were sent to the buyer.`
               : 'Request declined by the seller.',
@@ -1293,8 +1742,16 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
         body: `Accepted. Collect ${notification.productName || 'the item'} on ${confirmation.collectionDate} at ${confirmation.collectionTime}.`,
         dedupeKey: `request_accepted:${notification.requestId}`,
         payload: {
+          buyerId: notification.buyerId,
+          buyerName: notification.buyerName,
+          sellerId: notification.recipientId,
+          sellerName: notification.sellerName,
+          productName: notification.productName || 'the item',
           sellerPhone: confirmation.sellerPhone || notification.sellerPhone || '',
           pickupAddress: confirmation.pickupAddress || '',
+          collectionDate: confirmation.collectionDate || '',
+          collectionTime: confirmation.collectionTime || '',
+          optionalMessage: confirmation.optionalMessage || '',
         },
       });
     } else {
@@ -1308,6 +1765,13 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
         title: 'Collection request declined',
         body: `${notification.sellerName} could not confirm your request for ${notification.productName || 'this item'}.`,
         dedupeKey: `request_declined:${notification.requestId}`,
+        payload: {
+          buyerId: notification.buyerId,
+          buyerName: notification.buyerName,
+          sellerId: notification.recipientId,
+          sellerName: notification.sellerName,
+          productName: notification.productName || 'this item',
+        },
       });
     }
   };
@@ -1344,7 +1808,7 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
     });
   };
 
-  const handleUpdateUser = (updates) => {
+  const handleUpdateUser = async (updates) => {
     if (!user) return;
     const currentUser = user;
     const nextUser = { ...currentUser, ...updates };
@@ -1383,6 +1847,39 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
       return nextFavorites;
     });
     setUser(nextUser);
+    try {
+      const remoteProfile = await updateProfile({
+        ...nextUser,
+        profileImage: nextUser.profileImage || '',
+        profile_image: nextUser.profileImage || '',
+      });
+      const metadata = remoteProfile?.metadata && typeof remoteProfile.metadata === 'object' ? remoteProfile.metadata : {};
+      const remoteImage = remoteProfile?.profile_image
+        || remoteProfile?.avatar_url
+        || metadata.profileImage
+        || metadata.avatarUrl
+        || nextUser.profileImage
+        || '';
+      const remoteName = remoteProfile?.name || remoteProfile?.display_name || metadata.displayName || nextUser.name;
+      setUser((current) => {
+        if (!current) return current;
+        const merged = {
+          ...current,
+          ...nextUser,
+          name: remoteName || current.name,
+          profileImage: remoteImage,
+        };
+        localStorage.setItem('zeromart-user', JSON.stringify(merged));
+        return merged;
+      });
+      invalidateListingCache();
+      const listings = await syncListingsFromBackend({ force: true }).catch(() => null);
+      if (Array.isArray(listings)) {
+        setItems(normalizeListingsForMarketplace(listings));
+      }
+    } catch {
+      // Non-blocking local save fallback.
+    }
     setNotice('Profile updated successfully');
     // clear transient profile update notice after a short time
     setTimeout(() => { setNotice(''); }, 4000);
@@ -1445,7 +1942,6 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
         setItems((prev) => prev.map((item) => (item.id === editingItem.id ? updatedItem : item)));
         setFavorites((prev) => prev.map((item) => (item.id === editingItem.id ? updatedItem : item)));
         setNotice('Your listing has been updated live.');
-        safeTriggerNearbyListingAlerts(updatedItem);
       } catch (err) {
         console.error('[listing-submit] submit failed reason', err);
         setNotice(isProductionRuntime ? 'Live listings are temporarily unavailable' : 'Updated locally. Live sync failed.');
@@ -1520,7 +2016,6 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
       console.log('[listing-submit] API response', saved);
       Object.assign(newItem, saved);
       setItems((prev) => prev.map((item) => (item.id === optimisticId || item.id === saved.id ? newItem : item)));
-      safeTriggerNearbyListingAlerts(newItem);
     } catch (err) {
       console.error('[listing-submit] submit failed reason', err);
       setItems((prev) => prev.filter((item) => String(item.id) !== String(optimisticId)));
@@ -1586,9 +2081,18 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
     setNotice('Your listing has been deleted.');
   };
 
-  const handleBuyerUnlockComplete = () => {
+  const handleBuyerUnlockComplete = async (paymentResult = {}) => {
+    const verification = paymentResult?.verification || {};
+    const buyerAccessExpiresAt = verification.buyerAccessExpiresAt || verification.accessExpiresAt || verification.buyer_access_expires_at || '';
+    const buyerAccessActivatedAt = verification.buyerAccessActivatedAt || verification.activatedAt || verification.buyer_access_activated_at || new Date().toISOString();
+
     if (businessSession) {
-      const nextBusinessSession = { ...businessSession, isBuyer: true };
+      const nextBusinessSession = {
+        ...businessSession,
+        isBuyer: true,
+        buyerAccessExpiresAt,
+        buyerAccessActivatedAt,
+      };
       setBusinessSession(nextBusinessSession);
       saveBusinessSession(nextBusinessSession);
       saveBusinessAccounts([
@@ -1596,13 +2100,30 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
         ...getBusinessAccounts().filter((account) => account.id !== nextBusinessSession.id),
       ]);
     } else {
-      setUser((prev) => (prev ? { ...prev, isBuyer: true } : prev));
+      setUser((prev) => (prev ? {
+        ...prev,
+        isBuyer: true,
+        buyerAccessExpiresAt,
+        buyerAccessActivatedAt,
+      } : prev));
     }
+
     setShowBuyerPaySheet(false);
-    setNotice('Yearly buyer access unlocked. You can request ₹0 items now.');
+    setNotice('Buyer access activated for 1 year.');
+
+    const pendingRequest = buyerAccessPendingRequestRef.current;
+    if (pendingRequest) {
+      buyerAccessPendingRequestRef.current = null;
+      buyerAccessBypassRef.current = true;
+      try {
+        await handleRequest(pendingRequest.itemId, pendingRequest.requestDetails);
+      } finally {
+        buyerAccessBypassRef.current = false;
+      }
+    }
   };
 
-  const handleKarmaSubmit = () => {
+  const handleKarmaSubmit = async (note = '') => {
     const currentKarmaTarget = karmaTarget;
     if (karmaTarget?.type === 'business') {
       const accounts = getBusinessAccounts();
@@ -1639,33 +2160,45 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
       return;
     }
     if (karmaTarget?.sellerId) {
-      const ledger = getKarmaLedger();
-      const key = accountKey(karmaTarget.sellerId);
-      const currentValue = Number(ledger[key] ?? karmaTarget.currentKarma ?? 0);
-      localStorage.setItem('zeromart-community-karma', JSON.stringify({ ...ledger, [key]: currentValue + 1 }));
-      saveRequests(getRequests().map((request) => (
-        request.requestId === karmaTarget.requestId ? { ...request, karmaGiven: true } : request
-      )));
+      setKarmaSubmitting(true);
+      setKarmaError('');
+      try {
+        const result = await awardCommunityKarma({
+          sellerId: karmaTarget.sellerId,
+          buyerId: activeAccountId,
+          buyerName: activeBuyer?.name || 'A buyer',
+          requestId: karmaTarget.requestId,
+          note,
+        });
+        if (result?.listings?.length) {
+          const updatedListings = result.listings.map(normalizeProductStock);
+          setItems((prev) => prev.map((item) => {
+            const match = updatedListings.find((entry) => String(entry.id) === String(item.id));
+            return match ? { ...item, ...match } : item;
+          }));
+        }
+        invalidateListingCache();
+        const latestListings = await syncListingsFromBackend({ force: true }).catch(() => null);
+        if (Array.isArray(latestListings)) {
+          setItems(normalizeListingsForMarketplace(latestListings));
+        }
+        saveRequests(getRequests().map((request) => (
+          request.requestId === karmaTarget.requestId
+            ? { ...request, status: 'completed', karmaGiven: true }
+            : request
+        )));
+        completePendingKarmaAction(karmaTarget?.pendingActionId || `community:${karmaTarget?.requestId}`);
+        setShowKarmaPopup(false);
+        setKarmaTarget(null);
+        setNotice(`Good karma sent to ${karmaTarget?.name || 'the seller'}.`);
+      } catch (error) {
+        setKarmaError(error?.message || 'Good Karma could not be submitted. Please retry.');
+        setKarmaSubmitting(false);
+        return;
+      }
+      setKarmaSubmitting(false);
+      return;
     }
-    completePendingKarmaAction(karmaTarget?.pendingActionId || `community:${karmaTarget?.requestId}`);
-    setItems((prev) => prev.map((item) => (
-      item.sellerName === karmaTarget?.name
-        ? { ...item, sellerKarma: Number(item.sellerKarma || 0) + 1 }
-        : item
-    )));
-    localStorage.removeItem('zeromart-pending-community-karma');
-    setShowKarmaPopup(false);
-    setKarmaTarget(null);
-    setNotice(`Good karma sent to ${karmaTarget?.name || 'the seller'}.`);
-    safeEmitNotificationEvent({
-      eventType: 'karma_received',
-      recipientAccountId: currentKarmaTarget?.sellerId,
-      actorAccountId: activeAccountId,
-      requestId: currentKarmaTarget?.requestId,
-      title: 'You received Good Karma',
-      body: `${activeBuyer?.name || 'A buyer'} sent you Good Karma.`,
-      dedupeKey: `karma_received:community:${currentKarmaTarget?.requestId}:${activeAccountId}`,
-    });
   };
 
   const finishCompletedHandoff = (result, target) => {
@@ -1677,6 +2210,7 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
       buyerId: result.request?.buyerId,
       sellerId: result.request?.sellerId,
       requestId: target.requestId,
+      itemId: target.itemId,
       mandatory: true,
     };
     savePendingKarmaAction(pendingKarma);
@@ -1766,47 +2300,33 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
   };
 
   const handleSellerHandover = (notification) => {
-    const result = confirmHandoff(notification.requestId, 'seller');
-    if (!result.request) {
-      setNotice('This collection request could not be found.');
-      return;
-    }
-    if (result.alreadyCompleted) {
-      setNotice('This handover is already completed.');
-      setSelectedNotification(null);
-      return;
-    }
-    commitNotifications((current) => current.map((entry) => (
-      entry.requestId === notification.requestId
-        ? {
-            ...entry,
-            sellerGave: true,
-            requestStatus: result.completed ? 'completed' : 'accepted',
-            body: result.completed
-              ? `${result.request.buyerName} collected ${result.request.productName}. Status: Completed.`
-              : entry.type === 'request'
-                ? `You handed over ${result.request.productName}. Waiting for ${result.request.buyerName} to confirm collection.`
-                : `${result.request.sellerName} marked ${result.request.productName} as handed over. Confirm after you collect it.`,
-          }
-        : entry
-    )));
-    if (!result.completed) {
-      setNotice('Handover confirmed. Waiting for the buyer to mark the item as collected.');
-      setSelectedNotification(null);
-      return;
-    }
-    const item = items.find((entry) => entry.id === notification.itemId);
-    finishCompletedHandoff(result, {
-      requestId: notification.requestId,
-      itemId: notification.itemId,
-      karmaRecipient: {
-        name: item?.sellerName || notification.sellerName,
-        initials: (item?.sellerName || notification.sellerName || 'Seller').split(' ').map((word) => word[0]).join('').slice(0, 2).toUpperCase(),
-        type: 'user',
-        currentKarma: Number(item?.sellerKarma || 0),
-      },
-    });
-    setSelectedNotification(null);
+    markRequestHandover(notification.requestId, { actorAccountId: activeAccountId })
+      .then((result) => {
+        const pendingAction = result?.pendingAction || null;
+        if (pendingAction) savePendingKarmaAction(pendingAction);
+        saveRequests(getRequests().map((request) => (
+          request.requestId === notification.requestId
+            ? { ...request, status: 'karma_pending', sellerGave: true }
+            : request
+        )));
+        commitNotifications((current) => current.map((entry) => (
+          entry.requestId === notification.requestId
+            ? {
+                ...entry,
+                sellerGave: true,
+                requestStatus: 'karma_pending',
+                body: `You handed over ${notification.productName || 'the item'}. Good Karma is now required from ${notification.buyerName || 'the buyer'}.`,
+              }
+            : entry
+        )));
+        setNotice(result?.code === 'HANDOVER_ALREADY_RECORDED'
+          ? 'This handover was already recorded.'
+          : 'Handover confirmed. The buyer must now send mandatory Good Karma.');
+        setSelectedNotification(null);
+      })
+      .catch((error) => {
+        setNotice(error?.message || 'Could not record handover right now.');
+      });
   };
 
   const handleNotificationOpen = (notification) => {
@@ -1814,6 +2334,8 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
     const openPathFromPayload = typeof notification?.payload?.openPath === 'string'
       ? notification.payload.openPath
       : '';
+    const [, openPathQuery = ''] = String(openPathFromPayload || '').split('?');
+    const actionFromPath = String(new URLSearchParams(openPathQuery || '').get('action') || '').toLowerCase();
     const itemIdFromPayload = notification.itemId || notification.listingId || notification.payload?.listingId;
     const requestIdFromPayload = notification.requestId || notification.payload?.requestId;
     const orderIdFromPayload = notification.orderId || notification.payload?.orderId;
@@ -1838,6 +2360,10 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
     if (['request', 'requestAccepted', 'requestDeclined', 'businessOrderUpdate', 'businessOrderReceived', 'karma_required', 'karma_received', 'nearby_listing'].includes(notification.type) && targetItem) {
       if (targetItem) {
         setSelectedItem(targetItem);
+        if ((actionFromPath === 'request' && !targetItem.isBusinessProduct) || (actionFromPath === 'reserve' && targetItem.isBusinessProduct)) {
+          const requestState = getProductRequestState(targetItem, activeAccountId, requestClock);
+          if (requestState.canRequest) setQuantityItem(targetItem);
+        }
         setSelectedNotification(notification);
         return;
       }
@@ -1878,11 +2404,25 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
     if (!item) return null;
     const coordinates = getItemCoordinates(item);
     const distanceKm = coordinates && currentCoordinates ? haversineKm(currentCoordinates, coordinates) : item.distanceKm ?? null;
+    const baseRequestState = getProductRequestState(item, activeAccountId, requestClock);
+    const hasActiveRequest = Boolean(activeAccountId) && getRequests().some((request) => (
+      String(request.productId) === String(item.id)
+      && accountKey(request.buyerId) === accountKey(activeAccountId)
+      && isRequestActiveForLock(request)
+    ));
+    const requestState = hasActiveRequest
+      ? {
+          ...baseRequestState,
+          canRequest: false,
+          buttonLabel: 'Request in progress',
+          stockLabel: baseRequestState.soldOut ? baseRequestState.stockLabel : 'Request in progress',
+        }
+      : baseRequestState;
     return {
       ...item,
       distanceKm,
       distance: distanceKm === null ? item.distance : formatDistance(distanceKm),
-      requestState: getProductRequestState(item, activeAccountId, requestClock),
+      requestState,
     };
   }, [activeAccountId, currentCoordinates, items, requestClock, selectedItem]);
   const visibleNotifications = useMemo(() => {
@@ -1893,15 +2433,23 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
       if (notification.type !== 'request' || !notification.requestId) return notification;
       const request = requestsById.get(notification.requestId);
       if (!request || request.status === notification.requestStatus) return notification;
-      if (request.status === 'accepted') {
+      if (['accepted', 'awaiting_collection', 'confirmed'].includes(request.status)) {
         return {
           ...notification,
-          requestStatus: 'accepted',
+          requestStatus: 'awaiting_collection',
           sellerGave: Boolean(request.sellerGave),
           buyerCollected: Boolean(request.buyerCollected),
           body: request.sellerGave
             ? `You handed over ${request.productName}. Waiting for ${request.buyerName} to confirm collection.`
             : `Awaiting collection from ${request.buyerName}. Collection details were sent to the buyer.`,
+        };
+      }
+      if (['handed_over', 'karma_pending'].includes(request.status)) {
+        return {
+          ...notification,
+          requestStatus: 'karma_pending',
+          sellerGave: true,
+          body: `You handed over ${request.productName}. Good Karma is now required from ${request.buyerName}.`,
         };
       }
       if (request.status === 'completed') {
@@ -1944,15 +2492,31 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
     return catalogItems.map(normalizeProductStock).filter(isMarketplaceVisible).map((item) => {
       const itemCoordinates = getItemCoordinates(item);
       const distanceFromActive = activeLocation && itemCoordinates ? haversineKm(activeLocation, itemCoordinates) : null;
-      const requestState = getProductRequestState(item, activeAccountId, requestClock);
+      const baseRequestState = getProductRequestState(item, activeAccountId, requestClock);
+      const hasActiveRequest = Boolean(activeAccountId) && getRequests().some((request) => (
+        String(request.productId) === String(item.id)
+        && accountKey(request.buyerId) === accountKey(activeAccountId)
+        && isRequestActiveForLock(request)
+      ));
+      const requestState = hasActiveRequest
+        ? {
+            ...baseRequestState,
+            canRequest: false,
+            buttonLabel: 'Request in progress',
+            stockLabel: baseRequestState.soldOut ? baseRequestState.stockLabel : 'Request in progress',
+          }
+        : baseRequestState;
       const expiryBadge = getExpiryBadgeState(item, requestClock);
       const nearExpiry = expiryBadge.nearExpiry
         && Number(requestState?.requestableStock ?? item.availableQuantity ?? 0) > 0;
+      const requestableStock = Number(requestState?.requestableStock ?? item.availableQuantity ?? 0);
+      const isSoldOut = requestableStock <= 0 || String(item.status || '').toLowerCase().includes('sold');
       return {
         ...item,
         distanceKm: distanceFromActive,
         distance: distanceFromActive === null ? item.distance : formatDistance(distanceFromActive),
         requestState,
+        isSoldOut,
         expiryBadge,
         nearExpiry,
         rescueBadge: nearExpiry ? expiryBadge.rescueLabel : '',
@@ -1982,6 +2546,7 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
       const matchesCondition = conditionFilter === 'All' || item.condition === conditionFilter;
       return matchesQuery && matchesCategory && matchesCondition;
     }).sort((first, second) => {
+      if (first.isSoldOut !== second.isSoldOut) return first.isSoldOut ? 1 : -1;
       const firstDistance = first.distanceKm ?? Number.POSITIVE_INFINITY;
       const secondDistance = second.distanceKm ?? Number.POSITIVE_INFINITY;
       if (firstDistance !== secondDistance) return firstDistance - secondDistance;
@@ -2091,13 +2656,15 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
     const profileMap = new Map();
     leaderboardItems.forEach((item) => {
       const name = item.sellerName || item.brand || 'Drizn giver';
+      const sellerId = String(item.sellerProfile?.id || item.sellerId || item.businessId || '').trim();
+      const sellerKey = sellerId || `name:${name.toLowerCase()}`;
       const itemCoordinates = getItemCoordinates(item);
       const itemDistanceKm = localCoordinates && itemCoordinates
         ? haversineKm(localCoordinates, itemCoordinates)
         : Number.POSITIVE_INFINITY;
-      const existing = profileMap.get(name) || {
+      const existing = profileMap.get(sellerKey) || {
         name,
-        sellerId: String(item.sellerProfile?.id || item.sellerId || item.businessId || ''),
+        sellerId,
         initials: item.sellerInitials || item.sellerProfile?.initials || name.split(' ').map((part) => part[0]).join('').slice(0, 2).toUpperCase(),
         karma: 0,
         listings: 0,
@@ -2110,11 +2677,11 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
         joinedAt: item.sellerProfile?.joinedAt || '',
         bio: item.sellerProfile?.bio || '',
         verified: Boolean(item.sellerProfile?.verified || item.sellerType === 'business' || item.isBusinessProduct),
-        image: item.sellerProfileImage || (user?.name === name ? user.profileImage : ''),
+        image: item.sellerProfile?.avatarUrl || item.sellerProfileImage || item.avatarUrl || (user?.name === name ? user.profileImage : ''),
       };
-      profileMap.set(name, {
+      profileMap.set(sellerKey, {
         ...existing,
-        sellerId: existing.sellerId || String(item.sellerProfile?.id || item.sellerId || item.businessId || ''),
+        sellerId: existing.sellerId || sellerId,
         initials: existing.initials || item.sellerInitials || item.sellerProfile?.initials || '',
         karma: Math.max(existing.karma, item.sellerKarma || 0),
         listings: existing.listings + 1,
@@ -2127,7 +2694,7 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
         joinedAt: existing.joinedAt || item.sellerProfile?.joinedAt || '',
         bio: existing.bio || item.sellerProfile?.bio || '',
         verified: existing.verified || Boolean(item.sellerProfile?.verified || item.sellerType === 'business' || item.isBusinessProduct),
-        image: existing.image || item.sellerProfileImage || (user?.name === name ? user.profileImage : ''),
+        image: existing.image || item.sellerProfile?.avatarUrl || item.sellerProfileImage || item.avatarUrl || (user?.name === name ? user.profileImage : ''),
       });
     });
     if (user) {
@@ -2145,19 +2712,21 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
           || (userDistanceKm !== null && userDistanceKm <= fallbackRadius);
       if (!userIsLocal) {
         return [...profileMap.values()].sort((a, b) => (
-          a.distanceKm - b.distanceKm
-          || b.karma - a.karma
+          b.karma - a.karma
+          || a.distanceKm - b.distanceKm
           || b.completed - a.completed
         )).slice(0, 5);
       }
-      const existing = profileMap.get(user.name) || {
+      const userSellerId = accountKey(user.userId || user.id || user.mobile);
+      const userKey = userSellerId || `name:${String(user.name || '').toLowerCase()}`;
+      const existing = profileMap.get(userKey) || {
         sellerId: String(user.userId || user.id || ''),
         name: user.name, karma: 0, listings: 0, completed: 0,
         initials: user.initials || user.name?.split(' ').map((part) => part[0]).join('').slice(0, 2).toUpperCase() || 'DU',
         distanceKm: userDistanceKm ?? Number.POSITIVE_INFINITY,
         location: locationLabel, image: user.profileImage,
       };
-      profileMap.set(user.name, {
+      profileMap.set(userKey, {
         ...existing,
         karma: Math.max(existing.karma, user.karma || 0),
         location: existing.location || locationLabel,
@@ -2165,8 +2734,8 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
       });
     }
     return [...profileMap.values()].sort((a, b) => (
-      a.distanceKm - b.distanceKm
-      || b.karma - a.karma
+      b.karma - a.karma
+      || a.distanceKm - b.distanceKm
       || b.completed - a.completed
     )).slice(0, 5);
   }, [debouncedCoordinates, items, leaderboardScope, locationEngine.location, locationLabel, radiusKm, user]);
@@ -2936,7 +3505,19 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
           else handleNav('profile');
         }}
       />
-      <KarmaPopup open={showKarmaPopup} seller={karmaTarget} onSubmit={handleKarmaSubmit} mandatory={Boolean(karmaTarget?.mandatory)} />
+      <KarmaPopup
+        open={showKarmaPopup}
+        seller={karmaTarget}
+        onSubmit={handleKarmaSubmit}
+        onDismiss={() => {
+          if (karmaTarget?.mandatory) return;
+          setShowKarmaPopup(false);
+          setKarmaTarget(null);
+        }}
+        mandatory={Boolean(karmaTarget?.mandatory)}
+        submitting={karmaSubmitting}
+        error={karmaError}
+      />
       <BotAssistant
         open={showBotAssistant}
         onClose={() => setShowBotAssistant(false)}

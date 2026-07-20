@@ -170,8 +170,9 @@ export const applyProductExpiry = (products, now = Date.now()) => (
 
 export const isMarketplaceVisible = (product) => {
   const normalized = normalizeProductStock(product);
+  const hiddenStatuses = ['expired', 'hidden', 'removed', 'inactive', 'deleted', 'cancelled', 'canceled'];
   return !isProductExpired(normalized)
-    && !['expired', 'hidden'].includes(normalized.status);
+    && !hiddenStatuses.includes(String(normalized.status || '').toLowerCase());
 };
 
 export const formatExpiry = (product, now = new Date()) => {
@@ -397,6 +398,8 @@ export const saveRequests = (requests) => write(STORAGE_KEYS.requests, requests)
 export const getReservations = () => read(STORAGE_KEYS.orders);
 export const saveReservations = (orders) => write(STORAGE_KEYS.orders, orders);
 
+const accountKey = (value) => String(value || '').replace(/\D/g, '') || String(value || '');
+
 export const expireReservations = (now = Date.now()) => {
   const expired = [];
   const next = getReservations().map((reservation) => {
@@ -412,7 +415,7 @@ export const expireReservations = (now = Date.now()) => {
 export const getUserQuantityInLast24Hours = (productId, buyerId, history = getPurchaseHistory(), now = Date.now()) => (
   history.filter((entry) => (
     String(entry.productId) === String(productId)
-    && String(entry.userId || entry.buyerId) === String(buyerId)
+    && accountKey(entry.userId || entry.buyerId) === accountKey(buyerId)
     && new Date(entry.expiresAt || 0).getTime() > now
     && !['declined', 'cancelled', 'expired', 'no-show'].includes(entry.status)
   )).reduce((total, entry) => total + Number(entry.quantity || 0), 0)
@@ -430,7 +433,7 @@ export const getQuantityAllowance = (product, buyerId, requestedQuantity = 1, no
   const allowedQuantity = Math.min(Number(requestedQuantity || 1), remainingLimit, requestableStock);
   const activeEntries = history.filter((entry) => (
     String(entry.productId) === String(normalized.id)
-    && String(entry.userId || entry.buyerId) === String(buyerId)
+    && accountKey(entry.userId || entry.buyerId) === accountKey(buyerId)
     && new Date(entry.expiresAt || 0).getTime() > now
     && !['declined', 'cancelled', 'expired', 'no-show'].includes(entry.status)
   )).sort((a, b) => new Date(a.expiresAt) - new Date(b.expiresAt));
@@ -463,7 +466,9 @@ export const getProductRequestState = (product, buyerId, now = Date.now()) => {
   const normalized = normalizeProductStock(product);
   const allowance = getQuantityAllowance(normalized, buyerId, 1, now);
   const expired = isProductExpired(normalized, now);
-  const soldOut = allowance.requestableStock <= 0;
+  const normalizedStatus = String(normalized.status || '').toLowerCase();
+  const unavailableStatus = ['sold_out', 'sold-out', 'completed', 'removed', 'inactive', 'hidden', 'deleted'];
+  const soldOut = allowance.requestableStock <= 0 || unavailableStatus.includes(normalizedStatus);
   const limitReached = Boolean(buyerId) && !expired && !soldOut && allowance.remainingLimit <= 0;
   return {
     ...allowance,

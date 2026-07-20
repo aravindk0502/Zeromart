@@ -43,10 +43,26 @@ export default function BusinessAuthModal({ open = true, onClose, onSuccess, emb
     const accounts = getBusinessAccounts();
     let account = accounts.find((entry) => entry.mobile === form.mobile);
     if (mode === 'signup') {
-      account = { id: account?.id || `business-${Date.now()}`, ...form, karma: account?.karma || 0, verified: true, createdAt: account?.createdAt || new Date().toISOString() };
+      account = { id: account?.id || `business-${Date.now()}`, profileId: account?.profileId || account?.id || `business-${Date.now()}`, ...form, karma: account?.karma || 0, verified: true, createdAt: account?.createdAt || new Date().toISOString(), profileImage: account?.profileImage || '', avatarUrl: account?.avatarUrl || '' };
       saveBusinessAccounts([account, ...accounts.filter((entry) => entry.mobile !== form.mobile)]);
     }
-    saveBusinessSession(account);
+    const nextAccount = {
+      ...account,
+      userId: account?.userId || account?.id || account?.mobile,
+      profileId: account?.profileId || account?.id || account?.mobile,
+      profileImage: account?.profileImage || account?.avatarUrl || '',
+      avatarUrl: account?.avatarUrl || account?.profileImage || '',
+    };
+    saveBusinessSession(nextAccount);
+    localStorage.setItem('zeromart-user', JSON.stringify({
+      ...nextAccount,
+      isBusinessAccount: true,
+      businessId: nextAccount.id,
+      userId: nextAccount.userId,
+      profileId: nextAccount.profileId,
+      name: nextAccount.businessName || nextAccount.ownerName || 'Business Store',
+      profileImage: nextAccount.profileImage || nextAccount.avatarUrl || '',
+    }));
     onSuccess?.(account);
   };
 
