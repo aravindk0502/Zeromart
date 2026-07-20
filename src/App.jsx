@@ -3380,7 +3380,10 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
           onClose={() => setSelectedItem(null)}
           onRequest={handleRequest}
           onRequireLogin={() => requireLogin('request')}
-          onRequireBuyerAccess={() => setShowBuyerPaySheet(true)}
+          onRequireBuyerAccess={(itemId) => {
+            buyerAccessPendingRequestRef.current = { itemId, requestDetails: null };
+            setShowBuyerPaySheet(true);
+          }}
           onEdit={handleEditListing}
           onDelete={handleDeleteListing}
           user={activeBuyer}
