@@ -12,6 +12,7 @@ const normalizeApiBase = (value = '') => {
 const BASE = normalizeApiBase(import.meta.env.VITE_API_URL);
 const IS_PRODUCTION = import.meta.env.PROD;
 const PROD_API_FALLBACK = 'https://drizn.com';
+const PROD_PAYMENT_API_FALLBACK = 'https://web-production-74e61.up.railway.app';
 const BUYER_ACCESS_CREATE_ORDER_TIMEOUT_MS = 15000;
 
 const apiUrl = (path, base = BASE) => `${String(base || '').replace(/\/$/, '')}${path}`;
@@ -51,15 +52,34 @@ const getCandidateBases = () => {
   return [...new Set(bases.map((value) => String(value || '').replace(/\/$/, '')).filter(Boolean))];
 };
 
+const getBuyerAccessBases = () => {
+  const bases = [];
+  const currentOrigin = typeof window !== 'undefined' && window.location?.origin
+    ? window.location.origin
+    : '';
+
+  if (IS_PRODUCTION) {
+    bases.push(PROD_PAYMENT_API_FALLBACK);
+    if (BASE) bases.push(BASE);
+    if (currentOrigin) bases.push(currentOrigin);
+    return [...new Set(bases.map((value) => String(value || '').replace(/\/$/, '')).filter(Boolean))];
+  }
+
+  if (BASE) bases.push(BASE);
+  if (currentOrigin) bases.push(currentOrigin);
+  return [...new Set(bases.map((value) => String(value || '').replace(/\/$/, '')).filter(Boolean))];
+};
+
 async function requestJson(path, options = {}) {
   const {
     method = 'GET',
     body,
     auth = false,
     headers = {},
+    baseOverride = '',
   } = options;
 
-  const bases = getCandidateBases();
+  const bases = baseOverride ? [baseOverride] : getCandidateBases();
   let lastError = null;
   const isGet = String(method).toUpperCase() === 'GET';
 
@@ -225,7 +245,7 @@ export async function createBuyerAccessOrder(amount = 2900) {
     amount,
     planCode: 'buyer_access_annual_29',
   };
-  const bases = getCandidateBases();
+  const bases = getBuyerAccessBases();
   let lastError = null;
 
   for (const base of bases) {
@@ -295,8 +315,37 @@ export async function createBuyerAccessOrder(amount = 2900) {
 
   throw lastError || new Error('Create-order request failed.');
 }
-export const verifyBuyerAccessPayment = (payload) => post('/api/payments/verify', payload, true);
-export const fetchBuyerAccessStatus = () => get('/api/payments/status');
+export async function verifyBuyerAccessPayment(payload) {
+  const path = '/api/payments/verify';
+  let lastError = null;
+
+  for (const base of getBuyerAccessBases()) {
+    try {
+      const data = await requestJson(path, { method: 'POST', body: payload, auth: true, headers: {}, baseOverride: base });
+      return data;
+    } catch (error) {
+      lastError = error;
+    }
+  }
+
+  throw lastError || new Error('Payment verification failed.');
+}
+
+export async function fetchBuyerAccessStatus() {
+  const path = '/api/payments/status';
+  let lastError = null;
+
+  for (const base of getBuyerAccessBases()) {
+    try {
+      const data = await requestJson(path, { method: 'GET', auth: true, baseOverride: base });
+      return data;
+    } catch (error) {
+      lastError = error;
+    }
+  }
+
+  throw lastError || new Error('Could not fetch buyer access status.');
+}
 
 // Backwards-compatible aliases for older call sites.
 export const createRazorpayOrder = createBuyerAccessOrder;
