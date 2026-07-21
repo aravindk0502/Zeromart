@@ -343,12 +343,15 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
   const [showBotAssistant, setShowBotAssistant] = useState(false);
   const [showBusinessAuth, setShowBusinessAuth] = useState(false);
   const [karmaTarget, setKarmaTarget] = useState(null);
+  const [karmaReceivedToast, setKarmaReceivedToast] = useState(null);
+  const [karmaReceivedQueue, setKarmaReceivedQueue] = useState([]);
   const [selectedNotification, setSelectedNotification] = useState(null);
   const [notifications, setNotifications] = useState(loadNotifications);
   const [leaderboardRoster, setLeaderboardRoster] = useState(loadLeaderboardRoster);
   const skipTransactionPersistRef = useRef(false);
   const buyerAccessPendingRequestRef = useRef(null);
   const buyerAccessBypassRef = useRef(false);
+  const seenKarmaReceivedPopupRef = useRef(new Set());
   const [requestClock, setRequestClock] = useState(Date.now());
   const [hasSeenTour, setHasSeenTour] = useState(() => {
     if (typeof window === 'undefined') return false;
@@ -2613,6 +2616,56 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
       return { ...notification, requestStatus: request.status };
     });
   }, [activeAccountId, notifications]);
+
+  useEffect(() => {
+    if (!activeAccountId) return;
+
+    const nextEvents = [...visibleNotifications]
+      .filter((entry) => entry.type === 'karma_received')
+      .sort((first, second) => {
+        const firstTime = new Date(first.createdAt || first.time || 0).getTime();
+        const secondTime = new Date(second.createdAt || second.time || 0).getTime();
+        return firstTime - secondTime;
+      });
+
+    if (!nextEvents.length) return;
+
+    setKarmaReceivedQueue((currentQueue) => {
+      const queuedIds = new Set(currentQueue.map((entry) => String(entry.id)));
+      const activeId = karmaReceivedToast?.id ? String(karmaReceivedToast.id) : '';
+      const additions = [];
+
+      nextEvents.forEach((entry) => {
+        const popupId = String(entry.id || `${entry.requestId || ''}:${entry.orderId || ''}:${entry.recipientId || ''}`);
+        if (!popupId) return;
+        if (seenKarmaReceivedPopupRef.current.has(popupId)) return;
+        if (queuedIds.has(popupId) || (activeId && activeId === popupId)) return;
+
+        seenKarmaReceivedPopupRef.current.add(popupId);
+        additions.push({
+          id: popupId,
+          buyerName: entry.buyerName || entry.payload?.buyerName || 'Buyer',
+          buyerLocation: entry.buyerLocation || entry.payload?.buyerLocation || 'nearby',
+        });
+      });
+
+      return additions.length ? [...currentQueue, ...additions] : currentQueue;
+    });
+  }, [activeAccountId, karmaReceivedToast?.id, visibleNotifications]);
+
+  useEffect(() => {
+    if (karmaReceivedToast || !karmaReceivedQueue.length) return;
+    const [nextToast, ...remaining] = karmaReceivedQueue;
+    setKarmaReceivedToast(nextToast);
+    setKarmaReceivedQueue(remaining);
+  }, [karmaReceivedQueue, karmaReceivedToast]);
+
+  useEffect(() => {
+    if (!karmaReceivedToast) return undefined;
+    const timer = window.setTimeout(() => setKarmaReceivedToast(null), 10000);
+    return () => window.clearTimeout(timer);
+  }, [karmaReceivedToast]);
+
   const visibleOrderHistory = useMemo(() => (
     activeAccountId
       ? orderHistory.filter((order) => !order.buyerId || accountKey(order.buyerId) === accountKey(activeAccountId))

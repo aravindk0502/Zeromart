@@ -63,6 +63,7 @@ export default function BusinessPortal({ path, navigate }) {
   const [inventoryMode, setInventoryMode] = useState('manual');
   const [helpToast, setHelpToast] = useState(null);
   const [karmaReceivedToast, setKarmaReceivedToast] = useState(null);
+  const [karmaReceivedQueue, setKarmaReceivedQueue] = useState([]);
   const [liveSyncError, setLiveSyncError] = useState('');
   const helpTimer = useRef(null);
   const lastHelp = useRef({ message: '', time: 0 });
@@ -131,23 +132,35 @@ export default function BusinessPortal({ path, navigate }) {
         notifications = [];
       }
 
-      const latest = [...notifications]
+      const eligible = [...notifications]
         .filter((entry) => entry && entry.type === 'karma_received' && matchesRecipient(entry))
         .sort((first, second) => {
           const firstTime = new Date(first.createdAt || first.time || 0).getTime();
           const secondTime = new Date(second.createdAt || second.time || 0).getTime();
-          return secondTime - firstTime;
-        })[0];
+          return firstTime - secondTime;
+        });
 
-      if (!latest) return;
-      const popupId = String(latest.id || `${latest.requestId || ''}:${latest.orderId || ''}:${latest.recipientId || ''}`);
-      if (seenKarmaToastIdsRef.current.has(popupId)) return;
-      seenKarmaToastIdsRef.current.add(popupId);
+      if (!eligible.length) return;
 
-      setKarmaReceivedToast({
-        id: popupId,
-        buyerName: latest.buyerName || latest.payload?.buyerName || 'Buyer',
-        buyerLocation: latest.buyerLocation || latest.payload?.buyerLocation || 'nearby',
+      setKarmaReceivedQueue((currentQueue) => {
+        const queuedIds = new Set(currentQueue.map((entry) => String(entry.id)));
+        const activeId = karmaReceivedToast?.id ? String(karmaReceivedToast.id) : '';
+        const additions = [];
+
+        eligible.forEach((entry) => {
+          const popupId = String(entry.id || `${entry.requestId || ''}:${entry.orderId || ''}:${entry.recipientId || ''}`);
+          if (!popupId) return;
+          if (seenKarmaToastIdsRef.current.has(popupId)) return;
+          if (queuedIds.has(popupId) || (activeId && activeId === popupId)) return;
+          seenKarmaToastIdsRef.current.add(popupId);
+          additions.push({
+            id: popupId,
+            buyerName: entry.buyerName || entry.payload?.buyerName || 'Buyer',
+            buyerLocation: entry.buyerLocation || entry.payload?.buyerLocation || 'nearby',
+          });
+        });
+
+        return additions.length ? [...currentQueue, ...additions] : currentQueue;
       });
     };
 
@@ -161,7 +174,14 @@ export default function BusinessPortal({ path, navigate }) {
       window.removeEventListener('storage', maybeShowKarmaToast);
       window.removeEventListener('zeromart-transactions-change', maybeShowKarmaToast);
     };
-  }, [account]);
+  }, [account, karmaReceivedToast?.id]);
+
+  useEffect(() => {
+    if (karmaReceivedToast || !karmaReceivedQueue.length) return;
+    const [nextToast, ...remaining] = karmaReceivedQueue;
+    setKarmaReceivedToast(nextToast);
+    setKarmaReceivedQueue(remaining);
+  }, [karmaReceivedQueue, karmaReceivedToast]);
 
   useEffect(() => {
     if (!karmaReceivedToast) return undefined;
