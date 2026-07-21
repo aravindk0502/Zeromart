@@ -4,6 +4,7 @@ import { useLocationEngine } from '../hooks/useLocationEngine';
 import LocationMap from '../components/LocationMap';
 import OrderTrackingModal from '../components/OrderTrackingModal';
 import CollectionPass, { getCollectionPassState } from '../components/CollectionPass';
+import PhoneChangeModal from '../components/PhoneChangeModal';
 
 const resizeProfileImage = (file) => new Promise((resolve, reject) => {
   const reader = new FileReader();
@@ -51,6 +52,7 @@ export default function ProfilePage({ user, items = [], orders = [], receivedOrd
   const [isEditingProfile, setIsEditingProfile] = useState(false);
   const [profileError, setProfileError] = useState('');
   const [profileDraft, setProfileDraft] = useState(buildProfileDraft(user));
+  const [showPhoneChangeModal, setShowPhoneChangeModal] = useState(false);
 
   useEffect(() => {
     if (locationEngine.location) onUpdateUser?.({ location: locationEngine.location });
@@ -80,7 +82,7 @@ export default function ProfilePage({ user, items = [], orders = [], receivedOrd
 
   const handleSaveProfile = () => {
     const name = profileDraft.name.trim() || 'Unknown';
-    const mobile = profileDraft.mobile.replace(/\D/g, '').slice(-10);
+    const mobile = String(user?.mobile || '').replace(/\D/g, '').slice(-10);
     const bio = profileDraft.bio.trim().slice(0, 180);
     const locationLink = profileDraft.locationLink.trim();
     const websiteLink = profileDraft.websiteLink.trim();
@@ -104,6 +106,15 @@ export default function ProfilePage({ user, items = [], orders = [], receivedOrd
     } catch (error) {
       setProfileError(error?.message || 'Could not save profile. Please try again.');
     }
+  };
+
+  const handlePhoneChanged = (result) => {
+    const nextMobile = String(result?.user?.phone || '').replace(/\D/g, '').slice(-10);
+    if (nextMobile) {
+      onUpdateUser?.({ mobile: nextMobile });
+      setProfileDraft((current) => ({ ...current, mobile: nextMobile }));
+    }
+    setShowPhoneChangeModal(false);
   };
 
   if (!user) {
@@ -282,14 +293,16 @@ export default function ProfilePage({ user, items = [], orders = [], receivedOrd
               </label>
               <label className="block">
                 <span className="text-xs font-bold uppercase tracking-[0.12em] text-slate-500">Mobile number</span>
-                <input
-                  type="tel"
-                  inputMode="numeric"
-                  value={profileDraft.mobile}
-                  onChange={(event) => setProfileDraft((current) => ({ ...current, mobile: event.target.value.replace(/\D/g, '').slice(0, 10) }))}
-                  placeholder="10-digit mobile number"
-                  className="mt-2 w-full rounded-xl border border-violet-100 bg-white px-3 py-2.5 text-sm font-semibold text-slate-900 outline-none focus:border-violet-300 focus:ring-2 focus:ring-violet-100"
-                />
+                <div className="mt-2 rounded-xl border border-violet-100 bg-white px-3 py-2.5 text-sm font-semibold text-slate-900">
+                  +91 ******{String(user?.mobile || '').slice(-4)}
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setShowPhoneChangeModal(true)}
+                  className="mt-2 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs font-bold text-emerald-800"
+                >
+                  Change phone securely
+                </button>
               </label>
               <label className="block sm:col-span-2">
                 <span className="text-xs font-bold uppercase tracking-[0.12em] text-slate-500">Bio</span>
@@ -374,6 +387,9 @@ export default function ProfilePage({ user, items = [], orders = [], receivedOrd
           <div className="rounded-full border border-amber-200 bg-white px-3 py-2 text-sm font-semibold text-violet-700">
             {user.isBuyer ? 'Yearly buyer access active' : 'Buying unlocks when you request an item'}
           </div>
+          <button onClick={() => setShowPhoneChangeModal(true)} className="inline-flex items-center gap-2 rounded-full border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm font-semibold text-emerald-700">
+            Change Phone Number
+          </button>
           <button onClick={onLogout} className="ml-auto inline-flex items-center gap-2 rounded-full border border-rose-200 bg-rose-50 px-3 py-2 text-sm font-semibold text-rose-700">
             <LogOut size={14} /> Logout
           </button>
@@ -611,6 +627,14 @@ export default function ProfilePage({ user, items = [], orders = [], receivedOrd
         )}
       </section>
       <OrderTrackingModal order={selectedOrder} onClose={() => setSelectedOrder(null)} />
+      <PhoneChangeModal
+        open={showPhoneChangeModal}
+        currentPhone={user?.mobile || ''}
+        title="Change phone number"
+        subtitle="Profile security"
+        onClose={() => setShowPhoneChangeModal(false)}
+        onSuccess={handlePhoneChanged}
+      />
       {previewImage && (
         <div className="fixed inset-0 z-[220] flex items-center justify-center bg-slate-950/75 p-5 backdrop-blur-sm" role="dialog" aria-modal="true">
           <button

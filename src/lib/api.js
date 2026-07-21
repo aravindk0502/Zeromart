@@ -257,6 +257,24 @@ export async function resendOtp(phone, retryType = 'text') {
   }, getAuthBases());
 }
 
+export async function initiatePhoneChange(newPhone) {
+  return requestAcrossBases('/api/profile/phone-change/initiate', {
+    method: 'POST',
+    body: { newPhone },
+    auth: true,
+    timeoutMs: OTP_REQUEST_TIMEOUT_MS,
+  }, getAuthBases());
+}
+
+export async function confirmPhoneChange(newPhone, otp) {
+  return requestAcrossBases('/api/profile/phone-change/confirm', {
+    method: 'POST',
+    body: { newPhone, otp },
+    auth: true,
+    timeoutMs: OTP_REQUEST_TIMEOUT_MS,
+  }, getAuthBases());
+}
+
 // ── Profile ───────────────────────────────────────────────────────────────────
 export async function fetchProfile() {
   return requestAcrossBases('/api/profile', {

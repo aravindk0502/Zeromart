@@ -5,6 +5,8 @@ dist/
 .env.local
 .env.*.local
 .env.vercel.production
+.env.live.secrets
+.env.prod.check
 .DS_Store
 *.log
 npm-debug.log*

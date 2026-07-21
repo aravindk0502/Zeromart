@@ -2,6 +2,7 @@ import serverless from 'serverless-http';
 import { createHash } from 'node:crypto';
 import { cert, getApps as getFirebaseApps, initializeApp as initializeFirebaseApp } from 'firebase-admin/app';
 import { getMessaging } from 'firebase-admin/messaging';
+import jwt from 'jsonwebtoken';
 
 let appHandler;
 
@@ -32,6 +33,8 @@ const jsonHeaders = {
 };
 
 const DEFAULT_SELLER_NAME = 'Drizn User';
+const FALLBACK_JWT_SECRET = 'zeromart-dev-secret-change-in-prod';
+const JWT_SECRET = String(process.env.JWT_SECRET || FALLBACK_JWT_SECRET).trim();
 
 function isPlaceholderName(value = '') {
   const normalized = String(value || '').trim().toLowerCase();
@@ -136,11 +139,9 @@ function getAuthUserId(req) {
   const header = req.headers?.authorization || req.headers?.Authorization || '';
   const token = String(header).replace(/^Bearer\s+/i, '').trim();
   if (!token) return 'guest';
-  const parts = token.split('.');
-  if (parts.length < 2) return 'guest';
+
   try {
-    const json = Buffer.from(parts[1].replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString('utf8');
-    const payload = JSON.parse(json);
+    const payload = jwt.verify(token, JWT_SECRET);
     return String(payload.sub || payload.id || payload.phone || 'guest');
   } catch {
     return 'guest';

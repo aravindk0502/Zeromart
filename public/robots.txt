@@ -1,4 +1,4 @@
 User-agent: *
 Allow: /
 
-Sitemap: https://zeromart.vercel.app/sitemap.xml
+Sitemap: https://www.drizn.com/sitemap.xml

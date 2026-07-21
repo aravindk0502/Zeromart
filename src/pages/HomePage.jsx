@@ -4,6 +4,7 @@ import {
 } from 'lucide-react';
 import { getExpiryBadgeState, normalizeProductStock } from '../services/transactionService';
 import { isListingOwnedByUser } from '../utils/listingOwnership';
+import SiteFooter from '../components/SiteFooter';
 
 const getCollectionCta = (item) => (
   item?.isBusinessProduct || item?.listingType === 'business' || item?.sellerType === 'business'
@@ -425,33 +426,7 @@ export default function HomePage({
         </div>
       )}
 
-      <footer className="rounded-[1.1rem] border border-amber-100 bg-white/90 px-4 py-3 shadow-[0_12px_36px_rgba(15,23,42,0.06)]">
-        <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-          <div className="flex flex-wrap items-center gap-2 text-xs">
-            <span className="inline-flex items-center gap-1.5 font-extrabold text-amber-700">
-              <Sparkles size={15} /> Drizn
-            </span>
-            <span className="font-semibold text-slate-500">Good Things. Nearby.</span>
-          </div>
-          <nav className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] font-semibold text-slate-500">
-            {['About', 'Help', 'Terms', 'Contact', 'Instagram', 'LinkedIn', 'WhatsApp'].map((label) => (
-              <a
-                key={label}
-                href={['Help', 'Contact'].includes(label) ? 'mailto:support@drizn.local' : '#'}
-                onClick={(event) => {
-                  if (!['Help', 'Contact'].includes(label)) event.preventDefault();
-                }}
-                className="transition hover:text-violet-700"
-              >
-                {label}
-              </a>
-            ))}
-          </nav>
-        </div>
-        <div className="mt-2 border-t border-slate-100 pt-2 text-[11px] leading-5 text-slate-400">
-          © Drizn · Good Things. Nearby.
-        </div>
-      </footer>
+      <SiteFooter currentPath={typeof window !== 'undefined' ? window.location.pathname : '/'} />
     </div>
   );
 }

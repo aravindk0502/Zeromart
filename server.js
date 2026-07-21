@@ -19,9 +19,14 @@ if (!globalThis.WebSocket) {
 
 export const app = express();
 const PORT = process.env.PORT || 3001;
-const JWT_SECRET = process.env.JWT_SECRET || 'zeromart-dev-secret-change-in-prod';
+const FALLBACK_JWT_SECRET = 'zeromart-dev-secret-change-in-prod';
+const JWT_SECRET = process.env.JWT_SECRET || FALLBACK_JWT_SECRET;
 const IS_PRODUCTION = process.env.NODE_ENV === 'production';
 const DEFAULT_SELLER_NAME = 'Drizn User';
+
+if (IS_PRODUCTION && JWT_SECRET === FALLBACK_JWT_SECRET) {
+  throw new Error('JWT_SECRET must be set to a strong value in production.');
+}
 
 function cleanSellerName(...names) {
   const value = names.find((name) => {
@@ -49,10 +54,119 @@ const allowedOrigins = String(process.env.CORS_ORIGIN || '')
   .map((origin) => origin.trim().replace(/\/$/, ''))
   .filter(Boolean);
 
+app.disable('x-powered-by');
+if (IS_PRODUCTION) {
+  app.set('trust proxy', 1);
+}
+
+app.use((_req, res, next) => {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('X-Frame-Options', 'SAMEORIGIN');
+  res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+  res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=(self)');
+  next();
+});
+
+const rateLimitStore = new Map();
+
+function getClientIp(req) {
+  const forwarded = String(req.headers['x-forwarded-for'] || '').split(',')[0].trim();
+  return forwarded || req.ip || req.socket?.remoteAddress || 'unknown';
+}
+
+function createRateLimiter({ windowMs, max, keyPrefix, keyGenerator }) {
+  return (req, res, next) => {
+    const baseKey = keyGenerator ? keyGenerator(req) : getClientIp(req);
+    const key = `${keyPrefix}:${String(baseKey || 'unknown').slice(0, 256)}`;
+    const now = Date.now();
+    const bucket = rateLimitStore.get(key) || [];
+    const recent = bucket.filter((timestamp) => (now - timestamp) < windowMs);
+
+    if (recent.length >= max) {
+      const retryAfter = Math.max(1, Math.ceil((windowMs - (now - recent[0])) / 1000));
+      res.setHeader('Retry-After', String(retryAfter));
+      return res.status(429).json({ error: 'Too many requests, please try again shortly.' });
+    }
+
+    recent.push(now);
+    rateLimitStore.set(key, recent);
+
+    if (rateLimitStore.size > 10000) {
+      for (const [entryKey, timestamps] of rateLimitStore.entries()) {
+        const active = timestamps.filter((timestamp) => (now - timestamp) < windowMs);
+        if (active.length === 0) {
+          rateLimitStore.delete(entryKey);
+        } else {
+          rateLimitStore.set(entryKey, active);
+        }
+      }
+    }
+
+    return next();
+  };
+}
+
+const otpSendRateLimit = createRateLimiter({
+  windowMs: 15 * 60 * 1000,
+  max: 5,
+  keyPrefix: 'otp-send',
+  keyGenerator: (req) => `${normalizeIndianMobile(req.body?.phone || '') || 'unknown'}:${getClientIp(req)}`,
+});
+
+const otpVerifyRateLimit = createRateLimiter({
+  windowMs: 15 * 60 * 1000,
+  max: 12,
+  keyPrefix: 'otp-verify',
+  keyGenerator: (req) => `${normalizeIndianMobile(req.body?.phone || '') || 'unknown'}:${getClientIp(req)}`,
+});
+
+const uploadRateLimit = createRateLimiter({
+  windowMs: 10 * 60 * 1000,
+  max: 20,
+  keyPrefix: 'upload',
+  keyGenerator: (req) => String(req.user?.id || getClientIp(req)),
+});
+
+const listingMutationRateLimit = createRateLimiter({
+  windowMs: 10 * 60 * 1000,
+  max: 40,
+  keyPrefix: 'listing-mutation',
+  keyGenerator: (req) => String(req.user?.id || getClientIp(req)),
+});
+
+const notificationWriteRateLimit = createRateLimiter({
+  windowMs: 10 * 60 * 1000,
+  max: 80,
+  keyPrefix: 'notification-write',
+  keyGenerator: (req) => String(req.user?.id || getClientIp(req)),
+});
+
+const paymentRateLimit = createRateLimiter({
+  windowMs: 10 * 60 * 1000,
+  max: 30,
+  keyPrefix: 'payment',
+  keyGenerator: (req) => String(req.user?.id || getClientIp(req)),
+});
+
+const webhookRateLimit = createRateLimiter({
+  windowMs: 60 * 1000,
+  max: 120,
+  keyPrefix: 'webhook',
+  keyGenerator: (req) => getClientIp(req),
+});
+
 app.use(cors({
   origin(origin, callback) {
     const normalizedOrigin = String(origin || '').replace(/\/$/, '');
-    if (!origin || allowedOrigins.length === 0 || allowedOrigins.includes(normalizedOrigin)) {
+    if (!origin) {
+      callback(null, true);
+      return;
+    }
+    if (allowedOrigins.includes(normalizedOrigin)) {
+      callback(null, true);
+      return;
+    }
+    if (!IS_PRODUCTION && allowedOrigins.length === 0) {
       callback(null, true);
       return;
     }
@@ -60,6 +174,7 @@ app.use(cors({
   },
 }));
 app.use(express.json({
+  limit: '1mb',
   verify(req, _res, buffer) {
     if (req.originalUrl === '/api/payments/webhook') {
       req.rawBody = buffer.toString('utf8');
@@ -258,6 +373,39 @@ export async function initDB() {
     CREATE UNIQUE INDEX IF NOT EXISTS buyer_access_payments_payment_idx ON buyer_access_payments(razorpay_payment_id);
 
     CREATE INDEX IF NOT EXISTS buyer_access_payments_user_idx ON buyer_access_payments(user_id);
+
+    CREATE TABLE IF NOT EXISTS phone_change_requests (
+      id            TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
+      user_id       INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      new_phone     TEXT NOT NULL,
+      request_id    TEXT,
+      status        TEXT NOT NULL DEFAULT 'pending',
+      attempt_count INTEGER NOT NULL DEFAULT 0,
+      expires_at    TIMESTAMPTZ NOT NULL,
+      verified_at   TIMESTAMPTZ,
+      created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+
+    CREATE INDEX IF NOT EXISTS phone_change_requests_user_idx ON phone_change_requests(user_id);
+    CREATE INDEX IF NOT EXISTS phone_change_requests_phone_idx ON phone_change_requests(new_phone);
+    CREATE UNIQUE INDEX IF NOT EXISTS phone_change_requests_pending_user_idx
+      ON phone_change_requests(user_id) WHERE status = 'pending';
+
+    CREATE TABLE IF NOT EXISTS security_audit_events (
+      id            TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
+      user_id       INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      event_type    TEXT NOT NULL,
+      status        TEXT NOT NULL DEFAULT 'info',
+      phone_last4   TEXT,
+      ip_address    TEXT,
+      metadata      JSONB NOT NULL DEFAULT '{}'::jsonb,
+      created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+
+    CREATE INDEX IF NOT EXISTS security_audit_events_user_idx ON security_audit_events(user_id);
+    CREATE INDEX IF NOT EXISTS security_audit_events_type_idx ON security_audit_events(event_type);
+    CREATE INDEX IF NOT EXISTS security_audit_events_created_idx ON security_audit_events(created_at DESC);
 
     CREATE TABLE IF NOT EXISTS profiles (
       id            TEXT PRIMARY KEY,
@@ -1397,12 +1545,83 @@ function normalizeIndianMobile(input = '') {
   return '';
 }
 
+function normalizePhoneDigits(input = '') {
+  const mobile = normalizeIndianMobile(input);
+  return mobile ? mobile.slice(-10) : '';
+}
+
+function getPhoneCandidates(phoneDigits = '') {
+  if (!/^\d{10}$/.test(String(phoneDigits || ''))) return [];
+  return [String(phoneDigits), `91${String(phoneDigits)}`];
+}
+
+async function findUserByNormalizedPhone(client, phoneDigits) {
+  const normalized = normalizePhoneDigits(phoneDigits);
+  if (!normalized) return null;
+  const result = await client.query(
+    `SELECT *
+       FROM users
+      WHERE phone = ANY($1::text[])
+         OR RIGHT(REGEXP_REPLACE(phone, '[^0-9]', '', 'g'), 10) = $2
+      ORDER BY id ASC
+      LIMIT 1`,
+    [getPhoneCandidates(normalized), normalized]
+  );
+  return result.rows[0] || null;
+}
+
+async function isPhoneInUseByAnotherUser(client, phoneDigits, excludeUserId) {
+  const normalized = normalizePhoneDigits(phoneDigits);
+  if (!normalized) return false;
+  const result = await client.query(
+    `SELECT id
+       FROM users
+      WHERE id <> $3
+        AND (
+          phone = ANY($1::text[])
+          OR RIGHT(REGEXP_REPLACE(phone, '[^0-9]', '', 'g'), 10) = $2
+        )
+      LIMIT 1`,
+    [getPhoneCandidates(normalized), normalized, excludeUserId]
+  );
+  return Boolean(result.rows[0]);
+}
+
 async function parseProviderBody(response) {
   const raw = await response.text();
   try {
     return raw ? JSON.parse(raw) : {};
   } catch {
     return { raw };
+  }
+}
+
+function safePhoneLast4(input = '') {
+  const digits = String(input || '').replace(/\D/g, '');
+  return digits.slice(-4);
+}
+
+async function logSecurityAuditEvent({ req, userId = null, eventType, status = 'info', phone = '', metadata = {} }) {
+  if (!dbEnabled || !pool || !eventType) return;
+  try {
+    await pool.query(
+      `INSERT INTO security_audit_events (user_id, event_type, status, phone_last4, ip_address, metadata)
+       VALUES ($1, $2, $3, $4, $5, $6::jsonb)`,
+      [
+        userId ? Number(userId) : null,
+        String(eventType),
+        String(status || 'info'),
+        safePhoneLast4(phone),
+        getClientIp(req),
+        JSON.stringify(metadata || {}),
+      ]
+    );
+  } catch (error) {
+    console.warn('[audit] failed to persist security event', {
+      eventType,
+      status,
+      message: String(error?.message || error),
+    });
   }
 }
 
@@ -1467,7 +1686,7 @@ async function resendMsg91Otp({ authKey, mobile, retryType = 'text' }) {
 // ── Routes ────────────────────────────────────────────────────────────────────
 
 // Send OTP via MSG91
-app.post(['/api/auth/send-otp', '/api/send-otp'], async (req, res) => {
+app.post(['/api/auth/send-otp', '/api/send-otp'], otpSendRateLimit, async (req, res) => {
   const { phone } = req.body || {};
   const mobile = normalizeIndianMobile(phone);
   if (!mobile) {
@@ -1520,7 +1739,7 @@ app.post(['/api/auth/send-otp', '/api/send-otp'], async (req, res) => {
 });
 
 // Resend OTP via MSG91
-app.post('/api/auth/resend-otp', async (req, res) => {
+app.post('/api/auth/resend-otp', otpSendRateLimit, async (req, res) => {
   const { phone, retryType } = req.body || {};
   const mobile = normalizeIndianMobile(phone);
   if (!mobile) {
@@ -1573,7 +1792,7 @@ app.post('/api/auth/resend-otp', async (req, res) => {
 });
 
 // Verify OTP and create session
-app.post(['/api/auth/verify-otp', '/api/verify-otp'], async (req, res) => {
+app.post(['/api/auth/verify-otp', '/api/verify-otp'], otpVerifyRateLimit, async (req, res) => {
   const { phone, otp } = req.body || {};
   const mobile = normalizeIndianMobile(phone);
   if (!mobile || !/^\d{4}$/.test(String(otp || '').trim())) {
@@ -1599,16 +1818,48 @@ app.post(['/api/auth/verify-otp', '/api/verify-otp'], async (req, res) => {
       });
     }
 
-    const phoneDigits = mobile.slice(-10);
+    const phoneDigits = normalizePhoneDigits(mobile);
     let user;
     if (dbEnabled) {
-      const result = await pool.query(
-        `INSERT INTO users (phone) VALUES ($1)
-         ON CONFLICT (phone) DO UPDATE SET phone = EXCLUDED.phone
-         RETURNING *`,
-        [phoneDigits]
-      );
-      user = await normalizeExpiredBuyerAccess(result.rows[0]?.id, result.rows[0]);
+      const client = await pool.connect();
+      try {
+        await client.query('BEGIN');
+        const existing = await findUserByNormalizedPhone(client, phoneDigits);
+        if (existing) {
+          let normalizedExisting = existing;
+          if (existing.phone !== phoneDigits) {
+            try {
+              const normalized = await client.query(
+                `UPDATE users
+                    SET phone = $1
+                  WHERE id = $2
+                  RETURNING *`,
+                [phoneDigits, existing.id]
+              );
+              normalizedExisting = normalized.rows[0] || existing;
+            } catch (error) {
+              if (error?.code !== '23505') throw error;
+              const canonical = await client.query('SELECT * FROM users WHERE phone = $1 ORDER BY id ASC LIMIT 1', [phoneDigits]);
+              normalizedExisting = canonical.rows[0] || existing;
+            }
+          }
+          user = normalizedExisting;
+        } else {
+          const inserted = await client.query(
+            `INSERT INTO users (phone) VALUES ($1)
+             RETURNING *`,
+            [phoneDigits]
+          );
+          user = inserted.rows[0] || null;
+        }
+        await client.query('COMMIT');
+      } catch (error) {
+        await client.query('ROLLBACK');
+        throw error;
+      } finally {
+        client.release();
+      }
+      user = await normalizeExpiredBuyerAccess(user?.id, user);
     } else {
       user = {
         id: `demo_${phoneDigits}`,
@@ -1652,6 +1903,390 @@ app.post(['/api/auth/verify-otp', '/api/verify-otp'], async (req, res) => {
     return res.status(timedOut ? 504 : 500).json({
       error: timedOut ? 'OTP provider timeout while verifying OTP' : 'OTP verification failed',
     });
+  }
+});
+
+app.post('/api/profile/phone-change/initiate', authMiddleware, otpSendRateLimit, async (req, res) => {
+  if (!dbEnabled) {
+    return res.status(503).json({ error: 'Phone number updates require database access' });
+  }
+
+  const { newPhone } = req.body || {};
+  const normalizedPhoneDigits = normalizePhoneDigits(newPhone);
+  if (!normalizedPhoneDigits) {
+    return res.status(400).json({ error: 'Valid Indian mobile number required' });
+  }
+
+  const currentUserId = Number(req.user?.id || 0);
+  if (!currentUserId) {
+    return res.status(401).json({ error: 'Invalid session' });
+  }
+
+  const config = requireMsg91Config(res);
+  if (!config) return;
+
+  const client = await pool.connect();
+  try {
+    const currentRow = await client.query('SELECT phone FROM users WHERE id = $1 LIMIT 1', [currentUserId]);
+    const currentPhoneDigits = normalizePhoneDigits(currentRow.rows[0]?.phone || '');
+    if (currentPhoneDigits && currentPhoneDigits === normalizedPhoneDigits) {
+      await logSecurityAuditEvent({
+        req,
+        userId: currentUserId,
+        eventType: 'phone_change_initiate',
+        status: 'rejected_same_number',
+        phone: normalizedPhoneDigits,
+      });
+      return res.status(400).json({ error: 'New phone number must be different from current number' });
+    }
+
+    const alreadyUsed = await isPhoneInUseByAnotherUser(client, normalizedPhoneDigits, currentUserId);
+    if (alreadyUsed) {
+      await logSecurityAuditEvent({
+        req,
+        userId: currentUserId,
+        eventType: 'phone_change_initiate',
+        status: 'rejected_phone_in_use',
+        phone: normalizedPhoneDigits,
+      });
+      return res.status(409).json({ error: 'This phone number is already linked to another account' });
+    }
+
+    const mobile = `91${normalizedPhoneDigits}`;
+    const { response, body, url } = await sendMsg91Otp({
+      authKey: config.authKey,
+      templateId: config.templateId,
+      mobile,
+    });
+
+    if (!(response.ok && String(body?.type || '').toLowerCase() === 'success')) {
+      console.error('[MSG91] phone change send otp failed', { status: response.status, url, userId: currentUserId, body });
+      await logSecurityAuditEvent({
+        req,
+        userId: currentUserId,
+        eventType: 'phone_change_initiate',
+        status: 'provider_failed',
+        phone: normalizedPhoneDigits,
+        metadata: {
+          providerStatus: response.status,
+          providerType: body?.type || null,
+          requestId: body?.request_id || body?.requestId || null,
+        },
+      });
+      return res.status(502).json({
+        error: body?.message || body?.error || 'Could not send OTP for phone change',
+        providerStatus: response.status,
+      });
+    }
+
+    const expiresAt = new Date(Date.now() + (10 * 60 * 1000));
+    await client.query('BEGIN');
+    await client.query(
+      `UPDATE phone_change_requests
+          SET status = 'replaced',
+              updated_at = now()
+        WHERE user_id = $1
+          AND status = 'pending'`,
+      [currentUserId]
+    );
+    await client.query(
+      `INSERT INTO phone_change_requests (user_id, new_phone, request_id, status, attempt_count, expires_at, updated_at)
+       VALUES ($1, $2, $3, 'pending', 0, $4, now())`,
+      [
+        currentUserId,
+        normalizedPhoneDigits,
+        body?.request_id || body?.requestId || null,
+        expiresAt.toISOString(),
+      ]
+    );
+    await client.query('COMMIT');
+
+    await logSecurityAuditEvent({
+      req,
+      userId: currentUserId,
+      eventType: 'phone_change_initiate',
+      status: 'otp_sent',
+      phone: normalizedPhoneDigits,
+      metadata: {
+        requestId: body?.request_id || body?.requestId || null,
+        expiresAt: expiresAt.toISOString(),
+      },
+    });
+
+    return res.json({
+      success: true,
+      expiresAt: expiresAt.toISOString(),
+      requestId: body?.request_id || body?.requestId || null,
+    });
+  } catch (error) {
+    try { await client.query('ROLLBACK'); } catch {}
+    const timedOut = String(error?.name || '').toLowerCase() === 'timeouterror' || /aborted|timed out/i.test(String(error?.message || ''));
+    await logSecurityAuditEvent({
+      req,
+      userId: currentUserId,
+      eventType: 'phone_change_initiate',
+      status: timedOut ? 'provider_timeout' : 'error',
+      phone: normalizedPhoneDigits,
+      metadata: {
+        message: String(error?.message || error),
+      },
+    });
+    console.error('[phone-change] initiate failed', {
+      userId: currentUserId,
+      message: String(error?.message || error),
+      timedOut,
+    });
+    return res.status(timedOut ? 504 : 500).json({
+      error: timedOut ? 'OTP provider timeout while sending OTP' : 'Failed to start phone number change',
+    });
+  } finally {
+    client.release();
+  }
+});
+
+app.post('/api/profile/phone-change/confirm', authMiddleware, otpVerifyRateLimit, async (req, res) => {
+  if (!dbEnabled) {
+    return res.status(503).json({ error: 'Phone number updates require database access' });
+  }
+
+  const { newPhone, otp } = req.body || {};
+  const normalizedPhoneDigits = normalizePhoneDigits(newPhone);
+  const normalizedOtp = String(otp || '').trim();
+  if (!normalizedPhoneDigits || !/^\d{4}$/.test(normalizedOtp)) {
+    return res.status(400).json({ error: 'Valid mobile number and 4-digit OTP are required' });
+  }
+
+  const currentUserId = Number(req.user?.id || 0);
+  if (!currentUserId) {
+    return res.status(401).json({ error: 'Invalid session' });
+  }
+
+  const config = requireMsg91Config(res);
+  if (!config) return;
+
+  const client = await pool.connect();
+  try {
+    const pending = await client.query(
+      `SELECT *
+         FROM phone_change_requests
+        WHERE user_id = $1
+          AND status = 'pending'
+        ORDER BY created_at DESC
+        LIMIT 1`,
+      [currentUserId]
+    );
+    const pendingRow = pending.rows[0] || null;
+    if (!pendingRow) {
+      await logSecurityAuditEvent({
+        req,
+        userId: currentUserId,
+        eventType: 'phone_change_confirm',
+        status: 'rejected_no_pending',
+        phone: normalizedPhoneDigits,
+      });
+      return res.status(404).json({ error: 'No pending phone change request found' });
+    }
+
+    if (normalizePhoneDigits(pendingRow.new_phone) !== normalizedPhoneDigits) {
+      await logSecurityAuditEvent({
+        req,
+        userId: currentUserId,
+        eventType: 'phone_change_confirm',
+        status: 'rejected_phone_mismatch',
+        phone: normalizedPhoneDigits,
+      });
+      return res.status(400).json({ error: 'Phone number does not match pending request' });
+    }
+
+    if (new Date(pendingRow.expires_at).getTime() <= Date.now()) {
+      await client.query(
+        `UPDATE phone_change_requests
+            SET status = 'expired', updated_at = now()
+          WHERE id = $1`,
+        [pendingRow.id]
+      );
+      await logSecurityAuditEvent({
+        req,
+        userId: currentUserId,
+        eventType: 'phone_change_confirm',
+        status: 'otp_expired',
+        phone: normalizedPhoneDigits,
+      });
+      return res.status(410).json({ error: 'Phone change OTP has expired. Please request a new OTP.' });
+    }
+
+    const mobile = `91${normalizedPhoneDigits}`;
+    const { response, body, url } = await verifyMsg91Otp({
+      authKey: config.authKey,
+      mobile,
+      otp: normalizedOtp,
+    });
+
+    if (!(response.ok && String(body?.type || '').toLowerCase() === 'success')) {
+      await client.query(
+        `UPDATE phone_change_requests
+            SET attempt_count = attempt_count + 1,
+                updated_at = now()
+          WHERE id = $1`,
+        [pendingRow.id]
+      );
+      await logSecurityAuditEvent({
+        req,
+        userId: currentUserId,
+        eventType: 'phone_change_confirm',
+        status: 'otp_failed',
+        phone: normalizedPhoneDigits,
+        metadata: {
+          providerStatus: response.status,
+          providerType: body?.type || null,
+          requestId: body?.request_id || body?.requestId || null,
+        },
+      });
+      console.warn('[phone-change] otp verify failed', {
+        userId: currentUserId,
+        requestId: pendingRow.id,
+        status: response.status,
+        url,
+      });
+      return res.status(400).json({
+        error: body?.message || body?.error || 'Incorrect OTP',
+        providerStatus: response.status,
+      });
+    }
+
+    let user = null;
+    await client.query('BEGIN');
+    const lockedRequest = await client.query(
+      `SELECT *
+         FROM phone_change_requests
+        WHERE id = $1
+          AND user_id = $2
+          AND status = 'pending'
+        FOR UPDATE`,
+      [pendingRow.id, currentUserId]
+    );
+    const lockedRow = lockedRequest.rows[0] || null;
+    if (!lockedRow) {
+      await client.query('ROLLBACK');
+      await logSecurityAuditEvent({
+        req,
+        userId: currentUserId,
+        eventType: 'phone_change_confirm',
+        status: 'rejected_inactive_request',
+        phone: normalizedPhoneDigits,
+      });
+      return res.status(409).json({ error: 'Phone change request is no longer active' });
+    }
+
+    if (new Date(lockedRow.expires_at).getTime() <= Date.now()) {
+      await client.query(
+        `UPDATE phone_change_requests
+            SET status = 'expired', updated_at = now()
+          WHERE id = $1`,
+        [lockedRow.id]
+      );
+      await client.query('COMMIT');
+      await logSecurityAuditEvent({
+        req,
+        userId: currentUserId,
+        eventType: 'phone_change_confirm',
+        status: 'otp_expired',
+        phone: normalizedPhoneDigits,
+      });
+      return res.status(410).json({ error: 'Phone change OTP has expired. Please request a new OTP.' });
+    }
+
+    const alreadyUsed = await isPhoneInUseByAnotherUser(client, normalizedPhoneDigits, currentUserId);
+    if (alreadyUsed) {
+      await client.query('ROLLBACK');
+      await logSecurityAuditEvent({
+        req,
+        userId: currentUserId,
+        eventType: 'phone_change_confirm',
+        status: 'rejected_phone_in_use',
+        phone: normalizedPhoneDigits,
+      });
+      return res.status(409).json({ error: 'This phone number is already linked to another account' });
+    }
+
+    try {
+      const updated = await client.query(
+        `UPDATE users
+            SET phone = $1
+          WHERE id = $2
+          RETURNING *`,
+        [normalizedPhoneDigits, currentUserId]
+      );
+      user = updated.rows[0] || null;
+    } catch (error) {
+      if (error?.code === '23505') {
+        await client.query('ROLLBACK');
+        await logSecurityAuditEvent({
+          req,
+          userId: currentUserId,
+          eventType: 'phone_change_confirm',
+          status: 'rejected_phone_in_use',
+          phone: normalizedPhoneDigits,
+        });
+        return res.status(409).json({ error: 'This phone number is already linked to another account' });
+      }
+      throw error;
+    }
+
+    await client.query(
+      `UPDATE phone_change_requests
+          SET status = 'verified',
+              verified_at = now(),
+              updated_at = now()
+        WHERE id = $1`,
+      [lockedRow.id]
+    );
+    await client.query('COMMIT');
+
+    await logSecurityAuditEvent({
+      req,
+      userId: currentUserId,
+      eventType: 'phone_change_confirm',
+      status: 'success',
+      phone: normalizedPhoneDigits,
+      metadata: {
+        requestRowId: lockedRow.id,
+      },
+    });
+
+    user = await normalizeExpiredBuyerAccess(user?.id, user);
+    const token = jwt.sign({ id: user.id, phone: normalizedPhoneDigits }, JWT_SECRET, { expiresIn: '90d' });
+    return res.json({
+      success: true,
+      token,
+      user: {
+        ...user,
+        ...serializeUserBuyerAccess(user),
+      },
+    });
+  } catch (error) {
+    try { await client.query('ROLLBACK'); } catch {}
+    const timedOut = String(error?.name || '').toLowerCase() === 'timeouterror' || /aborted|timed out/i.test(String(error?.message || ''));
+    await logSecurityAuditEvent({
+      req,
+      userId: currentUserId,
+      eventType: 'phone_change_confirm',
+      status: timedOut ? 'provider_timeout' : 'error',
+      phone: normalizedPhoneDigits,
+      metadata: {
+        message: String(error?.message || error),
+      },
+    });
+    console.error('[phone-change] confirm failed', {
+      userId: currentUserId,
+      message: String(error?.message || error),
+      timedOut,
+    });
+    return res.status(timedOut ? 504 : 500).json({
+      error: timedOut ? 'OTP provider timeout while verifying OTP' : 'Failed to confirm phone number change',
+    });
+  } finally {
+    client.release();
   }
 });
 
@@ -1727,7 +2362,7 @@ app.get('/api/listings', async (_req, res) => {
 
 // Create or upsert a live listing. Auth is optional while sign-in is still being
 // completed, but authenticated users always become the source owner.
-app.post('/api/listings', optionalAuthMiddleware, async (req, res) => {
+app.post('/api/listings', authMiddleware, listingMutationRateLimit, async (req, res) => {
   if (!hasSharedPersistence() && IS_PRODUCTION) {
     return respondPersistenceNotConfigured(res);
   }
@@ -1800,7 +2435,7 @@ app.post('/api/listings', optionalAuthMiddleware, async (req, res) => {
   }
 });
 
-app.put('/api/listings/:id', optionalAuthMiddleware, async (req, res) => {
+app.put('/api/listings/:id', authMiddleware, listingMutationRateLimit, async (req, res) => {
   if (!hasSharedPersistence() && IS_PRODUCTION) {
     return respondPersistenceNotConfigured(res);
   }
@@ -1849,7 +2484,7 @@ app.put('/api/listings/:id', optionalAuthMiddleware, async (req, res) => {
   }
 });
 
-app.delete('/api/listings/:id', optionalAuthMiddleware, async (req, res) => {
+app.delete('/api/listings/:id', authMiddleware, listingMutationRateLimit, async (req, res) => {
   if (!hasSharedPersistence() && IS_PRODUCTION) {
     return respondPersistenceNotConfigured(res);
   }
@@ -1878,7 +2513,7 @@ app.delete('/api/listings/:id', optionalAuthMiddleware, async (req, res) => {
   }
 });
 
-app.post('/api/listings/:id/reserve', optionalAuthMiddleware, async (req, res) => {
+app.post('/api/listings/:id/reserve', authMiddleware, listingMutationRateLimit, async (req, res) => {
   try {
     const listingId = String(req.params.id || '').trim();
     if (!listingId) {
@@ -1941,14 +2576,20 @@ app.post('/api/products', authMiddleware, async (req, res) => {
 });
 
 // Upload image: multipart/form-data 'file' field. Returns { url }
-app.post('/api/upload', optionalAuthMiddleware, upload.single('file'), async (req, res) => {
+app.post('/api/upload', authMiddleware, uploadRateLimit, upload.single('file'), async (req, res) => {
   try {
     const file = req.file;
     if (!file) return res.status(400).json({ error: 'No file uploaded' });
 
+    const allowedMimeTypes = new Set(['image/jpeg', 'image/png', 'image/webp', 'image/gif']);
+    if (!allowedMimeTypes.has(String(file.mimetype || '').toLowerCase())) {
+      return res.status(400).json({ error: 'Only JPG, PNG, WEBP, and GIF images are allowed' });
+    }
+
     // If supabase is configured, upload to storage
     if (supabase) {
-      const ext = (file.originalname || '').split('.').pop() || 'jpg';
+      const rawExt = (file.originalname || '').split('.').pop() || 'jpg';
+      const ext = String(rawExt).toLowerCase().replace(/[^a-z0-9]/g, '') || 'jpg';
       const key = `listings/${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${ext}`;
       const { error: uploadError } = await supabase.storage.from(SUPABASE_BUCKET).upload(key, file.buffer, { contentType: file.mimetype, upsert: false });
       if (uploadError) {
@@ -2009,11 +2650,14 @@ app.get('/api/persistence', (_req, res) => {
   return res.json({ db: hasSharedPersistence(), missing: getMissingRuntimeEnv() });
 });
 
-app.post('/api/notifications/token', optionalAuthMiddleware, async (req, res) => {
+app.post('/api/notifications/token', authMiddleware, notificationWriteRateLimit, async (req, res) => {
   const { accountId, token, platform = 'web', metadata = {}, enabled = true } = req.body || {};
-  const resolvedAccountId = String(req.user?.id || accountId || '').trim();
+  const resolvedAccountId = String(req.user?.id || '').trim();
   if (!resolvedAccountId || !token) {
-    return res.status(400).json({ error: 'accountId and token are required' });
+    return res.status(400).json({ error: 'token is required' });
+  }
+  if (accountId && String(accountId).trim() !== resolvedAccountId) {
+    return res.status(403).json({ error: 'Not allowed to set token for another account' });
   }
   if (!dbEnabled || !pool) {
     return res.json({ success: true, persisted: false });
@@ -2040,7 +2684,7 @@ app.post('/api/notifications/token', optionalAuthMiddleware, async (req, res) =>
   }
 });
 
-app.post('/api/notifications/token/disable', optionalAuthMiddleware, async (req, res) => {
+app.post('/api/notifications/token/disable', authMiddleware, notificationWriteRateLimit, async (req, res) => {
   const { token } = req.body || {};
   if (!token) return res.status(400).json({ error: 'token is required' });
   if (!dbEnabled || !pool) return res.json({ success: true, persisted: false });
@@ -2054,9 +2698,12 @@ app.post('/api/notifications/token/disable', optionalAuthMiddleware, async (req,
   }
 });
 
-app.get('/api/notifications/preferences/:accountId', optionalAuthMiddleware, async (req, res) => {
+app.get('/api/notifications/preferences/:accountId', authMiddleware, async (req, res) => {
   const accountId = String(req.params.accountId || '').trim();
   if (!accountId) return res.status(400).json({ error: 'accountId is required' });
+  if (String(req.user?.id || '') !== accountId) {
+    return res.status(403).json({ error: 'Not allowed' });
+  }
   if (!dbEnabled || !pool) {
     return res.json({
       accountId,
@@ -2094,9 +2741,12 @@ app.get('/api/notifications/preferences/:accountId', optionalAuthMiddleware, asy
   }
 });
 
-app.put('/api/notifications/preferences/:accountId', optionalAuthMiddleware, async (req, res) => {
+app.put('/api/notifications/preferences/:accountId', authMiddleware, notificationWriteRateLimit, async (req, res) => {
   const accountId = String(req.params.accountId || '').trim();
   if (!accountId) return res.status(400).json({ error: 'accountId is required' });
+  if (String(req.user?.id || '') !== accountId) {
+    return res.status(403).json({ error: 'Not allowed' });
+  }
   if (!dbEnabled || !pool) return res.json({ success: true, persisted: false });
   const {
     transactionalEnabled = true,
@@ -2148,10 +2798,13 @@ app.put('/api/notifications/preferences/:accountId', optionalAuthMiddleware, asy
   }
 });
 
-app.get('/api/notifications/history/:accountId', optionalAuthMiddleware, async (req, res) => {
+app.get('/api/notifications/history/:accountId', authMiddleware, async (req, res) => {
   const accountId = String(req.params.accountId || '').trim();
   const limit = Math.min(100, Math.max(1, Number(req.query.limit || 50)));
   if (!accountId) return res.status(400).json({ error: 'accountId is required' });
+  if (String(req.user?.id || '') !== accountId) {
+    return res.status(403).json({ error: 'Not allowed' });
+  }
   if (!dbEnabled || !pool) return res.json([]);
   try {
     await ensureNotificationSchema();
@@ -2170,7 +2823,7 @@ app.get('/api/notifications/history/:accountId', optionalAuthMiddleware, async (
   }
 });
 
-app.post('/api/notifications/events', optionalAuthMiddleware, async (req, res) => {
+app.post('/api/notifications/events', authMiddleware, notificationWriteRateLimit, async (req, res) => {
   const {
     eventType,
     recipientAccountId,
@@ -2196,7 +2849,7 @@ app.post('/api/notifications/events', optionalAuthMiddleware, async (req, res) =
     const result = await createNotificationEvent({
       eventType,
       recipientAccountId: String(recipientAccountId),
-      actorAccountId: String(actorAccountId || req.user?.id || ''),
+      actorAccountId: String(req.user?.id || ''),
       listingId: listingId ? String(listingId) : '',
       requestId: requestId ? String(requestId) : '',
       orderId: orderId ? String(orderId) : '',
@@ -2213,7 +2866,7 @@ app.post('/api/notifications/events', optionalAuthMiddleware, async (req, res) =
   }
 });
 
-app.post('/api/notifications/nearby-listing', optionalAuthMiddleware, async (req, res) => {
+app.post('/api/notifications/nearby-listing', authMiddleware, notificationWriteRateLimit, async (req, res) => {
   const {
     actorAccountId,
     listingId,
@@ -2226,7 +2879,10 @@ app.post('/api/notifications/nearby-listing', optionalAuthMiddleware, async (req
     radiusKm = 2,
   } = req.body || {};
 
-  const ownerId = String(actorAccountId || req.user?.id || '').trim();
+  const ownerId = String(req.user?.id || '').trim();
+  if (actorAccountId && String(actorAccountId).trim() !== ownerId) {
+    return res.status(403).json({ error: 'Not allowed' });
+  }
   const lat = toFiniteNumber(latitude);
   const lng = toFiniteNumber(longitude);
   if (!ownerId || !listingId || lat === null || lng === null) {
@@ -2305,7 +2961,7 @@ app.get('/api/orders', authMiddleware, async (req, res) => {
 });
 
 // Buyer access payment flow
-app.post(['/api/payments/create-order', '/api/create-order'], authMiddleware, async (req, res) => {
+app.post(['/api/payments/create-order', '/api/create-order'], authMiddleware, paymentRateLimit, async (req, res) => {
   const keyId = process.env.RAZORPAY_KEY_ID;
   const keySecret = process.env.RAZORPAY_KEY_SECRET;
   const planCode = String(req.body?.planCode || '').trim() || BUYER_ACCESS_PLAN_CODE;
@@ -2365,7 +3021,7 @@ app.post(['/api/payments/create-order', '/api/create-order'], authMiddleware, as
   }
 });
 
-app.post(['/api/payments/verify', '/api/verify-payment'], authMiddleware, async (req, res) => {
+app.post(['/api/payments/verify', '/api/verify-payment'], authMiddleware, paymentRateLimit, async (req, res) => {
   const {
     planCode,
     amount,
@@ -2457,16 +3113,19 @@ app.get('/api/payments/status', authMiddleware, async (req, res) => {
   });
 });
 
-app.post(['/api/payments/webhook', '/api/webhook/razorpay'], async (req, res) => {
+app.post(['/api/payments/webhook', '/api/webhook/razorpay'], webhookRateLimit, async (req, res) => {
   const webhookSecret = process.env.RAZORPAY_WEBHOOK_SECRET;
   const signature = req.headers['x-razorpay-signature'];
   const payload = String(req.rawBody || '');
 
-  if (webhookSecret) {
-    if (!signature) return res.status(400).json({ error: 'Webhook signature missing' });
-    const expected = crypto.createHmac('sha256', webhookSecret).update(payload).digest('hex');
-    if (expected !== signature) return res.status(400).json({ error: 'Webhook signature mismatch' });
+  if (!webhookSecret) {
+    console.error('[PAYMENTS] webhook received but RAZORPAY_WEBHOOK_SECRET is not configured');
+    return res.status(503).json({ error: 'Webhook endpoint is not configured' });
   }
+
+  if (!signature) return res.status(400).json({ error: 'Webhook signature missing' });
+  const expected = crypto.createHmac('sha256', webhookSecret).update(payload).digest('hex');
+  if (expected !== signature) return res.status(400).json({ error: 'Webhook signature mismatch' });
 
   let event = null;
   try {

@@ -9,6 +9,7 @@ import CollectionPass, { getCollectionPassState } from '../components/Collection
 import LocationMap from '../components/LocationMap';
 import LocationPicker from '../components/LocationPicker';
 import OrderTrackingModal from '../components/OrderTrackingModal';
+import PhoneChangeModal from '../components/PhoneChangeModal';
 import { useLocationEngine } from '../hooks/useLocationEngine';
 import { formatShortAddress, haversineKm, locationLabel, withAddressDetails } from '../services/locationService';
 import {
@@ -873,6 +874,7 @@ function BusinessProfile({ account, updateAccount }) {
   const locationEngine = useLocationEngine();
   const [form, setForm] = useState({ ...account, karmaPopupEnabled: account?.karmaPopupEnabled !== false });
   const [showPicker, setShowPicker] = useState(false);
+  const [showPhoneChangeModal, setShowPhoneChangeModal] = useState(false);
   const [selectedPurchase, setSelectedPurchase] = useState(null);
   const [saving, setSaving] = useState(false);
   const [profileError, setProfileError] = useState('');
@@ -957,6 +959,31 @@ function BusinessProfile({ account, updateAccount }) {
     reader.readAsDataURL(file);
   };
 
+  const handlePhoneChangeSuccess = (result) => {
+    const nextMobile = String(result?.user?.phone || '').replace(/\D/g, '').slice(-10);
+    if (!nextMobile) {
+      setShowPhoneChangeModal(false);
+      return;
+    }
+    const nextAccount = {
+      ...form,
+      mobile: nextMobile,
+    };
+    setForm(nextAccount);
+    updateAccount(nextAccount);
+    try {
+      const savedUser = JSON.parse(localStorage.getItem('zeromart-user') || '{}');
+      localStorage.setItem('zeromart-user', JSON.stringify({
+        ...savedUser,
+        mobile: nextMobile,
+      }));
+    } catch {
+      // Local user cache sync is best effort only.
+    }
+    setProfileNotice('Phone number updated successfully.');
+    setShowPhoneChangeModal(false);
+  };
+
   return (
     <>
       <div className="mx-auto max-w-3xl space-y-5">
@@ -996,6 +1023,13 @@ function BusinessProfile({ account, updateAccount }) {
             <div className="rounded-xl bg-slate-50 p-3">
               <p className="text-xs font-bold text-slate-500">Mobile</p>
               <p className="mt-2 font-semibold">+91 ******{String(account.mobile).slice(-4)}</p>
+              <button
+                type="button"
+                onClick={() => setShowPhoneChangeModal(true)}
+                className="mt-2 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs font-bold text-emerald-800"
+              >
+                Change phone securely
+              </button>
             </div>
             <label className="flex items-center justify-between rounded-xl border border-emerald-100 bg-emerald-50 px-3 py-3 sm:col-span-2">
               <span>
@@ -1089,6 +1123,14 @@ function BusinessProfile({ account, updateAccount }) {
         addressTypeDefault="Store"
       />
       <OrderTrackingModal order={selectedPurchase} onClose={() => setSelectedPurchase(null)} />
+      <PhoneChangeModal
+        open={showPhoneChangeModal}
+        currentPhone={account?.mobile || ''}
+        title="Change business phone"
+        subtitle="Business profile security"
+        onClose={() => setShowPhoneChangeModal(false)}
+        onSuccess={handlePhoneChangeSuccess}
+      />
     </>
   );
 }
