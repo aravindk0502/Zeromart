@@ -3543,6 +3543,7 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
           onEdit={handleEditListing}
           onDelete={handleDeleteListing}
           user={activeBuyer}
+          isAuthenticated={isLoggedIn()}
           onOpenSellerProfile={openPublicSellerProfile}
         />
       )}

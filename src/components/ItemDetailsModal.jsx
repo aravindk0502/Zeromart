@@ -16,7 +16,7 @@ const getFallbackAvatarImage = (name = 'Drizn User') => {
   return `data:image/svg+xml;utf8,${encodeURIComponent(svg)}`;
 };
 
-export default function ItemDetailsModal({ item, onClose, onRequest, onRequireLogin, onRequireBuyerAccess, onEdit, onDelete, user, onOpenSellerProfile }) {
+export default function ItemDetailsModal({ item, onClose, onRequest, onRequireLogin, onRequireBuyerAccess, onEdit, onDelete, user, onOpenSellerProfile, isAuthenticated = false }) {
   if (!item) return null;
   const product = normalizeProductStock(item);
   const expiryBadge = item.expiryBadge || getExpiryBadgeState(product);
@@ -59,7 +59,7 @@ export default function ItemDetailsModal({ item, onClose, onRequest, onRequireLo
   const isOwnListing = isListingOwnedByUser(item, user);
 
   const handlePrimary = () => {
-    if (!user) {
+    if (!user || !isAuthenticated) {
       onRequireLogin();
       return;
     }
