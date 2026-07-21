@@ -277,6 +277,22 @@ const loadNotifications = () => {
   }
 };
 
+const LEADERBOARD_ROSTER_KEY = 'zeromart-leaderboard-roster';
+
+const loadLeaderboardRoster = () => {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(LEADERBOARD_ROSTER_KEY) || '[]');
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+};
+
+const leaderboardProfileKey = (profile = {}) => {
+  const sellerId = String(profile.sellerId || '').trim();
+  return sellerId || `name:${String(profile.name || '').trim().toLowerCase()}`;
+};
+
 export default function App({ path = '/', navigate = (nextPath) => { window.location.href = nextPath; } }) {
   const locationEngine = useLocationEngine();
   const [activeView, setActiveView] = useState('home');
@@ -328,6 +344,7 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
   const [karmaTarget, setKarmaTarget] = useState(null);
   const [selectedNotification, setSelectedNotification] = useState(null);
   const [notifications, setNotifications] = useState(loadNotifications);
+  const [leaderboardRoster, setLeaderboardRoster] = useState(loadLeaderboardRoster);
   const skipTransactionPersistRef = useRef(false);
   const buyerAccessPendingRequestRef = useRef(null);
   const buyerAccessBypassRef = useRef(false);
@@ -587,6 +604,88 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
       return nextUser;
     });
   }, [activeBuyer, businessSession, items, user]);
+
+  useEffect(() => {
+    const fromItems = new Map();
+    items.forEach((item) => {
+      const name = item.sellerName || item.brand || 'Drizn giver';
+      const sellerId = String(item.sellerProfile?.id || item.sellerId || item.businessId || '').trim();
+      const key = sellerId || `name:${name.toLowerCase()}`;
+      const itemCoordinates = getItemCoordinates(item);
+      const existing = fromItems.get(key) || {
+        sellerId,
+        name,
+        initials: item.sellerInitials || item.sellerProfile?.initials || name.split(' ').map((part) => part[0]).join('').slice(0, 2).toUpperCase(),
+        karma: 0,
+        listings: 0,
+        completed: 0,
+        location: item.location || item.area || item.city || 'Current GPS location',
+        area: item.sellerProfile?.area || item.area || '',
+        city: item.sellerProfile?.city || item.city || '',
+        verified: Boolean(item.sellerProfile?.verified || item.sellerType === 'business' || item.isBusinessProduct),
+        image: item.sellerProfile?.avatarUrl || item.sellerProfileImage || item.avatarUrl || '',
+        coordinates: itemCoordinates || null,
+      };
+
+      fromItems.set(key, {
+        ...existing,
+        karma: Math.max(existing.karma, Number(item.sellerKarma || 0)),
+        listings: existing.listings + 1,
+        completed: existing.completed + Number(item.completedCount || item.soldQuantity || 0),
+        location: existing.location || item.location || item.area || item.city || 'Current GPS location',
+        area: existing.area || item.sellerProfile?.area || item.area || '',
+        city: existing.city || item.sellerProfile?.city || item.city || '',
+        verified: existing.verified || Boolean(item.sellerProfile?.verified || item.sellerType === 'business' || item.isBusinessProduct),
+        image: existing.image || item.sellerProfile?.avatarUrl || item.sellerProfileImage || item.avatarUrl || '',
+        coordinates: existing.coordinates || itemCoordinates || null,
+      });
+    });
+
+    const merged = new Map();
+    leaderboardRoster.forEach((profile) => {
+      merged.set(leaderboardProfileKey(profile), profile);
+    });
+    fromItems.forEach((profile, key) => {
+      const existing = merged.get(key) || {};
+      merged.set(key, {
+        ...existing,
+        ...profile,
+        karma: Math.max(Number(existing.karma || 0), Number(profile.karma || 0)),
+        listings: Math.max(Number(existing.listings || 0), Number(profile.listings || 0)),
+        completed: Math.max(Number(existing.completed || 0), Number(profile.completed || 0)),
+      });
+    });
+
+    if (user) {
+      const userKey = accountKey(user.userId || user.id || user.mobile) || `name:${String(user.name || '').toLowerCase()}`;
+      const existing = merged.get(userKey) || {};
+      merged.set(userKey, {
+        ...existing,
+        sellerId: String(user.userId || user.id || ''),
+        name: user.name || existing.name || 'Drizn User',
+        initials: user.initials || existing.initials || user.name?.split(' ').map((part) => part[0]).join('').slice(0, 2).toUpperCase() || 'DU',
+        karma: Math.max(Number(existing.karma || 0), Number(user.karma || 0)),
+        listings: Math.max(Number(existing.listings || 0), Number(user.listed || 0)),
+        completed: Math.max(Number(existing.completed || 0), Number(user.collected || 0)),
+        location: existing.location || locationLabel || 'Current GPS location',
+        image: user.profileImage || existing.image || '',
+        area: existing.area || user.location?.area || user.location?.subLocality || '',
+        city: existing.city || user.location?.city || user.location?.locality || '',
+        coordinates: existing.coordinates || (user.location ? {
+          latitude: Number(user.location.latitude),
+          longitude: Number(user.location.longitude),
+        } : null),
+      });
+    }
+
+    const nextRoster = [...merged.values()].filter((profile) => String(profile?.name || '').trim());
+    const prevSerialized = JSON.stringify(leaderboardRoster);
+    const nextSerialized = JSON.stringify(nextRoster);
+    if (prevSerialized !== nextSerialized) {
+      setLeaderboardRoster(nextRoster);
+      localStorage.setItem(LEADERBOARD_ROSTER_KEY, nextSerialized);
+    }
+  }, [items, leaderboardRoster, locationLabel, user]);
 
   useEffect(() => {
     const timer = window.setInterval(() => setRequestClock(Date.now()), 1000);
@@ -1219,7 +1318,7 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
       setNotice('This is your listing. You can edit or delete it, but you cannot purchase it.');
       return;
     }
-    if (!activeBuyer) {
+    if (!activeBuyer || !isLoggedIn()) {
       setQuantityItem(null);
       console.info('[request-submit] blocked unauthenticated buyer', requestDiagnostic);
       setSelectedItem(items.find((item) => item.id === itemId) ?? null);
@@ -1601,7 +1700,7 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
       setNotice('This is your listing. Use Edit listing or Delete listing to manage it.');
       return;
     }
-    if (!activeBuyer) {
+    if (!activeBuyer || !isLoggedIn()) {
       setSelectedItem(item);
       requireLogin('request');
       return;
@@ -2659,9 +2758,26 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
       state: 500,
       country: Number.POSITIVE_INFINITY,
     }[leaderboardScope];
+
+    const rosterMatchesScope = (profile = {}) => {
+      if (leaderboardScope === 'near1' || leaderboardScope === 'near5') {
+        if (!localCoordinates) return true;
+        const coordinates = profile.coordinates
+          ? { latitude: Number(profile.coordinates.latitude), longitude: Number(profile.coordinates.longitude) }
+          : null;
+        if (!coordinates || !Number.isFinite(coordinates.latitude) || !Number.isFinite(coordinates.longitude)) return false;
+        return haversineKm(localCoordinates, coordinates) <= fallbackRadius;
+      }
+      if (!activeScopeValue) return true;
+      const cityValue = String(profile.city || '').toLowerCase();
+      const areaValue = String(profile.area || '').toLowerCase();
+      const locationValue = String(profile.location || '').toLowerCase();
+      return cityValue === activeScopeValue || areaValue === activeScopeValue || locationValue.includes(activeScopeValue);
+    };
+
     const leaderboardItems = items.filter((item) => {
       if (leaderboardScope === 'near1' || leaderboardScope === 'near5') {
-        if (!localCoordinates) return false;
+        if (!localCoordinates) return true;
         const itemCoordinates = getItemCoordinates(item);
         const distanceKm = itemCoordinates ? haversineKm(localCoordinates, itemCoordinates) : null;
         return distanceKm !== null && distanceKm <= fallbackRadius;
@@ -2676,6 +2792,24 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
       return distanceKm !== null && distanceKm <= fallbackRadius;
     });
     const profileMap = new Map();
+    leaderboardRoster.filter(rosterMatchesScope).forEach((profile) => {
+      const key = leaderboardProfileKey(profile);
+      const coordinates = profile.coordinates
+        ? { latitude: Number(profile.coordinates.latitude), longitude: Number(profile.coordinates.longitude) }
+        : null;
+      const distanceKm = localCoordinates && coordinates
+        ? haversineKm(localCoordinates, coordinates)
+        : Number.POSITIVE_INFINITY;
+      profileMap.set(key, {
+        ...profile,
+        distanceKm,
+        karma: Number(profile.karma || 0),
+        listings: Number(profile.listings || 0),
+        completed: Number(profile.completed || 0),
+        location: profile.location || profile.area || profile.city || 'Current GPS location',
+      });
+    });
+
     leaderboardItems.forEach((item) => {
       const name = item.sellerName || item.brand || 'Drizn giver';
       const sellerId = String(item.sellerProfile?.id || item.sellerId || item.businessId || '').trim();
@@ -2706,8 +2840,8 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
         sellerId: existing.sellerId || sellerId,
         initials: existing.initials || item.sellerInitials || item.sellerProfile?.initials || '',
         karma: Math.max(existing.karma, item.sellerKarma || 0),
-        listings: existing.listings + 1,
-        completed: existing.completed + Number(item.completedCount || item.soldQuantity || 0),
+        listings: Math.max(Number(existing.listings || 0), 1),
+        completed: Math.max(Number(existing.completed || 0), Number(item.completedCount || item.soldQuantity || 0)),
         distanceKm: Math.min(existing.distanceKm, itemDistanceKm ?? Number.POSITIVE_INFINITY),
         location: existing.location || item.location,
         area: existing.area || item.sellerProfile?.area || item.area || '',
@@ -2760,7 +2894,7 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
       || a.distanceKm - b.distanceKm
       || b.completed - a.completed
     )).slice(0, 5);
-  }, [debouncedCoordinates, items, leaderboardScope, locationEngine.location, locationLabel, radiusKm, user]);
+  }, [debouncedCoordinates, items, leaderboardRoster, leaderboardScope, locationEngine.location, locationLabel, radiusKm, user]);
   const selectedPublicProfileItems = useMemo(() => {
     if (!selectedPublicProfile) return [];
     const selectedSellerId = String(selectedPublicProfile.sellerId || '').trim();
