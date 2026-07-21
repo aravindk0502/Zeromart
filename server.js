@@ -1576,8 +1576,8 @@ app.post('/api/auth/resend-otp', async (req, res) => {
 app.post(['/api/auth/verify-otp', '/api/verify-otp'], async (req, res) => {
   const { phone, otp } = req.body || {};
   const mobile = normalizeIndianMobile(phone);
-  if (!mobile || !/^\d{6}$/.test(String(otp || '').trim())) {
-    return res.status(400).json({ error: 'Valid mobile number and 6-digit OTP are required' });
+  if (!mobile || !/^\d{4}$/.test(String(otp || '').trim())) {
+    return res.status(400).json({ error: 'Valid mobile number and 4-digit OTP are required' });
   }
 
   const config = requireMsg91Config(res);

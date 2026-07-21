@@ -53,8 +53,8 @@ export default function OtpModal({ onClose, onVerify }) {
   };
 
   const handleVerify = async () => {
-    if (!/^\d{6}$/.test(String(otp || ''))) {
-      setError('Enter a valid 6-digit OTP.');
+    if (!/^\d{4}$/.test(String(otp || ''))) {
+      setError('Enter a valid 4-digit OTP.');
       return;
     }
 
@@ -124,8 +124,10 @@ export default function OtpModal({ onClose, onVerify }) {
               OTP
               <input
                 value={otp}
-                onChange={(e) => setOtp(e.target.value)}
-                placeholder="123456"
+                onChange={(e) => setOtp(e.target.value.replace(/\D/g, '').slice(0, 4))}
+                inputMode="numeric"
+                maxLength={4}
+                placeholder="Enter 4-digit OTP"
                 className="mt-2 w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 outline-none focus:border-amber-500"
               />
             </label>

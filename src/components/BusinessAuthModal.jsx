@@ -47,7 +47,7 @@ export default function BusinessAuthModal({ open = true, onClose, onSuccess, emb
 
   const verifyOtp = async (event) => {
     event.preventDefault();
-    if (!/^\d{6}$/.test(String(otp || ''))) return setError('Enter a valid 6-digit OTP.');
+    if (!/^\d{4}$/.test(String(otp || ''))) return setError('Enter a valid 4-digit OTP.');
 
     setSubmitting(true);
     setError('');
@@ -173,8 +173,8 @@ export default function BusinessAuthModal({ open = true, onClose, onSuccess, emb
         ) : (
           <form onSubmit={verifyOtp}>
             <button type="button" onClick={() => { setStep('details'); setError(''); }} className="mb-4 inline-flex items-center gap-2 text-sm font-bold text-slate-500"><ArrowLeft size={16} /> Change details</button>
-            <div className="rounded-xl bg-emerald-50 p-4 text-sm text-emerald-800">OTP sent to +91 {form.mobile}. Enter the 6-digit code from SMS.</div>
-            <label className="mt-4 block text-sm font-semibold text-slate-700">6-digit OTP<input autoFocus value={otp} onChange={(event) => setOtp(event.target.value.replace(/\D/g, '').slice(0, 6))} inputMode="numeric" className="mt-2 w-full rounded-xl border border-slate-200 px-4 py-3 text-center text-xl font-bold tracking-[0.35em] outline-none focus:border-emerald-500" /></label>
+            <div className="rounded-xl bg-emerald-50 p-4 text-sm text-emerald-800">OTP sent to +91 {form.mobile}. Enter the 4-digit code from SMS.</div>
+            <label className="mt-4 block text-sm font-semibold text-slate-700">4-digit OTP<input autoFocus value={otp} onChange={(event) => setOtp(event.target.value.replace(/\D/g, '').slice(0, 4))} inputMode="numeric" maxLength={4} placeholder="Enter 4-digit OTP" className="mt-2 w-full rounded-xl border border-slate-200 px-4 py-3 text-center text-xl font-bold tracking-[0.35em] outline-none focus:border-emerald-500" /></label>
             {error && <p className="mt-3 text-sm font-semibold text-rose-600">{error}</p>}
             <button disabled={submitting} className="mt-4 inline-flex w-full items-center justify-center gap-2 rounded-xl bg-emerald-600 px-4 py-3 font-bold text-white disabled:opacity-60"><CheckCircle2 size={18} /> {submitting ? 'Verifying...' : 'Verify and continue'}</button>
           </form>

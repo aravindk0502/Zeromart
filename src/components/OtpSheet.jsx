@@ -9,7 +9,7 @@ export default function OtpSheet() {
 
   const [step, setStep]       = useState('phone');
   const [phone, setPhone]     = useState('');
-  const [otp, setOtp]         = useState(['', '', '', '', '', '']);
+  const [otp, setOtp]         = useState(['', '', '', '']);
   const [sending, setSending] = useState(false);
   const [verifying, setVerifying] = useState(false);
   const [phoneErr, setPhoneErr]   = useState('');
@@ -20,7 +20,7 @@ export default function OtpSheet() {
   useEffect(() => {
     if (gate) {
       setStep('phone'); setPhone('');
-      setOtp(['', '', '', '', '', '']);
+      setOtp(['', '', '', '']);
       setPhoneErr(''); setOtpErr('');
     }
   }, [gate]);
@@ -54,12 +54,12 @@ export default function OtpSheet() {
       return;
     }
     const next = [...otp]; next[i] = val[val.length - 1]; setOtp(next);
-    if (i < 5) inputRefs.current[i + 1]?.focus();
+    if (i < 3) inputRefs.current[i + 1]?.focus();
     else verifyCode([...otp.slice(0, i), val[val.length - 1]].join(''));
   }
 
   async function verifyCode(code) {
-    if (!code || code.length < 6) return;
+    if (!code || code.length < 4) return;
     setOtpErr('');
     setVerifying(true);
     try {
@@ -76,7 +76,7 @@ export default function OtpSheet() {
 
   function handleVerify() {
     const code = otp.join('');
-    if (code.length < 6) { setOtpErr('Enter the 6-digit OTP'); return; }
+    if (code.length < 4) { setOtpErr('Enter the 4-digit OTP'); return; }
     verifyCode(code);
   }
 
@@ -111,8 +111,8 @@ export default function OtpSheet() {
                 {step === 'phone'
                   ? 'We use your number only to verify your identity. No spam.'
                   : isDemo
-                    ? 'Enter any 6 digits to continue while SMS is being connected.'
-                    : 'Enter the 6-digit code sent via SMS.'}
+                    ? 'Enter any 4 digits to continue while SMS is being connected.'
+                    : 'Enter the 4-digit code sent via SMS.'}
               </div>
             </div>
 
