@@ -337,6 +337,7 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
   const [showListingSheet, setShowListingSheet] = useState(false);
   const [editingItem, setEditingItem] = useState(null);
   const [showBuyerPaySheet, setShowBuyerPaySheet] = useState(false);
+  const [handoverSubmittingRequestId, setHandoverSubmittingRequestId] = useState('');
   const [showKarmaPopup, setShowKarmaPopup] = useState(false);
   const [karmaSubmitting, setKarmaSubmitting] = useState(false);
   const [karmaError, setKarmaError] = useState('');
@@ -742,12 +743,7 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
         });
       } catch (error) {
         if (cancelled) return;
-        if (Number(error?.status) === 401 || Number(error?.status) === 403) {
-          clearToken();
-          setUser(null);
-          localStorage.removeItem('zeromart-user');
-          setNotice('Your session expired. Log in again to continue.');
-        }
+        console.warn('[profile] non-blocking profile sync failed', error?.message || error);
       }
     };
 
@@ -1245,12 +1241,8 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
 
   const handleAuthExpired = () => {
     buyerAccessBypassRef.current = false;
-    clearToken();
-    setUser(null);
-    localStorage.removeItem('zeromart-user');
     setShowBuyerPaySheet(false);
-    setNotice('Your session expired. Log in again to continue secure payment.');
-    setShowOtpModal(true);
+    setNotice('Could not refresh account verification right now. Please try again.');
   };
 
   const handleNav = (view) => {
@@ -2454,6 +2446,10 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
   };
 
   const handleSellerHandover = (notification) => {
+    const requestId = String(notification?.requestId || '');
+    if (!requestId) return;
+    setHandoverSubmittingRequestId(requestId);
+    setNotice('Submitting handover confirmation...');
     markRequestHandover(notification.requestId, { actorAccountId: activeAccountId })
       .then((result) => {
         const pendingAction = result?.pendingAction || null;
@@ -2480,6 +2476,9 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
       })
       .catch((error) => {
         setNotice(error?.message || 'Could not record handover right now.');
+      })
+      .finally(() => {
+        setHandoverSubmittingRequestId('');
       });
   };
 
@@ -3601,6 +3600,7 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
                 onCloseNotification={() => setSelectedNotification(null)}
                 onRequestDecision={handleRequestDecision}
                 onSellerHandover={handleSellerHandover}
+                handoverSubmittingRequestId={handoverSubmittingRequestId}
                 onMarkCollected={handleMarkCollected}
                 onBack={handleBack}
               />

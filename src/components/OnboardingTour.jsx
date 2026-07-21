@@ -24,6 +24,13 @@ const STEPS = [
     accent: 'from-violet-600 to-amber-500',
   },
   {
+    icon: '⭐',
+    title: 'Complete with Good Karma',
+    subtitle: 'Close each exchange with trust and appreciation.',
+    body: 'After handover, send Good Karma to the community giver or store partner. This keeps top local helpers visible and trusted.',
+    accent: 'from-emerald-600 to-violet-600',
+  },
+  {
     icon: '🏷️',
     title: 'List what you no longer need',
     subtitle: 'Make giving feel effortless.',

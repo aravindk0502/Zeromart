@@ -41,6 +41,7 @@ export default function NotificationsPage({
   onCloseNotification,
   onRequestDecision,
   onSellerHandover,
+  handoverSubmittingRequestId = '',
   onMarkCollected,
   onBack,
 }) {
@@ -89,16 +90,18 @@ export default function NotificationsPage({
       );
     }
     if (item.type === 'request' && ['accepted', 'awaiting_collection', 'confirmed'].includes(item.requestStatus) && !item.sellerGave) {
+      const isSubmitting = String(handoverSubmittingRequestId || '') === String(item.requestId || '');
       return (
         <button
           type="button"
+          disabled={isSubmitting}
           onClick={(event) => {
             event.stopPropagation();
             onSellerHandover(item);
           }}
-          className="mt-3 inline-flex w-full items-center justify-center gap-2 rounded-xl bg-emerald-700 px-3 py-2.5 text-sm font-bold text-white"
+          className={`mt-3 inline-flex w-full items-center justify-center gap-2 rounded-xl px-3 py-2.5 text-sm font-bold text-white ${isSubmitting ? 'cursor-not-allowed bg-emerald-500' : 'bg-emerald-700'}`}
         >
-          <Check size={16} /> I handed over the item
+          <Check size={16} /> {isSubmitting ? 'Recording handover...' : 'I handed over the item'}
         </button>
       );
     }
