@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { MapPin } from 'lucide-react';
 import { useLocationEngine } from '../hooks/useLocationEngine';
-import { sendOtp, setToken, verifyOtp } from '../lib/api';
+import { resendOtp, sendOtp, setToken, verifyOtp } from '../lib/api';
 
 export default function OtpModal({ onClose, onVerify }) {
   const locationEngine = useLocationEngine();
@@ -10,6 +10,7 @@ export default function OtpModal({ onClose, onVerify }) {
   const [otp, setOtp] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
+  const [resent, setResent] = useState(false);
 
   const handleSendOtp = async () => {
     const normalizedMobile = String(mobile || '').replace(/\D/g, '');
@@ -24,8 +25,28 @@ export default function OtpModal({ onClose, onVerify }) {
       await sendOtp(normalizedMobile);
       setMobile(normalizedMobile);
       setStep('otp');
+      setResent(false);
     } catch (nextError) {
       setError(nextError?.message || 'Could not send OTP. Please try again.');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const handleResendOtp = async () => {
+    const normalizedMobile = String(mobile || '').replace(/\D/g, '');
+    if (!/^\d{10}$/.test(normalizedMobile)) {
+      setError('Enter a valid 10-digit mobile number.');
+      return;
+    }
+
+    setSubmitting(true);
+    setError('');
+    try {
+      await resendOtp(normalizedMobile, 'text');
+      setResent(true);
+    } catch (nextError) {
+      setError(nextError?.message || 'Could not resend OTP. Please try again.');
     } finally {
       setSubmitting(false);
     }
@@ -95,7 +116,7 @@ export default function OtpModal({ onClose, onVerify }) {
             <button type="button" onClick={handleSendOtp} disabled={submitting} className="w-full rounded-2xl bg-violet-600 px-4 py-3 font-semibold text-white disabled:opacity-60">
               {submitting ? 'Sending OTP…' : 'Send OTP'}
             </button>
-            <p className="text-center text-sm text-slate-500">For now, use OTP 123456.</p>
+            <p className="text-center text-sm text-slate-500">You will receive an OTP SMS on this number.</p>
           </div>
         ) : (
           <div className="mt-5 space-y-4">
@@ -113,8 +134,12 @@ export default function OtpModal({ onClose, onVerify }) {
               <p className="mt-1 text-sm font-semibold text-violet-700">Buy for ₹0. Sell for ₹0. Earn good karma.</p>
             </div>
             {error && <p className="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">{error}</p>}
+            {resent && <p className="rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">OTP resent successfully.</p>}
             <button type="button" onClick={handleVerify} disabled={submitting} className="w-full rounded-2xl bg-violet-600 px-4 py-3 font-semibold text-white disabled:opacity-60">
               {submitting ? 'Verifying…' : 'Verify'}
+            </button>
+            <button type="button" onClick={handleResendOtp} disabled={submitting} className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 font-semibold text-slate-700 disabled:opacity-60">
+              {submitting ? 'Please wait…' : 'Resend OTP'}
             </button>
           </div>
         )}

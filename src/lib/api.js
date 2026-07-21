@@ -14,6 +14,7 @@ const IS_PRODUCTION = import.meta.env.PROD;
 const PROD_API_FALLBACK = 'https://drizn.com';
 const PROD_PAYMENT_API_FALLBACK = 'https://web-production-74e61.up.railway.app';
 const BUYER_ACCESS_CREATE_ORDER_TIMEOUT_MS = 15000;
+const OTP_REQUEST_TIMEOUT_MS = 15000;
 
 const apiUrl = (path, base = BASE) => `${String(base || '').replace(/\/$/, '')}${path}`;
 
@@ -102,6 +103,7 @@ async function requestJson(path, options = {}) {
     auth = false,
     headers = {},
     baseOverride = '',
+    timeoutMs = 0,
   } = options;
 
   const bases = baseOverride ? [baseOverride] : getCandidateBases();
@@ -110,6 +112,10 @@ async function requestJson(path, options = {}) {
 
   for (const base of bases) {
     const url = apiUrl(path, base);
+    const controller = new AbortController();
+    const timeoutId = Number(timeoutMs) > 0
+      ? setTimeout(() => controller.abort(), Number(timeoutMs))
+      : null;
     try {
       const res = await fetch(url, {
         method,
@@ -120,6 +126,7 @@ async function requestJson(path, options = {}) {
           ...headers,
         },
         cache: isGet ? 'no-store' : 'default',
+        signal: controller.signal,
         ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
       });
 
@@ -148,12 +155,17 @@ async function requestJson(path, options = {}) {
       }
       return data;
     } catch (error) {
+      const normalizedError = error?.name === 'AbortError'
+        ? new Error('Request timed out.')
+        : error;
       console.error('[api] request error', {
         url,
-        error: String(error?.message || error),
-        possibleCorsError: isCorsLikeError(error),
+        error: String(normalizedError?.message || normalizedError),
+        possibleCorsError: isCorsLikeError(normalizedError),
       });
-      lastError = error;
+      lastError = normalizedError;
+    } finally {
+      if (timeoutId) clearTimeout(timeoutId);
     }
   }
 
@@ -219,18 +231,29 @@ async function put(path, body) {
 
 // ── Auth ──────────────────────────────────────────────────────────────────────
 export async function sendOtp(phone) {
-  return requestAcrossBases('/api/send-otp', {
+  return requestAcrossBases('/api/auth/send-otp', {
     method: 'POST',
     body: { phone },
     auth: false,
+    timeoutMs: OTP_REQUEST_TIMEOUT_MS,
   }, getAuthBases());
 }
 
 export async function verifyOtp(phone, otp) {
-  return requestAcrossBases('/api/verify-otp', {
+  return requestAcrossBases('/api/auth/verify-otp', {
     method: 'POST',
     body: { phone, otp },
     auth: false,
+    timeoutMs: OTP_REQUEST_TIMEOUT_MS,
+  }, getAuthBases());
+}
+
+export async function resendOtp(phone, retryType = 'text') {
+  return requestAcrossBases('/api/auth/resend-otp', {
+    method: 'POST',
+    body: { phone, retryType },
+    auth: false,
+    timeoutMs: OTP_REQUEST_TIMEOUT_MS,
   }, getAuthBases());
 }
 

@@ -39,6 +39,7 @@ import {
   fetchOrders,
   fetchListingById,
   fetchNotificationHistory,
+  fetchFavourites,
   fetchPendingKarmaActions,
   isLoggedIn,
   markRequestHandover,
@@ -1227,6 +1228,16 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
     setShowOtpModal(false);
     setNotice('Welcome! You can list for free and buy anything for ₹0 with a ₹29 yearly platform fee for buyer access.');
     requestPushAccessForAccount(nextAccountId);
+    fetchFavourites()
+      .then((rows) => {
+        if (!Array.isArray(rows)) return;
+        const favoriteIds = rows.map((value) => String(value));
+        setFavorites(favoriteIds);
+        localStorage.setItem('zeromart-favorites', JSON.stringify(favoriteIds));
+      })
+      .catch(() => {
+        // Keep existing local favorites when the remote sync is unavailable.
+      });
   };
 
   const handleAuthExpired = () => {

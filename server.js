@@ -1388,82 +1388,236 @@ async function awardCommunityKarmaViaDb(sellerId) {
   return updatedRows;
 }
 
-// ── OTP store (in-memory for demo; persists in DB when available) ─────────────
-const otpStore = new Map(); // phone → { otp, expires }
+const MSG91_TIMEOUT_MS = 15000;
+
+function normalizeIndianMobile(input = '') {
+  const digits = String(input || '').replace(/\D/g, '');
+  if (/^91\d{10}$/.test(digits)) return digits;
+  if (/^\d{10}$/.test(digits)) return `91${digits}`;
+  return '';
+}
+
+async function parseProviderBody(response) {
+  const raw = await response.text();
+  try {
+    return raw ? JSON.parse(raw) : {};
+  } catch {
+    return { raw };
+  }
+}
+
+function requireMsg91Config(res) {
+  const authKey = String(process.env.MSG91_AUTH_KEY || '').trim();
+  const templateId = String(process.env.MSG91_TEMPLATE_ID || '').trim();
+  if (!authKey || !templateId) {
+    res.status(503).json({
+      error: 'OTP service is not configured',
+      code: 'MSG91_NOT_CONFIGURED',
+    });
+    return null;
+  }
+  return { authKey, templateId };
+}
+
+async function sendMsg91Otp({ authKey, templateId, mobile }) {
+  const url = `https://control.msg91.com/api/v5/otp?template_id=${encodeURIComponent(templateId)}&mobile=${encodeURIComponent(mobile)}`;
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: {
+      authkey: authKey,
+      'Content-Type': 'application/json',
+    },
+    signal: AbortSignal.timeout(MSG91_TIMEOUT_MS),
+  });
+  const body = await parseProviderBody(response);
+  return { response, body, url };
+}
+
+async function verifyMsg91Otp({ authKey, mobile, otp }) {
+  const url = `https://control.msg91.com/api/v5/otp/verify?mobile=${encodeURIComponent(mobile)}&otp=${encodeURIComponent(String(otp || '').trim())}`;
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: {
+      authkey: authKey,
+      'Content-Type': 'application/json',
+    },
+    signal: AbortSignal.timeout(MSG91_TIMEOUT_MS),
+  });
+  const body = await parseProviderBody(response);
+  return { response, body, url };
+}
+
+async function resendMsg91Otp({ authKey, mobile, retryType = 'text' }) {
+  const normalizedRetryType = ['text', 'voice'].includes(String(retryType || '').toLowerCase())
+    ? String(retryType).toLowerCase()
+    : 'text';
+  const url = `https://control.msg91.com/api/v5/otp/retry?mobile=${encodeURIComponent(mobile)}&retrytype=${encodeURIComponent(normalizedRetryType)}`;
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: {
+      authkey: authKey,
+      'Content-Type': 'application/json',
+    },
+    signal: AbortSignal.timeout(MSG91_TIMEOUT_MS),
+  });
+  const body = await parseProviderBody(response);
+  return { response, body, url };
+}
 
 // ── Routes ────────────────────────────────────────────────────────────────────
 
-// Send OTP
-app.post('/api/send-otp', async (req, res) => {
+// Send OTP via MSG91
+app.post(['/api/auth/send-otp', '/api/send-otp'], async (req, res) => {
   const { phone } = req.body || {};
-  if (!phone || !/^\d{10}$/.test(phone)) {
-    return res.status(400).json({ error: 'Valid 10-digit phone number required' });
+  const mobile = normalizeIndianMobile(phone);
+  if (!mobile) {
+    return res.status(400).json({ error: 'Valid Indian mobile number required' });
   }
 
-  const authKey    = process.env.MSG91_AUTH_KEY;
-  const templateId = process.env.MSG91_TEMPLATE_ID;
-
-  if (!authKey || !templateId) {
-    const demoOtp = '123456';
-    otpStore.set(phone, { otp: demoOtp, expires: Date.now() + 5 * 60 * 1000 });
-    console.log(`[DEMO] OTP for ${phone}: ${demoOtp}`);
-    return res.json({ success: true, demo: true });
-  }
+  const config = requireMsg91Config(res);
+  if (!config) return;
 
   try {
-    const url = `https://control.msg91.com/api/v5/otp?template_id=${templateId}&mobile=91${phone}`;
-    const response = await fetch(url, {
-      method: 'POST',
-      headers: { authkey: authKey, 'Content-Type': 'application/json' },
+    const { response, body, url } = await sendMsg91Otp({
+      authKey: config.authKey,
+      templateId: config.templateId,
+      mobile,
     });
-    const data = await response.json();
-    if (data.type === 'success') return res.json({ success: true });
-    return res.status(500).json({ error: data.message || 'MSG91 error' });
-  } catch (err) {
-    return res.status(500).json({ error: 'Failed to send OTP' });
+    if (response.ok && String(body?.type || '').toLowerCase() === 'success') {
+      return res.json({ success: true, mobile });
+    }
+
+    console.error('[MSG91] send otp failed', { status: response.status, url, body });
+    return res.status(502).json({
+      error: body?.message || body?.error || 'MSG91 send OTP failed',
+      providerStatus: response.status,
+      providerBody: body,
+    });
+  } catch (error) {
+    const timedOut = String(error?.name || '').toLowerCase() === 'timeouterror' || /aborted|timed out/i.test(String(error?.message || ''));
+    console.error('[MSG91] send otp error', {
+      mobile,
+      message: String(error?.message || error),
+      timedOut,
+    });
+    return res.status(timedOut ? 504 : 500).json({
+      error: timedOut ? 'OTP provider timeout while sending OTP' : 'Failed to send OTP',
+    });
   }
 });
 
-// Verify OTP → return JWT
-app.post('/api/verify-otp', async (req, res) => {
+// Resend OTP via MSG91
+app.post('/api/auth/resend-otp', async (req, res) => {
+  const { phone, retryType } = req.body || {};
+  const mobile = normalizeIndianMobile(phone);
+  if (!mobile) {
+    return res.status(400).json({ error: 'Valid Indian mobile number required' });
+  }
+
+  const config = requireMsg91Config(res);
+  if (!config) return;
+
+  try {
+    const { response, body, url } = await resendMsg91Otp({
+      authKey: config.authKey,
+      mobile,
+      retryType,
+    });
+    if (response.ok && String(body?.type || '').toLowerCase() === 'success') {
+      return res.json({ success: true, mobile });
+    }
+
+    console.error('[MSG91] resend otp failed', { status: response.status, url, body });
+    return res.status(502).json({
+      error: body?.message || body?.error || 'MSG91 resend OTP failed',
+      providerStatus: response.status,
+      providerBody: body,
+    });
+  } catch (error) {
+    const timedOut = String(error?.name || '').toLowerCase() === 'timeouterror' || /aborted|timed out/i.test(String(error?.message || ''));
+    console.error('[MSG91] resend otp error', {
+      mobile,
+      message: String(error?.message || error),
+      timedOut,
+    });
+    return res.status(timedOut ? 504 : 500).json({
+      error: timedOut ? 'OTP provider timeout while resending OTP' : 'Failed to resend OTP',
+    });
+  }
+});
+
+// Verify OTP and create session
+app.post(['/api/auth/verify-otp', '/api/verify-otp'], async (req, res) => {
   const { phone, otp } = req.body || {};
-  if (!phone || !otp) return res.status(400).json({ error: 'phone and otp required' });
-
-  const authKey = process.env.MSG91_AUTH_KEY;
-
-  if (authKey) {
-    try {
-      const url = `https://control.msg91.com/api/v5/otp/verify?mobile=91${phone}&otp=${otp}`;
-      const response = await fetch(url, { method: 'POST', headers: { authkey: authKey } });
-      const data = await response.json();
-      if (data.type !== 'success') return res.status(400).json({ error: 'Incorrect OTP' });
-    } catch {
-      return res.status(500).json({ error: 'OTP verification failed' });
-    }
-  } else {
-    // Demo mode: accept any 6-digit OTP — no MSG91 keys configured
-    if (!/^\d{6}$/.test(String(otp))) {
-      return res.status(400).json({ error: 'Enter a valid 6-digit OTP' });
-    }
-    otpStore.delete(phone);
+  const mobile = normalizeIndianMobile(phone);
+  if (!mobile || !/^\d{6}$/.test(String(otp || '').trim())) {
+    return res.status(400).json({ error: 'Valid mobile number and 6-digit OTP are required' });
   }
 
-  // Get or create user
-  let user;
-  if (dbEnabled) {
-    const result = await pool.query(
-      `INSERT INTO users (phone) VALUES ($1)
-       ON CONFLICT (phone) DO UPDATE SET phone = EXCLUDED.phone
-       RETURNING *`,
-      [phone]
-    );
-    user = result.rows[0];
-  } else {
-    user = { id: `demo_${phone}`, phone, name: 'Unknown', initials: 'UN', mode: 'seller', is_buyer: false, karma: 0, credits: 0, vouchers: 0, has_seen_tour: false };
-  }
+  const config = requireMsg91Config(res);
+  if (!config) return;
 
-  const token = jwt.sign({ id: user.id, phone }, JWT_SECRET, { expiresIn: '90d' });
-  return res.json({ success: true, token, user });
+  try {
+    const { response, body, url } = await verifyMsg91Otp({
+      authKey: config.authKey,
+      mobile,
+      otp,
+    });
+
+    if (!(response.ok && String(body?.type || '').toLowerCase() === 'success')) {
+      console.error('[MSG91] verify otp failed', { status: response.status, url, body });
+      return res.status(400).json({
+        error: body?.message || body?.error || 'Incorrect OTP',
+        providerStatus: response.status,
+        providerBody: body,
+      });
+    }
+
+    const phoneDigits = mobile.slice(-10);
+    let user;
+    if (dbEnabled) {
+      const result = await pool.query(
+        `INSERT INTO users (phone) VALUES ($1)
+         ON CONFLICT (phone) DO UPDATE SET phone = EXCLUDED.phone
+         RETURNING *`,
+        [phoneDigits]
+      );
+      user = await normalizeExpiredBuyerAccess(result.rows[0]?.id, result.rows[0]);
+    } else {
+      user = {
+        id: `demo_${phoneDigits}`,
+        phone: phoneDigits,
+        name: 'Unknown',
+        initials: 'UN',
+        mode: 'seller',
+        is_buyer: false,
+        karma: 0,
+        credits: 0,
+        vouchers: 0,
+        has_seen_tour: false,
+      };
+    }
+
+    const token = jwt.sign({ id: user.id, phone: phoneDigits }, JWT_SECRET, { expiresIn: '90d' });
+    return res.json({
+      success: true,
+      token,
+      user: {
+        ...user,
+        ...serializeUserBuyerAccess(user),
+      },
+    });
+  } catch (error) {
+    const timedOut = String(error?.name || '').toLowerCase() === 'timeouterror' || /aborted|timed out/i.test(String(error?.message || ''));
+    console.error('[MSG91] verify otp error', {
+      mobile,
+      message: String(error?.message || error),
+      timedOut,
+    });
+    return res.status(timedOut ? 504 : 500).json({
+      error: timedOut ? 'OTP provider timeout while verifying OTP' : 'OTP verification failed',
+    });
+  }
 });
 
 // Get profile
