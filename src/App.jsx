@@ -2446,6 +2446,16 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
     setSelectedNotification(null);
   };
 
+  const triggerHandoverHaptic = () => {
+    try {
+      if (typeof navigator !== 'undefined' && typeof navigator.vibrate === 'function') {
+        navigator.vibrate([18, 28, 18]);
+      }
+    } catch {
+      // Haptics are optional and should never block handover confirmation.
+    }
+  };
+
   const handleSellerHandover = (notification) => {
     const requestId = String(notification?.requestId || '');
     if (!requestId) return;
@@ -2453,6 +2463,7 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
     setNotice('Submitting handover confirmation...');
     markRequestHandover(notification.requestId, { actorAccountId: activeAccountId })
       .then((result) => {
+        triggerHandoverHaptic();
         setHandoverSuccessRequestId(requestId);
         window.setTimeout(() => {
           setHandoverSuccessRequestId((current) => (current === requestId ? '' : current));
