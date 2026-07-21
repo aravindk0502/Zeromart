@@ -294,6 +294,46 @@ const leaderboardProfileKey = (profile = {}) => {
   return sellerId || `name:${String(profile.name || '').trim().toLowerCase()}`;
 };
 
+const normalizeProfileText = (value) => String(value || '').trim().toLowerCase();
+const GENERIC_PROFILE_NAMES = new Set(['unknown', 'drizn user', 'you', 'seller', 'business store', 'drizn giver']);
+
+const collectProfileIdentifiers = (profile = {}) => {
+  return new Set([
+    profile.sellerId,
+    profile.profileId,
+    profile.accountId,
+    profile.ownerMobile,
+    profile.mobile,
+  ].map((value) => String(value || '').trim()).filter(Boolean));
+};
+
+const collectItemOwnerIdentifiers = (item = {}) => {
+  return new Set([
+    item.sellerProfile?.id,
+    item.sellerId,
+    item.businessId,
+    item.ownerMobile,
+    item.metadata?.ownerMobile,
+  ].map((value) => String(value || '').trim()).filter(Boolean));
+};
+
+const doesItemMatchProfile = (item = {}, profile = {}) => {
+  const profileIds = collectProfileIdentifiers(profile);
+  const itemIds = collectItemOwnerIdentifiers(item);
+  if (profileIds.size && itemIds.size) {
+    for (const identifier of profileIds) {
+      if (itemIds.has(identifier)) return true;
+    }
+  }
+
+  const profileName = normalizeProfileText(profile.name);
+  const itemName = normalizeProfileText(item.sellerName || item.storeName || item.brand || item.sellerProfile?.name);
+  if (!profileName || !itemName || GENERIC_PROFILE_NAMES.has(profileName) || GENERIC_PROFILE_NAMES.has(itemName)) {
+    return false;
+  }
+  return profileName === itemName;
+};
+
 export default function App({ path = '/', navigate = (nextPath) => { window.location.href = nextPath; } }) {
   const locationEngine = useLocationEngine();
   const [activeView, setActiveView] = useState('home');
@@ -2930,23 +2970,6 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
       return distanceKm !== null && distanceKm <= fallbackRadius;
     });
     const profileMap = new Map();
-    leaderboardRoster.filter(rosterMatchesScope).forEach((profile) => {
-      const key = leaderboardProfileKey(profile);
-      const coordinates = profile.coordinates
-        ? { latitude: Number(profile.coordinates.latitude), longitude: Number(profile.coordinates.longitude) }
-        : null;
-      const distanceKm = localCoordinates && coordinates
-        ? haversineKm(localCoordinates, coordinates)
-        : Number.POSITIVE_INFINITY;
-      profileMap.set(key, {
-        ...profile,
-        distanceKm,
-        karma: Number(profile.karma || 0),
-        listings: Number(profile.listings || 0),
-        completed: Number(profile.completed || 0),
-        location: profile.location || profile.area || profile.city || 'Current GPS location',
-      });
-    });
 
     leaderboardItems.forEach((item) => {
       const name = item.sellerName || item.brand || 'Drizn giver';
@@ -3009,6 +3032,7 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
           b.karma - a.karma
           || a.distanceKm - b.distanceKm
           || b.completed - a.completed
+          || String(a.sellerId || a.name || '').localeCompare(String(b.sellerId || b.name || ''))
         )).slice(0, 5);
       }
       const userSellerId = accountKey(user.userId || user.id || user.mobile);
@@ -3031,16 +3055,17 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
       b.karma - a.karma
       || a.distanceKm - b.distanceKm
       || b.completed - a.completed
+      || String(a.sellerId || a.name || '').localeCompare(String(b.sellerId || b.name || ''))
     )).slice(0, 5);
-  }, [debouncedCoordinates, items, leaderboardRoster, leaderboardScope, locationEngine.location, locationLabel, radiusKm, user]);
+  }, [debouncedCoordinates, items, leaderboardScope, locationEngine.location, locationLabel, radiusKm, user]);
   const selectedPublicProfileItems = useMemo(() => {
     if (!selectedPublicProfile) return [];
-    const selectedSellerId = String(selectedPublicProfile.sellerId || '').trim();
-    return items.filter((item) => {
-      const itemSellerId = String(item.sellerProfile?.id || item.sellerId || item.businessId || '').trim();
-      if (selectedSellerId && itemSellerId) return itemSellerId === selectedSellerId;
-      return (item.sellerName || item.brand) === selectedPublicProfile.name;
-    });
+    return items
+      .filter((item) => doesItemMatchProfile(item, selectedPublicProfile))
+      .map((item) => ({
+        ...item,
+        image: item.image || item.imageUrl || item.photo_url || buildFallbackAvatarImage(item.title || 'Item'),
+      }));
   }, [items, selectedPublicProfile]);
   const openPublicSellerProfile = (item) => {
     if (!item) return;
@@ -3062,11 +3087,7 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
       || buildFallbackAvatarImage(name);
     const accountTypeRaw = String(sellerProfile.accountType || item.sellerType || (item.isBusinessProduct ? 'business' : 'community')).toLowerCase();
     const accountType = accountTypeRaw === 'business' || accountTypeRaw === 'store' ? 'business' : 'community';
-    const listingCount = items.filter((entry) => {
-      const entrySellerId = String(entry.sellerProfile?.id || entry.sellerId || entry.businessId || '').trim();
-      if (sellerId && entrySellerId) return entrySellerId === sellerId;
-      return (entry.sellerName || entry.brand) === name;
-    }).length;
+    const listingCount = items.filter((entry) => doesItemMatchProfile(entry, { sellerId, name })).length;
     const area = sellerProfile.area || item.area || item.locationData?.area || item.locationData?.locality || '';
     const city = sellerProfile.city || item.city || item.locationData?.city || '';
     setSelectedPublicProfile({
@@ -3349,7 +3370,7 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
                         const RankIcon = index === 0 ? Gem : index < 3 ? Medal : Award;
                         const rankLabel = index === 0 ? 'Diamond' : index === 1 ? 'Gold' : index === 2 ? 'Silver' : 'Bronze';
                         return (
-                          <button key={profile.name} onClick={() => setSelectedPublicProfile(profile)} className={`relative snap-start overflow-hidden rounded-2xl border p-3.5 text-left transition duration-200 hover:-translate-y-1 hover:shadow-lg ${rankStyle}`}>
+                          <button key={profile.sellerId || `${profile.name}-${index}`} onClick={() => setSelectedPublicProfile(profile)} className={`relative snap-start overflow-hidden rounded-2xl border p-3.5 text-left transition duration-200 hover:-translate-y-1 hover:shadow-lg ${rankStyle}`}>
                             <div className="mb-3 flex items-center justify-between gap-2">
                               <span className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[10px] font-extrabold uppercase tracking-[0.1em] shadow-sm ${rankBadge}`}>
                                 <RankIcon size={12} fill="currentColor" /> {rankLabel}
@@ -3792,7 +3813,16 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
                       }}
                       className="flex w-full items-center gap-3 rounded-2xl border border-slate-100 bg-slate-50 p-2 text-left transition hover:bg-violet-50"
                     >
-                        <img src={item.image} alt={item.title} loading="lazy" decoding="async" className="h-12 w-12 shrink-0 rounded-xl object-cover" />
+                        <img
+                          src={item.image || item.imageUrl || item.photo_url || buildFallbackAvatarImage(item.title || 'Item')}
+                          alt={item.title}
+                          loading="lazy"
+                          decoding="async"
+                          className="h-12 w-12 shrink-0 rounded-xl object-cover"
+                          onError={(event) => {
+                            event.currentTarget.src = buildFallbackAvatarImage(item.title || 'Item');
+                          }}
+                        />
                       <div className="min-w-0 flex-1">
                         <p className="truncate text-sm font-semibold text-slate-900">{item.title}</p>
                         <p className="truncate text-xs text-slate-500">{item.category} · {item.condition} · {item.distance}</p>
