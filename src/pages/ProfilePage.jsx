@@ -39,6 +39,7 @@ const buildProfileDraft = (user) => ({
   locationLink: user?.locationLink || '',
   websiteLink: user?.websiteLink || '',
   instagramLink: user?.instagramLink || '',
+  karmaPopupEnabled: user?.karmaPopupEnabled !== false,
 });
 
 export default function ProfilePage({ user, items = [], orders = [], receivedOrders = [], onLogin, onBack, onLogout, onUpdateUser, onSelectItem }) {
@@ -60,7 +61,7 @@ export default function ProfilePage({ user, items = [], orders = [], receivedOrd
     setProfileDraft(buildProfileDraft(user));
     setPendingProfileImage('');
     setProfileError('');
-  }, [isEditingProfile, user?.bio, user?.instagramLink, user?.locationLink, user?.mobile, user?.name, user?.websiteLink]);
+  }, [isEditingProfile, user?.bio, user?.instagramLink, user?.karmaPopupEnabled, user?.locationLink, user?.mobile, user?.name, user?.websiteLink]);
 
   const handleProfileImage = async (event) => {
     const file = event.target.files?.[0];
@@ -84,6 +85,7 @@ export default function ProfilePage({ user, items = [], orders = [], receivedOrd
     const locationLink = profileDraft.locationLink.trim();
     const websiteLink = profileDraft.websiteLink.trim();
     const instagramLink = profileDraft.instagramLink.trim();
+    const karmaPopupEnabled = profileDraft.karmaPopupEnabled !== false;
     try {
       onUpdateUser?.({
         name,
@@ -92,9 +94,10 @@ export default function ProfilePage({ user, items = [], orders = [], receivedOrd
         locationLink,
         websiteLink,
         instagramLink,
+        karmaPopupEnabled,
         ...(pendingProfileImage ? { profileImage: pendingProfileImage } : {}),
       });
-      setProfileDraft({ name, mobile, bio, locationLink, websiteLink, instagramLink });
+      setProfileDraft({ name, mobile, bio, locationLink, websiteLink, instagramLink, karmaPopupEnabled });
       setPendingProfileImage('');
       setIsEditingProfile(false);
       setProfileError('');
@@ -326,6 +329,18 @@ export default function ProfilePage({ user, items = [], orders = [], receivedOrd
                   onChange={(event) => setProfileDraft((current) => ({ ...current, instagramLink: event.target.value }))}
                   placeholder="instagram.com/your-profile"
                   className="mt-2 w-full rounded-xl border border-violet-100 bg-white px-3 py-2.5 text-sm font-semibold text-slate-900 outline-none focus:border-violet-300 focus:ring-2 focus:ring-violet-100"
+                />
+              </label>
+              <label className="flex items-center justify-between rounded-xl border border-violet-100 bg-white px-3 py-3 sm:col-span-2">
+                <span>
+                  <span className="block text-xs font-bold uppercase tracking-[0.12em] text-slate-500">Karma Popup Alert</span>
+                  <span className="mt-1 block text-sm font-semibold text-slate-700">Show popup when you receive Good Karma</span>
+                </span>
+                <input
+                  type="checkbox"
+                  checked={profileDraft.karmaPopupEnabled !== false}
+                  onChange={(event) => setProfileDraft((current) => ({ ...current, karmaPopupEnabled: event.target.checked }))}
+                  className="h-5 w-5"
                 />
               </label>
             </div>

@@ -370,7 +370,9 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
     isBusinessAccount: true,
     profileId: businessSession.profileId || businessSession.id,
     profileImage: businessSession.profileImage || businessSession.avatarUrl || '',
+    karmaPopupEnabled: businessSession.karmaPopupEnabled !== false,
   } : null);
+  const karmaPopupEnabled = activeBuyer?.karmaPopupEnabled !== false;
   const activeAccountId = activeBuyer?.userId || activeBuyer?.businessId || activeBuyer?.mobile || activeBuyer?.name || '';
   const commitNotifications = (updater) => {
     setNotifications((current) => {
@@ -710,6 +712,7 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
           userId: parsedUser.userId || parsedUser.id || parsedUser.mobile || current?.userId || current?.mobile || '',
           profileId: parsedUser.profileId || parsedUser.id || parsedUser.userId || current?.profileId || current?.id || '',
           profileImage: parsedUser.profileImage || parsedUser.avatarUrl || current?.profileImage || '',
+          karmaPopupEnabled: parsedUser.karmaPopupEnabled !== false,
         }));
       }
     } catch {
@@ -728,6 +731,9 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
         const metadata = profile.metadata && typeof profile.metadata === 'object' ? profile.metadata : {};
         const nextName = profile.name || profile.display_name || profile.full_name || metadata.displayName || metadata.fullName || '';
         const nextImage = profile.profile_image || profile.avatar_url || metadata.profileImage || metadata.avatarUrl || '';
+        const remoteKarmaPopupEnabled = typeof profile.karma_popup_enabled === 'boolean'
+          ? profile.karma_popup_enabled
+          : (typeof metadata.karmaPopupEnabled === 'boolean' ? metadata.karmaPopupEnabled : undefined);
         setUser((current) => {
           if (!current) return current;
           const merged = {
@@ -738,6 +744,9 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
             buyerAccessExpiresAt: profile.buyer_access_expires_at || current.buyerAccessExpiresAt || '',
             buyerAccessActivatedAt: profile.buyer_access_activated_at || current.buyerAccessActivatedAt || '',
             userId: current.userId || profile.id || current.mobile,
+            karmaPopupEnabled: typeof remoteKarmaPopupEnabled === 'boolean'
+              ? remoteKarmaPopupEnabled
+              : (current.karmaPopupEnabled !== false),
           };
           localStorage.setItem('zeromart-user', JSON.stringify(merged));
           return merged;
@@ -1222,6 +1231,7 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
       location: locationEngine.location,
       buyerAccessExpiresAt: serverUser.buyer_access_expires_at || '',
       buyerAccessActivatedAt: serverUser.buyer_access_activated_at || '',
+      karmaPopupEnabled: serverUser.karma_popup_enabled !== false,
     };
     setUser(nextUser);
     localStorage.setItem('zeromart-user', JSON.stringify(nextUser));
@@ -2633,6 +2643,13 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
   }, [activeAccountId, notifications]);
 
   useEffect(() => {
+    if (karmaPopupEnabled) return;
+    setKarmaReceivedToast(null);
+    setKarmaReceivedQueue([]);
+  }, [karmaPopupEnabled]);
+
+  useEffect(() => {
+    if (!karmaPopupEnabled) return;
     if (!activeAccountId) return;
 
     const nextEvents = [...visibleNotifications]
@@ -2666,7 +2683,7 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
 
       return additions.length ? [...currentQueue, ...additions] : currentQueue;
     });
-  }, [activeAccountId, karmaReceivedToast?.id, visibleNotifications]);
+  }, [activeAccountId, karmaPopupEnabled, karmaReceivedToast?.id, visibleNotifications]);
 
   useEffect(() => {
     if (karmaReceivedToast || !karmaReceivedQueue.length) return;

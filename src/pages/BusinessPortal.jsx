@@ -111,6 +111,11 @@ export default function BusinessPortal({ path, navigate }) {
 
   useEffect(() => {
     if (!account) return undefined;
+    if (account.karmaPopupEnabled === false) {
+      setKarmaReceivedToast(null);
+      setKarmaReceivedQueue([]);
+      return undefined;
+    }
 
     const matchesRecipient = (notification) => {
       const recipient = String(notification?.recipientId || notification?.payload?.recipientId || '').trim();
@@ -866,7 +871,7 @@ function Analytics({ account, products, orders }) {
 
 function BusinessProfile({ account, updateAccount }) {
   const locationEngine = useLocationEngine();
-  const [form, setForm] = useState(account);
+  const [form, setForm] = useState({ ...account, karmaPopupEnabled: account?.karmaPopupEnabled !== false });
   const [showPicker, setShowPicker] = useState(false);
   const [selectedPurchase, setSelectedPurchase] = useState(null);
   const [saving, setSaving] = useState(false);
@@ -905,6 +910,7 @@ function BusinessProfile({ account, updateAccount }) {
         profileId: form.profileId || account.profileId || account.id,
         profileImage: profileImageUrl,
         avatarUrl: profileImageUrl,
+        karmaPopupEnabled: form.karmaPopupEnabled !== false,
       };
       updateAccount(nextAccount);
 
@@ -924,6 +930,7 @@ function BusinessProfile({ account, updateAccount }) {
           accountType: 'business',
           mode: 'business',
           verified: true,
+          karmaPopupEnabled: nextAccount.karmaPopupEnabled !== false,
         });
       }
 
@@ -990,6 +997,18 @@ function BusinessProfile({ account, updateAccount }) {
               <p className="text-xs font-bold text-slate-500">Mobile</p>
               <p className="mt-2 font-semibold">+91 ******{String(account.mobile).slice(-4)}</p>
             </div>
+            <label className="flex items-center justify-between rounded-xl border border-emerald-100 bg-emerald-50 px-3 py-3 sm:col-span-2">
+              <span>
+                <span className="block text-xs font-bold uppercase tracking-[0.12em] text-emerald-700">Karma Popup Alert</span>
+                <span className="mt-1 block text-sm font-semibold text-slate-700">Show popup when your store receives Good Karma</span>
+              </span>
+              <input
+                type="checkbox"
+                checked={form.karmaPopupEnabled !== false}
+                onChange={(event) => setForm((current) => ({ ...current, karmaPopupEnabled: event.target.checked }))}
+                className="h-5 w-5"
+              />
+            </label>
             <div className="rounded-xl border border-emerald-100 bg-emerald-50 p-3 sm:col-span-2">
               <p className="text-xs font-bold uppercase tracking-[0.12em] text-emerald-700">Geotagged store location</p>
               <p className="mt-2 font-bold text-slate-900">{form.locationData ? locationLabel(form.locationData) : 'No structured location saved'}</p>
