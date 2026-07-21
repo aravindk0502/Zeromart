@@ -337,6 +337,7 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
   const [showListingSheet, setShowListingSheet] = useState(false);
   const [editingItem, setEditingItem] = useState(null);
   const [showBuyerPaySheet, setShowBuyerPaySheet] = useState(false);
+  const [showBuyerAccessSuccessCard, setShowBuyerAccessSuccessCard] = useState(false);
   const [handoverSubmittingRequestId, setHandoverSubmittingRequestId] = useState('');
   const [handoverSuccessRequestId, setHandoverSuccessRequestId] = useState('');
   const [showKarmaPopup, setShowKarmaPopup] = useState(false);
@@ -2248,6 +2249,7 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
 
     setShowBuyerPaySheet(false);
     setNotice('Buyer access activated for 1 year.');
+    setShowBuyerAccessSuccessCard(true);
 
     const pendingRequest = buyerAccessPendingRequestRef.current;
     if (pendingRequest) {
@@ -3879,6 +3881,39 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
             <div style={{ display: 'flex', gap: 10, justifyContent: 'center' }}>
               <button type="button" className="btn btn-ghost" onClick={() => { setShowPostSuccessModal(false); setShowListingSheet(true); }}>Add another</button>
               <button type="button" className="btn btn-primary" onClick={() => setShowPostSuccessModal(false)}>Done</button>
+            </div>
+          </div>
+        </div>
+      )}
+      {showBuyerAccessSuccessCard && (
+        <div className="sheet-center">
+          <div className="glass-card" style={{ maxWidth: 460, padding: 22, textAlign: 'center' }}>
+            <h3 style={{ fontSize: 20, fontWeight: 900, marginBottom: 8 }}>Payment successful</h3>
+            <p style={{ color: 'var(--zm-text-dim)', lineHeight: 1.6, marginBottom: 16 }}>
+              Your 1 year buyer access of Rs 29 is paid successfully.
+              <br />
+              You can now request unlimited products for Rs 0 on Drizn.
+            </p>
+            <div style={{ display: 'flex', gap: 10, justifyContent: 'center' }}>
+              <button
+                type="button"
+                className="btn btn-primary"
+                onClick={() => {
+                  setShowBuyerAccessSuccessCard(false);
+                  setActiveView('home');
+                  setSelectedItem(null);
+                  setSelectedNotification(null);
+                }}
+              >
+                Start buying
+              </button>
+              <button
+                type="button"
+                className="btn btn-ghost"
+                onClick={() => setShowBuyerAccessSuccessCard(false)}
+              >
+                Close
+              </button>
             </div>
           </div>
         </div>
