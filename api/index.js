@@ -461,17 +461,25 @@ function rescuePriorityMs(row = {}) {
   return remaining <= 5 * 24 * 60 * 60 * 1000 ? remaining : Infinity;
 }
 
+function isSoldOutListingRow(row = {}) {
+  const status = listingStatusValue(row);
+  if (status.includes('sold') || status.includes('unavailable') || status.includes('completed')) return true;
+  return listingAvailableQuantity(row) <= 0;
+}
+
+function listingDisplayPriority(row = {}) {
+  if (isSoldOutListingRow(row)) return 2;
+  return isBusinessListingRow(row) ? 0 : 1;
+}
+
 function sortPublicListingRows(a, b) {
+  const aPriority = listingDisplayPriority(a);
+  const bPriority = listingDisplayPriority(b);
+  if (aPriority !== bPriority) return aPriority - bPriority;
+
   const aRescue = rescuePriorityMs(a);
   const bRescue = rescuePriorityMs(b);
-  const aIsRescue = Number.isFinite(aRescue);
-  const bIsRescue = Number.isFinite(bRescue);
-  if (aIsRescue !== bIsRescue) return aIsRescue ? -1 : 1;
-  if (aIsRescue && bIsRescue && aRescue !== bRescue) return aRescue - bRescue;
-
-  const aBiz = isBusinessListingRow(a);
-  const bBiz = isBusinessListingRow(b);
-  if (aBiz !== bBiz) return aBiz ? -1 : 1;
+  if (Number.isFinite(aRescue) && Number.isFinite(bRescue) && aRescue !== bRescue) return aRescue - bRescue;
 
   return new Date(b.created_at || 0) - new Date(a.created_at || 0);
 }

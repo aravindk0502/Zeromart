@@ -199,11 +199,11 @@ export default function HomePage({
 
   const nearbyProducts = useMemo(() => {
     const groupPriority = (item) => {
-      const expiryBadge = item.expiryBadge || getExpiryBadgeState(item);
-      const isNearExpiry = Boolean(expiryBadge.nearExpiry);
-      if (isNearExpiry) return 0;
-      if (item.isBusinessProduct || item.listingType === 'business' || item.sellerType === 'business') return 1;
-      return 2;
+      const requestable = Number(item?.requestState?.requestableStock ?? item?.availableQuantity ?? 0);
+      const soldOut = Boolean(item?.isSoldOut) || requestable <= 0 || String(item?.status || '').toLowerCase().includes('sold');
+      if (soldOut) return 2;
+      if (item.isBusinessProduct || item.listingType === 'business' || item.sellerType === 'business') return 0;
+      return 1;
     };
     const distanceValue = (item) => (
       Number.isFinite(Number(item.distanceKm)) ? Number(item.distanceKm) : Number.POSITIVE_INFINITY

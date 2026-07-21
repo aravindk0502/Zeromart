@@ -2678,7 +2678,14 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
       const matchesCondition = conditionFilter === 'All' || item.condition === conditionFilter;
       return matchesQuery && matchesCategory && matchesCondition;
     }).sort((first, second) => {
-      if (first.isSoldOut !== second.isSoldOut) return first.isSoldOut ? 1 : -1;
+      const priority = (item) => {
+        if (item.isSoldOut) return 2;
+        if (item.isBusinessProduct || item.listingType === 'business' || item.sellerType === 'business') return 0;
+        return 1;
+      };
+      const firstPriority = priority(first);
+      const secondPriority = priority(second);
+      if (firstPriority !== secondPriority) return firstPriority - secondPriority;
       const firstDistance = first.distanceKm ?? Number.POSITIVE_INFINITY;
       const secondDistance = second.distanceKm ?? Number.POSITIVE_INFINITY;
       if (firstDistance !== secondDistance) return firstDistance - secondDistance;
@@ -3088,8 +3095,19 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
                     className="inline-flex min-w-0 shrink-0 items-center gap-2 rounded-xl border border-emerald-200 bg-white/95 px-3 py-2.5 text-left text-emerald-800 shadow-sm transition hover:-translate-y-0.5 hover:bg-white"
                     aria-label={`Open ${businessSession.businessName} business dashboard`}
                   >
-                    <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-emerald-700 text-white">
-                      <ShieldCheck size={16} />
+                    <span className="flex h-8 w-8 shrink-0 items-center justify-center overflow-hidden rounded-lg bg-emerald-700 text-white">
+                      {(businessSession.profileImage || businessSession.avatarUrl) ? (
+                        <img
+                          src={businessSession.profileImage || businessSession.avatarUrl}
+                          alt={businessSession.businessName || 'Business'}
+                          className="h-full w-full object-cover"
+                          onError={(event) => {
+                            event.currentTarget.src = buildFallbackAvatarImage(businessSession.businessName || 'Business');
+                          }}
+                        />
+                      ) : (
+                        <ShieldCheck size={16} />
+                      )}
                     </span>
                     <span className="min-w-0">
                       <span className="block text-[9px] font-extrabold uppercase tracking-[0.12em] text-emerald-600">Business verified</span>
