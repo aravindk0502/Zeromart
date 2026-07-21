@@ -2770,7 +2770,21 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
   }, [activeAccountId, categoryFilter, conditionFilter, debouncedCoordinates, hasActiveSearch, items, radiusKm, requestClock, searchQuery]);
 
   const rescueItems = useMemo(() => rankedItems
-    .filter((item) => item.nearExpiry)
+    .filter((item) => {
+      const requestableStock = Number(item.requestState?.requestableStock ?? item.availableQuantity ?? 0);
+      if (requestableStock <= 0 || item.isSoldOut) return false;
+
+      const expiryBadge = item.expiryBadge || getExpiryBadgeState(item, requestClock);
+      if (expiryBadge?.nearExpiry) return true;
+      if (Number.isFinite(expiryBadge?.hoursRemaining) && Number(expiryBadge.hoursRemaining) <= 48) return true;
+      if (Boolean(item.nearExpiryDeal || item.nearExpiry)) return true;
+
+      const fallbackText = [item.condition, item.status, item.description]
+        .filter(Boolean)
+        .join(' ')
+        .toLowerCase();
+      return fallbackText.includes('near expiry') || fallbackText.includes('expires today') || fallbackText.includes('expiring');
+    })
     .map((item) => ({ ...item }))
     .sort((first, second) => (
       (first.hoursRemaining ?? Number.POSITIVE_INFINITY) - (second.hoursRemaining ?? Number.POSITIVE_INFINITY)
