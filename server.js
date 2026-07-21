@@ -1484,7 +1484,20 @@ app.post(['/api/auth/send-otp', '/api/send-otp'], async (req, res) => {
       mobile,
     });
     if (response.ok && String(body?.type || '').toLowerCase() === 'success') {
-      return res.json({ success: true, mobile });
+      console.info('[MSG91] send otp success', {
+        status: response.status,
+        url,
+        type: body?.type,
+        message: body?.message,
+        requestId: body?.request_id || body?.requestId || null,
+      });
+      return res.json({
+        success: true,
+        mobile,
+        providerType: body?.type || 'success',
+        providerMessage: body?.message || '',
+        requestId: body?.request_id || body?.requestId || null,
+      });
     }
 
     console.error('[MSG91] send otp failed', { status: response.status, url, body });
@@ -1524,7 +1537,20 @@ app.post('/api/auth/resend-otp', async (req, res) => {
       retryType,
     });
     if (response.ok && String(body?.type || '').toLowerCase() === 'success') {
-      return res.json({ success: true, mobile });
+      console.info('[MSG91] resend otp success', {
+        status: response.status,
+        url,
+        type: body?.type,
+        message: body?.message,
+        requestId: body?.request_id || body?.requestId || null,
+      });
+      return res.json({
+        success: true,
+        mobile,
+        providerType: body?.type || 'success',
+        providerMessage: body?.message || '',
+        requestId: body?.request_id || body?.requestId || null,
+      });
     }
 
     console.error('[MSG91] resend otp failed', { status: response.status, url, body });
@@ -1599,9 +1625,18 @@ app.post(['/api/auth/verify-otp', '/api/verify-otp'], async (req, res) => {
     }
 
     const token = jwt.sign({ id: user.id, phone: phoneDigits }, JWT_SECRET, { expiresIn: '90d' });
+    console.info('[MSG91] verify otp success', {
+      status: response.status,
+      url,
+      type: body?.type,
+      message: body?.message,
+      requestId: body?.request_id || body?.requestId || null,
+      userId: user.id,
+    });
     return res.json({
       success: true,
       token,
+      requestId: body?.request_id || body?.requestId || null,
       user: {
         ...user,
         ...serializeUserBuyerAccess(user),
