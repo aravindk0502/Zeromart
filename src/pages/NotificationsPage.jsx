@@ -42,6 +42,7 @@ export default function NotificationsPage({
   onRequestDecision,
   onSellerHandover,
   handoverSubmittingRequestId = '',
+  handoverSuccessRequestId = '',
   onMarkCollected,
   onBack,
 }) {
@@ -91,22 +92,26 @@ export default function NotificationsPage({
     }
     if (item.type === 'request' && ['accepted', 'awaiting_collection', 'confirmed'].includes(item.requestStatus) && !item.sellerGave) {
       const isSubmitting = String(handoverSubmittingRequestId || '') === String(item.requestId || '');
+      const justRecorded = String(handoverSuccessRequestId || '') === String(item.requestId || '');
       return (
         <button
           type="button"
-          disabled={isSubmitting}
+          disabled={isSubmitting || justRecorded}
           onClick={(event) => {
             event.stopPropagation();
             onSellerHandover(item);
           }}
-          className={`mt-3 inline-flex w-full items-center justify-center gap-2 rounded-xl px-3 py-2.5 text-sm font-bold text-white ${isSubmitting ? 'cursor-not-allowed bg-emerald-500' : 'bg-emerald-700'}`}
+          className={`mt-3 inline-flex w-full items-center justify-center gap-2 rounded-xl px-3 py-2.5 text-sm font-bold text-white ${isSubmitting ? 'cursor-not-allowed bg-emerald-500' : justRecorded ? 'cursor-not-allowed bg-emerald-600' : 'bg-emerald-700'}`}
         >
-          <Check size={16} /> {isSubmitting ? 'Recording handover...' : 'I handed over the item'}
+          <Check size={16} /> {isSubmitting ? 'Recording handover...' : justRecorded ? 'Handover recorded ✓' : 'I handed over the item'}
         </button>
       );
     }
     if (item.type === 'request' && item.requestStatus === 'karma_pending') {
-      return <p className="mt-3 rounded-xl bg-amber-100 px-3 py-2.5 text-center text-sm font-bold text-amber-900">Handed over · waiting for buyer Good Karma</p>;
+      const justRecorded = String(handoverSuccessRequestId || '') === String(item.requestId || '');
+      return justRecorded
+        ? <p className="mt-3 rounded-xl bg-emerald-100 px-3 py-2.5 text-center text-sm font-bold text-emerald-800">Handover recorded ✓ Buyer will now send Good Karma</p>
+        : <p className="mt-3 rounded-xl bg-amber-100 px-3 py-2.5 text-center text-sm font-bold text-amber-900">Handed over · waiting for buyer Good Karma</p>;
     }
     return null;
   };

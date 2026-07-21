@@ -338,6 +338,7 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
   const [editingItem, setEditingItem] = useState(null);
   const [showBuyerPaySheet, setShowBuyerPaySheet] = useState(false);
   const [handoverSubmittingRequestId, setHandoverSubmittingRequestId] = useState('');
+  const [handoverSuccessRequestId, setHandoverSuccessRequestId] = useState('');
   const [showKarmaPopup, setShowKarmaPopup] = useState(false);
   const [karmaSubmitting, setKarmaSubmitting] = useState(false);
   const [karmaError, setKarmaError] = useState('');
@@ -2452,6 +2453,10 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
     setNotice('Submitting handover confirmation...');
     markRequestHandover(notification.requestId, { actorAccountId: activeAccountId })
       .then((result) => {
+        setHandoverSuccessRequestId(requestId);
+        window.setTimeout(() => {
+          setHandoverSuccessRequestId((current) => (current === requestId ? '' : current));
+        }, 2000);
         const pendingAction = result?.pendingAction || null;
         if (pendingAction) savePendingKarmaAction(pendingAction);
         saveRequests(getRequests().map((request) => (
@@ -3601,6 +3606,7 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
                 onRequestDecision={handleRequestDecision}
                 onSellerHandover={handleSellerHandover}
                 handoverSubmittingRequestId={handoverSubmittingRequestId}
+                handoverSuccessRequestId={handoverSuccessRequestId}
                 onMarkCollected={handleMarkCollected}
                 onBack={handleBack}
               />
