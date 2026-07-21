@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { ArrowLeft, Building2, CheckCircle2, X } from 'lucide-react';
 import { getBusinessAccounts, saveBusinessAccounts, saveBusinessSession } from '../lib/businessStore';
+import { fetchProfile, sendOtp, setToken, updateProfile, verifyOtp as verifyOtpApi } from '../lib/api';
 import LocationPicker from './LocationPicker';
 import { useLocationEngine } from '../hooks/useLocationEngine';
 import { locationLabel } from '../services/locationService';
@@ -15,6 +16,7 @@ export default function BusinessAuthModal({ open = true, onClose, onSuccess, emb
   const [form, setForm] = useState(EMPTY);
   const [otp, setOtp] = useState('');
   const [error, setError] = useState('');
+  const [submitting, setSubmitting] = useState(false);
   const [showLocationPicker, setShowLocationPicker] = useState(false);
   if (!open) return null;
 
@@ -27,43 +29,104 @@ export default function BusinessAuthModal({ open = true, onClose, onSuccess, emb
     onClose?.();
   };
 
-  const requestOtp = (event) => {
+  const requestOtp = async (event) => {
     event.preventDefault();
-    const accounts = getBusinessAccounts();
     if (!/^\d{10}$/.test(form.mobile)) return setError('Enter a valid 10-digit mobile number.');
-    if (mode === 'login' && !accounts.some((account) => account.mobile === form.mobile)) return setError('No business account found. Choose Sign up to create one.');
     if (mode === 'signup' && (!form.ownerName || !form.businessName || !form.storeLocation || !form.address)) return setError('Complete all required business details.');
+    setSubmitting(true);
     setError('');
-    setStep('otp');
+    try {
+      await sendOtp(form.mobile);
+      setStep('otp');
+    } catch (nextError) {
+      setError(nextError?.message || 'Could not send OTP. Please try again.');
+    } finally {
+      setSubmitting(false);
+    }
   };
 
-  const verifyOtp = (event) => {
+  const verifyOtp = async (event) => {
     event.preventDefault();
-    if (otp !== '123456') return setError('Incorrect OTP. Use 123456.');
-    const accounts = getBusinessAccounts();
-    let account = accounts.find((entry) => entry.mobile === form.mobile);
-    if (mode === 'signup') {
-      account = { id: account?.id || `business-${Date.now()}`, profileId: account?.profileId || account?.id || `business-${Date.now()}`, ...form, karma: account?.karma || 0, verified: true, createdAt: account?.createdAt || new Date().toISOString(), profileImage: account?.profileImage || '', avatarUrl: account?.avatarUrl || '' };
+    if (!/^\d{6}$/.test(String(otp || ''))) return setError('Enter a valid 6-digit OTP.');
+
+    setSubmitting(true);
+    setError('');
+    try {
+      const authResult = await verifyOtpApi(form.mobile, otp);
+      if (!authResult?.token) {
+        throw new Error('Login failed. Token missing in verification response.');
+      }
+      setToken(authResult.token);
+
+      const accounts = getBusinessAccounts();
+      const existing = accounts.find((entry) => entry.mobile === form.mobile);
+      const authUser = authResult?.user || {};
+
+      if (mode === 'signup') {
+        await updateProfile({
+          name: form.businessName || form.ownerName || authUser?.name || 'Business Store',
+          fullName: form.ownerName || '',
+          businessName: form.businessName || '',
+          businessType: form.businessType || '',
+          registration: form.registration || '',
+          mobile: form.mobile,
+          storeLocation: form.storeLocation || '',
+          address: form.address || '',
+          locationData: form.locationData || null,
+          accountType: 'business',
+          mode: 'business',
+        });
+      }
+
+      let remoteProfile = null;
+      try {
+        remoteProfile = await fetchProfile();
+      } catch {
+        remoteProfile = null;
+      }
+
+      const profileMetadata = (remoteProfile && typeof remoteProfile.metadata === 'object') ? remoteProfile.metadata : {};
+      const accountId = String(existing?.id || authUser?.id || remoteProfile?.id || `business-${Date.now()}`);
+      const profileImage = remoteProfile?.profile_image || profileMetadata.profileImage || existing?.profileImage || existing?.avatarUrl || '';
+
+      const account = {
+        id: accountId,
+        userId: String(authUser?.id || remoteProfile?.id || accountId),
+        profileId: String(authUser?.id || remoteProfile?.id || accountId),
+        mobile: form.mobile,
+        ownerName: form.ownerName || existing?.ownerName || profileMetadata.fullName || authUser?.name || 'Owner',
+        businessName: form.businessName || existing?.businessName || profileMetadata.businessName || remoteProfile?.name || authUser?.name || 'Business Store',
+        businessType: form.businessType || existing?.businessType || profileMetadata.businessType || 'Supermarket',
+        storeLocation: form.storeLocation || existing?.storeLocation || profileMetadata.storeLocation || locationLabel(form.locationData || existing?.locationData || null),
+        address: form.address || existing?.address || profileMetadata.address || '',
+        registration: form.registration || existing?.registration || profileMetadata.registration || '',
+        locationData: form.locationData || existing?.locationData || profileMetadata.locationData || null,
+        karma: Number(authUser?.karma ?? remoteProfile?.karma_points ?? remoteProfile?.karma ?? existing?.karma ?? 0) || 0,
+        verified: true,
+        createdAt: existing?.createdAt || new Date().toISOString(),
+        profileImage,
+        avatarUrl: profileImage,
+      };
+
       saveBusinessAccounts([account, ...accounts.filter((entry) => entry.mobile !== form.mobile)]);
+      saveBusinessSession(account);
+      localStorage.setItem('zeromart-user', JSON.stringify({
+        ...authUser,
+        ...account,
+        isBusinessAccount: true,
+        businessId: account.id,
+        userId: account.userId,
+        profileId: account.profileId,
+        name: account.businessName || account.ownerName || authUser?.name || 'Business Store',
+        profileImage: account.profileImage || account.avatarUrl || '',
+      }));
+
+      onSuccess?.(account);
+    } catch (nextError) {
+      setError(nextError?.message || 'OTP verification failed. Please try again.');
+    } finally {
+      setSubmitting(false);
     }
-    const nextAccount = {
-      ...account,
-      userId: account?.userId || account?.id || account?.mobile,
-      profileId: account?.profileId || account?.id || account?.mobile,
-      profileImage: account?.profileImage || account?.avatarUrl || '',
-      avatarUrl: account?.avatarUrl || account?.profileImage || '',
-    };
-    saveBusinessSession(nextAccount);
-    localStorage.setItem('zeromart-user', JSON.stringify({
-      ...nextAccount,
-      isBusinessAccount: true,
-      businessId: nextAccount.id,
-      userId: nextAccount.userId,
-      profileId: nextAccount.profileId,
-      name: nextAccount.businessName || nextAccount.ownerName || 'Business Store',
-      profileImage: nextAccount.profileImage || nextAccount.avatarUrl || '',
-    }));
-    onSuccess?.(account);
   };
 
   const content = (
@@ -104,16 +167,16 @@ export default function BusinessAuthModal({ open = true, onClose, onSuccess, emb
                 <Field label="GST / FSSAI number (optional)" value={form.registration} onChange={(value) => setForm({ ...form, registration: value })} className="sm:col-span-2" />
               </>}
               {error && <p className="text-sm font-semibold text-rose-600 sm:col-span-2">{error}</p>}
-              <button className="rounded-xl bg-emerald-600 px-4 py-3 font-bold text-white shadow-lg shadow-emerald-600/15 hover:bg-emerald-700 sm:col-span-2">Send OTP</button>
+              <button disabled={submitting} className="rounded-xl bg-emerald-600 px-4 py-3 font-bold text-white shadow-lg shadow-emerald-600/15 hover:bg-emerald-700 disabled:opacity-60 sm:col-span-2">{submitting ? 'Sending...' : 'Send OTP'}</button>
             </form>
           </>
         ) : (
           <form onSubmit={verifyOtp}>
             <button type="button" onClick={() => { setStep('details'); setError(''); }} className="mb-4 inline-flex items-center gap-2 text-sm font-bold text-slate-500"><ArrowLeft size={16} /> Change details</button>
-            <div className="rounded-xl bg-emerald-50 p-4 text-sm text-emerald-800">OTP sent to +91 {form.mobile}. Use OTP: <strong>123456</strong></div>
+            <div className="rounded-xl bg-emerald-50 p-4 text-sm text-emerald-800">OTP sent to +91 {form.mobile}. Enter the 6-digit code from SMS.</div>
             <label className="mt-4 block text-sm font-semibold text-slate-700">6-digit OTP<input autoFocus value={otp} onChange={(event) => setOtp(event.target.value.replace(/\D/g, '').slice(0, 6))} inputMode="numeric" className="mt-2 w-full rounded-xl border border-slate-200 px-4 py-3 text-center text-xl font-bold tracking-[0.35em] outline-none focus:border-emerald-500" /></label>
             {error && <p className="mt-3 text-sm font-semibold text-rose-600">{error}</p>}
-            <button className="mt-4 inline-flex w-full items-center justify-center gap-2 rounded-xl bg-emerald-600 px-4 py-3 font-bold text-white"><CheckCircle2 size={18} /> Verify and continue</button>
+            <button disabled={submitting} className="mt-4 inline-flex w-full items-center justify-center gap-2 rounded-xl bg-emerald-600 px-4 py-3 font-bold text-white disabled:opacity-60"><CheckCircle2 size={18} /> {submitting ? 'Verifying...' : 'Verify and continue'}</button>
           </form>
         )}
       </div>

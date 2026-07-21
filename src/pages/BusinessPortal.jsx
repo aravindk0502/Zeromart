@@ -25,6 +25,7 @@ import {
   deleteListingFromBackend,
   saveListingToBackend,
 } from '../services/liveListingService';
+import { isLoggedIn, updateProfile, uploadImage } from '../lib/api';
 
 const links = [
   { path: '/business/dashboard', label: 'Business Dashboard', icon: Home },
@@ -61,6 +62,7 @@ export default function BusinessPortal({ path, navigate }) {
   const [mobileNav, setMobileNav] = useState(false);
   const [inventoryMode, setInventoryMode] = useState('manual');
   const [helpToast, setHelpToast] = useState(null);
+  const [liveSyncError, setLiveSyncError] = useState('');
   const helpTimer = useRef(null);
   const lastHelp = useRef({ message: '', time: 0 });
 
@@ -109,7 +111,10 @@ export default function BusinessPortal({ path, navigate }) {
   useEffect(() => {
     if (!account) return;
     const accounts = getBusinessAccounts();
-    applyExpiryRules(getBusinessProducts(), getBusinessRules()).forEach((product) => {
+    const publishAll = async () => {
+      const publishFailures = [];
+      const evaluatedProducts = applyExpiryRules(getBusinessProducts(), getBusinessRules());
+      for (const product of evaluatedProducts) {
       const status = String(product.status || '').toLowerCase();
       const availableQuantity = Number(product.availableQuantity ?? product.quantity ?? 0);
       const expiryTimestamp = product.expiryDate
@@ -119,14 +124,30 @@ export default function BusinessPortal({ path, navigate }) {
       const liveId = `business-product-${product.id}`;
       if (product.autoList === false || availableQuantity <= 0 || expired || ['expired', 'sold', 'hidden', 'completed'].includes(status)) {
         removeLiveListing(liveId);
-        deleteListingFromBackend(liveId).catch(() => {});
-        return;
+        try {
+          await deleteListingFromBackend(liveId);
+        } catch {
+          // Deletion failures are non-blocking for dashboard interactions.
+        }
+        continue;
       }
       const accountForProduct = accounts.find((entry) => entry.id === product.businessId) || account;
       const liveItem = toMarketplaceItem(product, accountForProduct);
       upsertLiveListing(liveItem);
-      saveListingToBackend(liveItem).catch(() => {});
-    });
+      try {
+        await saveListingToBackend(liveItem);
+      } catch (error) {
+        publishFailures.push({ id: liveId, message: error?.message || 'Unknown listing sync error' });
+      }
+      }
+
+      if (publishFailures.length) {
+        setLiveSyncError('Some products could not be pushed to live marketplace. Please retry after checking network and image upload.');
+      } else {
+        setLiveSyncError('');
+      }
+    };
+    publishAll();
   }, [account?.id]);
 
   const page = path.split('/').filter(Boolean)[1] || 'dashboard';
@@ -139,18 +160,21 @@ export default function BusinessPortal({ path, navigate }) {
     return <BusinessAuthModal embedded onClose={() => navigate('/')} onSuccess={(nextAccount) => { setAccount(nextAccount); navigate('/business/dashboard'); }} />;
   }
 
-  const syncBusinessLiveListings = (evaluatedProducts) => {
+  const syncBusinessLiveListings = async (evaluatedProducts) => {
     const accounts = getBusinessAccounts();
+    const failures = [];
     const nextIds = new Set(evaluatedProducts.map((product) => String(product.id)));
     products
       .filter((product) => !nextIds.has(String(product.id)))
       .forEach((product) => {
         const liveId = `business-product-${product.id}`;
         removeLiveListing(liveId);
-        deleteListingFromBackend(liveId).catch(() => {});
+        deleteListingFromBackend(liveId).catch(() => {
+          // Safe to ignore stale listing cleanup failures.
+        });
       });
 
-    evaluatedProducts.forEach((product) => {
+    for (const product of evaluatedProducts) {
       const status = String(product.status || '').toLowerCase();
       const availableQuantity = Number(product.availableQuantity ?? product.quantity ?? 0);
       const expiryTimestamp = product.expiryDate
@@ -161,22 +185,34 @@ export default function BusinessPortal({ path, navigate }) {
 
       if (product.autoList === false || availableQuantity <= 0 || expired || ['expired', 'sold', 'hidden', 'completed'].includes(status)) {
         removeLiveListing(liveId);
-        deleteListingFromBackend(liveId).catch(() => {});
-        return;
+        deleteListingFromBackend(liveId).catch(() => {
+          // Safe to ignore stale listing cleanup failures.
+        });
+        continue;
       }
 
       const accountForProduct = accounts.find((entry) => entry.id === product.businessId) || account;
       const liveItem = toMarketplaceItem(product, accountForProduct);
       upsertLiveListing(liveItem);
-      saveListingToBackend(liveItem).catch(() => {});
-    });
+      try {
+        await saveListingToBackend(liveItem);
+      } catch (error) {
+        failures.push({ id: liveId, message: error?.message || 'Unknown listing sync error' });
+      }
+    }
+
+    if (failures.length) {
+      setLiveSyncError('Some products are saved in dashboard but failed to publish live. Please edit and save again.');
+      return;
+    }
+    setLiveSyncError('');
   };
 
-  const persistProducts = (nextProducts) => {
+  const persistProducts = async (nextProducts) => {
     const evaluated = applyExpiryRules(nextProducts, rules);
     setProducts(evaluated);
     saveBusinessProducts(evaluated);
-    syncBusinessLiveListings(evaluated);
+    await syncBusinessLiveListings(evaluated);
   };
   const persistRules = (nextRules) => {
     setRules(nextRules);
@@ -196,6 +232,7 @@ export default function BusinessPortal({ path, navigate }) {
     saveBusinessSession(nextAccount);
     const accounts = getBusinessAccounts();
     saveBusinessAccounts([nextAccount, ...accounts.filter((entry) => entry.id !== nextAccount.id)]);
+    syncBusinessLiveListings(applyExpiryRules(getBusinessProducts(), getBusinessRules()));
   };
 
   const goBack = () => navigate(page === 'dashboard' ? '/' : '/business/dashboard');
@@ -242,7 +279,7 @@ export default function BusinessPortal({ path, navigate }) {
           <button onClick={() => setMobileNav(false)} className="rounded-lg p-2 text-slate-500 lg:hidden"><X size={20} /></button>
         </div>
         <div className="mt-6 rounded-2xl bg-emerald-50 p-4">
-          <div className="flex items-center gap-3"><div className="flex h-10 w-10 items-center justify-center rounded-full bg-white font-bold text-emerald-700">{initials(account.businessName)}</div><div className="min-w-0"><p className="truncate text-sm font-bold">{account.businessName}</p><p className="truncate text-xs text-slate-500">{account.businessType}</p></div></div>
+          <div className="flex items-center gap-3"><div className="flex h-10 w-10 items-center justify-center overflow-hidden rounded-full bg-white font-bold text-emerald-700">{(account.profileImage || account.avatarUrl) ? <img src={account.profileImage || account.avatarUrl} alt="Business" className="h-full w-full object-cover" /> : initials(account.businessName)}</div><div className="min-w-0"><p className="truncate text-sm font-bold">{account.businessName}</p><p className="truncate text-xs text-slate-500">{account.businessType}</p></div></div>
         </div>
         <nav className="mt-5 space-y-1">
           <NavButton icon={Home} label="Home" active={false} onClick={() => navigate('/')} />
@@ -267,6 +304,11 @@ export default function BusinessPortal({ path, navigate }) {
           </div>
         </header>
         <main className="mx-auto max-w-7xl p-4 pb-12 sm:p-6">
+          {liveSyncError && (
+            <div className="mb-4 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-semibold text-amber-900">
+              {liveSyncError}
+            </div>
+          )}
           {page === 'dashboard' && <Dashboard {...pageProps} navigate={navigate} setInventoryMode={setInventoryMode} />}
           {page === 'inventory' && <Inventory {...pageProps} mode={inventoryMode} setMode={setInventoryMode} persistProducts={persistProducts} />}
           {page === 'rules' && <Rules rules={rules} persistRules={persistRules} />}
@@ -334,28 +376,48 @@ function Dashboard({ account, products, orders, navigate, setInventoryMode }) {
 function Inventory({ account, products, mode, setMode, persistProducts }) {
   const [form, setForm] = useState({ ...emptyProduct, pickupLocation: account.storeLocation, locationData: account.locationData || null });
   const [csvRows, setCsvRows] = useState([]);
+  const [inventoryError, setInventoryError] = useState('');
+  const [submitting, setSubmitting] = useState(false);
   const fileRef = useRef(null);
-  const addProduct = (event) => {
+  const addProduct = async (event) => {
     event.preventDefault();
-    const next = {
-      ...form,
-      mrp: 0,
-      sellingPrice: 0,
-      id: `product-${Date.now()}`,
-      businessId: account.id,
-      storeName: account.businessName,
-      status: 'Safe',
-      totalQuantity: Number(form.quantity),
-      availableQuantity: Number(form.quantity),
-      reservedQuantity: 0,
-      soldQuantity: 0,
-      listingType: 'business',
-      maxQuantityPerUserPer24h: 2,
-      coordinates: form.locationData ? { latitude: form.locationData.latitude, longitude: form.locationData.longitude } : null,
-      createdAt: new Date().toISOString(),
-    };
-    persistProducts([next, ...getBusinessProducts()]);
-    setForm({ ...emptyProduct, pickupLocation: account.storeLocation, locationData: account.locationData || null });
+    setSubmitting(true);
+    setInventoryError('');
+    try {
+      let imageUrl = form.image || '';
+      if (imageUrl.startsWith('data:')) {
+        const blob = await fetch(imageUrl).then((response) => response.blob());
+        const imageExt = String(blob.type || 'image/jpeg').split('/')[1] || 'jpg';
+        const file = new File([blob], `business-product-${Date.now()}.${imageExt}`, { type: blob.type || 'image/jpeg' });
+        imageUrl = await uploadImage(file);
+      }
+
+      const next = {
+        ...form,
+        image: imageUrl,
+        imageUrl,
+        mrp: 0,
+        sellingPrice: 0,
+        id: `product-${Date.now()}`,
+        businessId: account.id,
+        storeName: account.businessName,
+        status: 'Safe',
+        totalQuantity: Number(form.quantity),
+        availableQuantity: Number(form.quantity),
+        reservedQuantity: 0,
+        soldQuantity: 0,
+        listingType: 'business',
+        maxQuantityPerUserPer24h: 2,
+        coordinates: form.locationData ? { latitude: form.locationData.latitude, longitude: form.locationData.longitude } : null,
+        createdAt: new Date().toISOString(),
+      };
+      await persistProducts([next, ...getBusinessProducts()]);
+      setForm({ ...emptyProduct, pickupLocation: account.storeLocation, locationData: account.locationData || null });
+    } catch (error) {
+      setInventoryError(error?.message || 'Could not add product. Please retry.');
+    } finally {
+      setSubmitting(false);
+    }
   };
   const parseCsv = async (file) => {
     const text = await file.text();
@@ -367,20 +429,23 @@ function Inventory({ account, products, mode, setMode, persistProducts }) {
       return { id: `csv-${index}`, name: row['product name'], category: row.category || 'Food', quantity, totalQuantity: quantity, availableQuantity: quantity, reservedQuantity: 0, soldQuantity: 0, listingType: 'business', maxQuantityPerUserPer24h: 2, mrp: 0, sellingPrice: 0, expiryDate: row['expiry date'], expiryTime: row['expiry time'] || '', imageUrl: row['image url'], description: row.description, autoList: true, pickupLocation: account.storeLocation, locationData: account.locationData || null, coordinates: account.locationData ? { latitude: account.locationData.latitude, longitude: account.locationData.longitude } : null };
     }).filter((row) => row.name));
   };
-  const saveCsv = () => {
+  const saveCsv = async () => {
     const stamped = csvRows.map((row, index) => ({ ...row, id: `product-${Date.now()}-${index}`, businessId: account.id, storeName: account.businessName, status: 'Safe', createdAt: new Date().toISOString() }));
-    persistProducts([...stamped, ...getBusinessProducts()]);
+    await persistProducts([...stamped, ...getBusinessProducts()]);
     setCsvRows([]);
   };
-  const remove = (id) => persistProducts(getBusinessProducts().filter((item) => item.id !== id));
+  const remove = async (id) => {
+    await persistProducts(getBusinessProducts().filter((item) => item.id !== id));
+  };
   return <div className="space-y-5">
     <div className="flex flex-col justify-between gap-3 sm:flex-row sm:items-end"><div><h2 className="text-2xl font-extrabold">Inventory</h2><p className="text-sm text-slate-500">Add products manually or import a CSV file.</p></div><div className="grid grid-cols-2 rounded-xl bg-white p-1 shadow-sm"><button onClick={() => setMode('manual')} className={`rounded-lg px-4 py-2 text-sm font-bold ${mode === 'manual' ? 'bg-emerald-600 text-white' : 'text-slate-500'}`}>Manual Add</button><button onClick={() => setMode('csv')} className={`rounded-lg px-4 py-2 text-sm font-bold ${mode === 'csv' ? 'bg-emerald-600 text-white' : 'text-slate-500'}`}>CSV Upload</button></div></div>
-    {mode === 'manual' ? <ProductForm form={form} setForm={setForm} onSubmit={addProduct} /> : <section className="rounded-2xl border border-emerald-100 bg-white p-5 shadow-sm"><input ref={fileRef} type="file" accept=".csv,text/csv" className="hidden" onChange={(event) => event.target.files?.[0] && parseCsv(event.target.files[0])} /><button onClick={() => fileRef.current?.click()} className="flex min-h-36 w-full flex-col items-center justify-center rounded-2xl border-2 border-dashed border-emerald-200 bg-emerald-50/50 px-4 text-center text-emerald-700"><Upload size={28} /><span className="mt-2 font-bold">Choose CSV file</span><span className="mt-1 max-w-xl text-xs leading-5">Product Name, Category, Quantity, Expiry Date, Image URL and Description. All imported products are fixed at ₹0 for now.</span></button>{csvRows.length > 0 && <Preview rows={csvRows} onSave={saveCsv} />}</section>}
+    {mode === 'manual' ? <ProductForm form={form} setForm={setForm} onSubmit={addProduct} submitting={submitting} /> : <section className="rounded-2xl border border-emerald-100 bg-white p-5 shadow-sm"><input ref={fileRef} type="file" accept=".csv,text/csv" className="hidden" onChange={(event) => event.target.files?.[0] && parseCsv(event.target.files[0])} /><button onClick={() => fileRef.current?.click()} className="flex min-h-36 w-full flex-col items-center justify-center rounded-2xl border-2 border-dashed border-emerald-200 bg-emerald-50/50 px-4 text-center text-emerald-700"><Upload size={28} /><span className="mt-2 font-bold">Choose CSV file</span><span className="mt-1 max-w-xl text-xs leading-5">Product Name, Category, Quantity, Expiry Date, Image URL and Description. All imported products are fixed at ₹0 for now.</span></button>{csvRows.length > 0 && <Preview rows={csvRows} onSave={saveCsv} />}</section>}
+    {inventoryError && <p className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm font-semibold text-rose-700">{inventoryError}</p>}
     <InventoryTable products={products} onDelete={remove} />
   </div>;
 }
 
-function ProductForm({ form, setForm, onSubmit }) {
+function ProductForm({ form, setForm, onSubmit, submitting = false }) {
   const locationEngine = useLocationEngine();
   const [showPickupPicker, setShowPickupPicker] = useState(false);
   const set = (key, value) => setForm({ ...form, [key]: value });
@@ -406,7 +471,7 @@ function ProductForm({ form, setForm, onSubmit }) {
       </button>
     </div><label className="flex items-center gap-3 rounded-xl bg-emerald-50 px-4 py-3 text-sm font-bold text-emerald-800"><input type="checkbox" checked={form.autoList} onChange={(e) => set('autoList', e.target.checked)} /> Auto-list ON</label>
     <label className="text-sm font-bold text-slate-700 sm:col-span-2 lg:col-span-3">Description<textarea value={form.description} onChange={(e) => set('description', e.target.value)} rows={3} className="mt-2 w-full resize-none rounded-xl border border-slate-200 px-3 py-3 outline-none focus:border-emerald-500" /></label>
-    <button className="rounded-xl bg-emerald-600 px-4 py-3 font-bold text-white sm:col-span-2 lg:col-span-3"><Plus size={18} className="mr-2 inline" />Add to inventory</button>
+    <button disabled={submitting} className="rounded-xl bg-emerald-600 px-4 py-3 font-bold text-white disabled:opacity-60 sm:col-span-2 lg:col-span-3"><Plus size={18} className="mr-2 inline" />{submitting ? 'Adding...' : 'Add to inventory'}</button>
   </form>
   <LocationPicker
     open={showPickupPicker}
@@ -695,6 +760,9 @@ function BusinessProfile({ account, updateAccount }) {
   const [form, setForm] = useState(account);
   const [showPicker, setShowPicker] = useState(false);
   const [selectedPurchase, setSelectedPurchase] = useState(null);
+  const [saving, setSaving] = useState(false);
+  const [profileError, setProfileError] = useState('');
+  const [profileNotice, setProfileNotice] = useState('');
   const purchases = getBusinessPurchases().filter((purchase) => purchase.buyerBusinessId === account.id);
   const activeCollectionPurchases = purchases.filter((purchase) => getCollectionPassState(purchase).active);
   const applyLocation = (location) => {
@@ -708,6 +776,71 @@ function BusinessProfile({ account, updateAccount }) {
     locationEngine.setLocation(mergedLocation);
     setForm((current) => ({ ...current, locationData: mergedLocation, storeLocation: locationLabel(mergedLocation), address: mergedLocation.fullAddress }));
   };
+
+  const saveProfile = async () => {
+    setSaving(true);
+    setProfileError('');
+    setProfileNotice('');
+    try {
+      let profileImageUrl = form.profileImage || form.avatarUrl || '';
+      if (profileImageUrl.startsWith('data:')) {
+        const blob = await fetch(profileImageUrl).then((response) => response.blob());
+        const imageExt = String(blob.type || 'image/jpeg').split('/')[1] || 'jpg';
+        const file = new File([blob], `business-profile-${Date.now()}.${imageExt}`, { type: blob.type || 'image/jpeg' });
+        profileImageUrl = await uploadImage(file);
+      }
+
+      const nextAccount = {
+        ...form,
+        userId: form.userId || account.userId || account.id,
+        profileId: form.profileId || account.profileId || account.id,
+        profileImage: profileImageUrl,
+        avatarUrl: profileImageUrl,
+      };
+      updateAccount(nextAccount);
+
+      if (isLoggedIn()) {
+        await updateProfile({
+          name: nextAccount.businessName || nextAccount.ownerName || 'Business Store',
+          fullName: nextAccount.ownerName || '',
+          businessName: nextAccount.businessName || '',
+          businessType: nextAccount.businessType || '',
+          registration: nextAccount.registration || '',
+          mobile: nextAccount.mobile || account.mobile || '',
+          profileImage: profileImageUrl,
+          avatarUrl: profileImageUrl,
+          storeLocation: nextAccount.storeLocation || '',
+          address: nextAccount.address || '',
+          locationData: nextAccount.locationData || null,
+          accountType: 'business',
+          mode: 'business',
+          verified: true,
+        });
+      }
+
+      setForm(nextAccount);
+      setProfileNotice('Business profile saved successfully.');
+    } catch (error) {
+      setProfileError(error?.message || 'Could not save profile. Please retry.');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const onProfileImageSelect = async (file) => {
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      setForm((current) => ({
+        ...current,
+        profileImage: String(reader.result || ''),
+        avatarUrl: String(reader.result || ''),
+      }));
+      setProfileNotice('Profile image selected. Save profile to publish it live.');
+    };
+    reader.readAsDataURL(file);
+  };
+
   return (
     <>
       <div className="mx-auto max-w-3xl space-y-5">
@@ -718,7 +851,17 @@ function BusinessProfile({ account, updateAccount }) {
 
         <section className="rounded-3xl border border-emerald-100 bg-white p-5 shadow-sm sm:p-6">
           <div className="flex flex-col gap-4 sm:flex-row sm:items-center">
-            <div className="flex h-20 w-20 items-center justify-center rounded-2xl bg-emerald-600 text-2xl font-extrabold text-white">{initials(account.businessName)}</div>
+            <div className="relative h-20 w-20">
+              {(form.profileImage || form.avatarUrl) ? (
+                <img src={form.profileImage || form.avatarUrl} alt="Business profile" className="h-20 w-20 rounded-2xl object-cover" />
+              ) : (
+                <div className="flex h-20 w-20 items-center justify-center rounded-2xl bg-emerald-600 text-2xl font-extrabold text-white">{initials(account.businessName)}</div>
+              )}
+              <label className="absolute -bottom-2 -right-2 cursor-pointer rounded-full bg-white p-2 text-xs font-bold text-emerald-700 shadow-sm">
+                <Upload size={14} />
+                <input type="file" accept="image/*" className="hidden" onChange={(event) => onProfileImageSelect(event.target.files?.[0])} />
+              </label>
+            </div>
             <div className="min-w-0 flex-1">
               <div className="flex flex-wrap items-center gap-2">
                 <h3 className="break-words text-2xl font-extrabold">{account.businessName}</h3>
@@ -748,7 +891,9 @@ function BusinessProfile({ account, updateAccount }) {
               </div>
             </div>
           </div>
-          <button onClick={() => updateAccount(form)} className="mt-5 rounded-xl bg-emerald-600 px-5 py-3 font-bold text-white">Save profile</button>
+          {profileError && <p className="mt-4 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm font-semibold text-rose-700">{profileError}</p>}
+          {profileNotice && <p className="mt-4 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-semibold text-emerald-800">{profileNotice}</p>}
+          <button disabled={saving} onClick={saveProfile} className="mt-5 rounded-xl bg-emerald-600 px-5 py-3 font-bold text-white disabled:opacity-60">{saving ? 'Saving...' : 'Save profile'}</button>
         </section>
 
         {activeCollectionPurchases.length > 0 && (
