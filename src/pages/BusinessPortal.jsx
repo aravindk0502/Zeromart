@@ -377,12 +377,14 @@ function Inventory({ account, products, mode, setMode, persistProducts }) {
   const [form, setForm] = useState({ ...emptyProduct, pickupLocation: account.storeLocation, locationData: account.locationData || null });
   const [csvRows, setCsvRows] = useState([]);
   const [inventoryError, setInventoryError] = useState('');
+  const [inventoryNotice, setInventoryNotice] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const fileRef = useRef(null);
   const addProduct = async (event) => {
     event.preventDefault();
     setSubmitting(true);
     setInventoryError('');
+    setInventoryNotice('');
     try {
       let imageUrl = form.image || '';
       if (imageUrl.startsWith('data:')) {
@@ -413,6 +415,7 @@ function Inventory({ account, products, mode, setMode, persistProducts }) {
       };
       await persistProducts([next, ...getBusinessProducts()]);
       setForm({ ...emptyProduct, pickupLocation: account.storeLocation, locationData: account.locationData || null });
+      setInventoryNotice(`Successfully added ${next.name}. It is live now. Add another item to get more attention from nearby people.`);
     } catch (error) {
       setInventoryError(error?.message || 'Could not add product. Please retry.');
     } finally {
@@ -430,9 +433,12 @@ function Inventory({ account, products, mode, setMode, persistProducts }) {
     }).filter((row) => row.name));
   };
   const saveCsv = async () => {
+    setInventoryError('');
+    setInventoryNotice('');
     const stamped = csvRows.map((row, index) => ({ ...row, id: `product-${Date.now()}-${index}`, businessId: account.id, storeName: account.businessName, status: 'Safe', createdAt: new Date().toISOString() }));
     await persistProducts([...stamped, ...getBusinessProducts()]);
     setCsvRows([]);
+    setInventoryNotice(`Successfully added ${stamped.length} products. They are live now. Add more items to increase store visibility.`);
   };
   const remove = async (id) => {
     await persistProducts(getBusinessProducts().filter((item) => item.id !== id));
@@ -441,6 +447,7 @@ function Inventory({ account, products, mode, setMode, persistProducts }) {
     <div className="flex flex-col justify-between gap-3 sm:flex-row sm:items-end"><div><h2 className="text-2xl font-extrabold">Inventory</h2><p className="text-sm text-slate-500">Add products manually or import a CSV file.</p></div><div className="grid grid-cols-2 rounded-xl bg-white p-1 shadow-sm"><button onClick={() => setMode('manual')} className={`rounded-lg px-4 py-2 text-sm font-bold ${mode === 'manual' ? 'bg-emerald-600 text-white' : 'text-slate-500'}`}>Manual Add</button><button onClick={() => setMode('csv')} className={`rounded-lg px-4 py-2 text-sm font-bold ${mode === 'csv' ? 'bg-emerald-600 text-white' : 'text-slate-500'}`}>CSV Upload</button></div></div>
     {mode === 'manual' ? <ProductForm form={form} setForm={setForm} onSubmit={addProduct} submitting={submitting} /> : <section className="rounded-2xl border border-emerald-100 bg-white p-5 shadow-sm"><input ref={fileRef} type="file" accept=".csv,text/csv" className="hidden" onChange={(event) => event.target.files?.[0] && parseCsv(event.target.files[0])} /><button onClick={() => fileRef.current?.click()} className="flex min-h-36 w-full flex-col items-center justify-center rounded-2xl border-2 border-dashed border-emerald-200 bg-emerald-50/50 px-4 text-center text-emerald-700"><Upload size={28} /><span className="mt-2 font-bold">Choose CSV file</span><span className="mt-1 max-w-xl text-xs leading-5">Product Name, Category, Quantity, Expiry Date, Image URL and Description. All imported products are fixed at ₹0 for now.</span></button>{csvRows.length > 0 && <Preview rows={csvRows} onSave={saveCsv} />}</section>}
     {inventoryError && <p className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm font-semibold text-rose-700">{inventoryError}</p>}
+    {inventoryNotice && <p className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-semibold text-emerald-800">{inventoryNotice}</p>}
     <InventoryTable products={products} onDelete={remove} />
   </div>;
 }

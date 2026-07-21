@@ -2287,6 +2287,10 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
         title: 'Store received Good Karma',
         body: `${activeBuyer?.name || 'A buyer'} sent Good Karma to your store.`,
         dedupeKey: `karma_received:business:${currentKarmaTarget?.orderId}:${activeAccountId}`,
+        payload: {
+          buyerName: activeBuyer?.name || 'A buyer',
+          buyerLocation: formatShortAddress(activeBuyer?.location || locationEngine.location) || 'nearby',
+        },
       });
       window.dispatchEvent(new Event('storage'));
       return;
@@ -2323,6 +2327,21 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
         setShowKarmaPopup(false);
         setKarmaTarget(null);
         setNotice(`Good karma sent to ${karmaTarget?.name || 'the seller'}.`);
+        safeEmitNotificationEvent({
+          eventType: 'karma_received',
+          recipientAccountId: karmaTarget?.sellerId,
+          actorAccountId: activeAccountId,
+          requestId: karmaTarget?.requestId,
+          listingId: karmaTarget?.itemId,
+          title: 'You received 1 Good Karma',
+          body: `${activeBuyer?.name || 'A buyer'} sent Good Karma after collection.`,
+          dedupeKey: `karma_received:community:${karmaTarget?.requestId}:${activeAccountId}`,
+          payload: {
+            buyerName: activeBuyer?.name || 'A buyer',
+            buyerLocation: formatShortAddress(activeBuyer?.location || locationEngine.location) || 'nearby',
+            sellerId: karmaTarget?.sellerId,
+          },
+        });
       } catch (error) {
         setKarmaError(error?.message || 'Good Karma could not be submitted. Please retry.');
         setKarmaSubmitting(false);
@@ -3373,6 +3392,26 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
             {visibleNotice && (
               <div className="mb-4 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
                 {visibleNotice}
+              </div>
+            )}
+
+            {karmaReceivedToast && (
+              <div className="mb-4 rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-900 shadow-sm">
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <p className="font-extrabold">Great! You received 1 Good Karma.</p>
+                    <p className="mt-1 text-emerald-800">
+                      From {karmaReceivedToast.buyerName} {karmaReceivedToast.buyerLocation ? `(${karmaReceivedToast.buyerLocation})` : ''}
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setKarmaReceivedToast(null)}
+                    className="rounded-lg border border-emerald-200 bg-white px-2 py-1 text-xs font-bold text-emerald-800"
+                  >
+                    Close
+                  </button>
+                </div>
               </div>
             )}
 
