@@ -62,9 +62,11 @@ export default function BusinessPortal({ path, navigate }) {
   const [mobileNav, setMobileNav] = useState(false);
   const [inventoryMode, setInventoryMode] = useState('manual');
   const [helpToast, setHelpToast] = useState(null);
+  const [karmaReceivedToast, setKarmaReceivedToast] = useState(null);
   const [liveSyncError, setLiveSyncError] = useState('');
   const helpTimer = useRef(null);
   const lastHelp = useRef({ message: '', time: 0 });
+  const seenKarmaToastIdsRef = useRef(new Set());
 
   const showHelp = (message, tone = 'info', source = 'page') => {
     if (!message) return;
@@ -105,6 +107,67 @@ export default function BusinessPortal({ path, navigate }) {
     const timer = window.setInterval(checkExpiry, 5 * 60 * 1000);
     return () => window.clearInterval(timer);
   }, [account?.id]);
+
+  useEffect(() => {
+    if (!account) return undefined;
+
+    const matchesRecipient = (notification) => {
+      const recipient = String(notification?.recipientId || notification?.payload?.recipientId || '').trim();
+      if (!recipient) return false;
+      const candidates = [
+        account.id,
+        account.userId,
+        account.profileId,
+        account.mobile,
+      ].filter(Boolean).map((value) => String(value).trim());
+      return candidates.some((candidate) => recipient === candidate);
+    };
+
+    const maybeShowKarmaToast = () => {
+      let notifications = [];
+      try {
+        notifications = JSON.parse(localStorage.getItem('zeromart-notifications') || '[]');
+      } catch {
+        notifications = [];
+      }
+
+      const latest = [...notifications]
+        .filter((entry) => entry && entry.type === 'karma_received' && matchesRecipient(entry))
+        .sort((first, second) => {
+          const firstTime = new Date(first.createdAt || first.time || 0).getTime();
+          const secondTime = new Date(second.createdAt || second.time || 0).getTime();
+          return secondTime - firstTime;
+        })[0];
+
+      if (!latest) return;
+      const popupId = String(latest.id || `${latest.requestId || ''}:${latest.orderId || ''}:${latest.recipientId || ''}`);
+      if (seenKarmaToastIdsRef.current.has(popupId)) return;
+      seenKarmaToastIdsRef.current.add(popupId);
+
+      setKarmaReceivedToast({
+        id: popupId,
+        buyerName: latest.buyerName || latest.payload?.buyerName || 'Buyer',
+        buyerLocation: latest.buyerLocation || latest.payload?.buyerLocation || 'nearby',
+      });
+    };
+
+    maybeShowKarmaToast();
+    const timer = window.setInterval(maybeShowKarmaToast, 3000);
+    window.addEventListener('storage', maybeShowKarmaToast);
+    window.addEventListener('zeromart-transactions-change', maybeShowKarmaToast);
+
+    return () => {
+      window.clearInterval(timer);
+      window.removeEventListener('storage', maybeShowKarmaToast);
+      window.removeEventListener('zeromart-transactions-change', maybeShowKarmaToast);
+    };
+  }, [account]);
+
+  useEffect(() => {
+    if (!karmaReceivedToast) return undefined;
+    const timer = window.setTimeout(() => setKarmaReceivedToast(null), 10000);
+    return () => window.clearTimeout(timer);
+  }, [karmaReceivedToast]);
 
   // Publish current active business inventory into the shared drizn_live_listings
   // store on load, so store products appear live for every user (and survive resets).
@@ -304,6 +367,25 @@ export default function BusinessPortal({ path, navigate }) {
           </div>
         </header>
         <main className="mx-auto max-w-7xl p-4 pb-12 sm:p-6">
+          {karmaReceivedToast && (
+            <div className="mb-4 rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-900 shadow-sm">
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <p className="font-extrabold">Great! You received 1 Good Karma.</p>
+                  <p className="mt-1 text-emerald-800">
+                    From {karmaReceivedToast.buyerName} {karmaReceivedToast.buyerLocation ? `(${karmaReceivedToast.buyerLocation})` : ''}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setKarmaReceivedToast(null)}
+                  className="rounded-lg border border-emerald-200 bg-white px-2 py-1 text-xs font-bold text-emerald-800"
+                >
+                  Close
+                </button>
+              </div>
+            </div>
+          )}
           {liveSyncError && (
             <div className="mb-4 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-semibold text-amber-900">
               {liveSyncError}
