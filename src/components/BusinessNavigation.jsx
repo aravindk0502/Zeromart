@@ -1,4 +1,4 @@
-import { Bell, Building2, ClipboardList, Home, Plus } from 'lucide-react';
+import { Bell, Building2, ClipboardList, Home, Plus, UserRound } from 'lucide-react';
 
 export const BUSINESS_NAV_ITEMS = [
   { key: 'home', label: 'Home', icon: Home, path: '/' },
@@ -6,6 +6,7 @@ export const BUSINESS_NAV_ITEMS = [
   { key: 'business-list-item', label: 'List Item', icon: Plus, path: '/business/inventory', primary: true },
   { key: 'business-orders', label: 'Orders', icon: ClipboardList, path: '/business/orders' },
   { key: 'business-dashboard', label: 'Dashboard', icon: Building2, path: '/business/dashboard' },
+  { key: 'business-profile', label: 'Profile', icon: UserRound, path: '/business/profile' },
 ];
 
 export const BUSINESS_BOTTOM_NAV_ITEMS = [

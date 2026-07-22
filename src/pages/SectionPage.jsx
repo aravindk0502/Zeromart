@@ -1,6 +1,8 @@
 import { ArrowLeft, Heart, MapPin, ShieldCheck, Sparkles, Star } from 'lucide-react';
 import { getExpiryBadgeState, normalizeProductStock } from '../services/transactionService';
 import { isListingOwnedByUser } from '../utils/listingOwnership';
+import ShareButton from '../components/ShareButton';
+import { getListingAvailability } from '../utils/listingPresentation';
 
 const getSellerName = (item) => (
   item?.sellerProfile?.name
@@ -183,6 +185,7 @@ export default function SectionPage({ section, businessItems = [], onBack, locat
             const isOwnListing = isListingOwnedByUser(item, actor);
             const stock = normalizeProductStock({ ...item, listingType: section === 'b2b' ? 'business' : item.listingType });
             const expiryBadge = item.expiryBadge || getExpiryBadgeState(stock);
+            const availability = getListingAvailability(item);
             const sellerName = getSellerName(item);
             const sellerAvatar = getSellerAvatar(item) || (isOwnListing ? actor?.profileImage || '' : '') || getFallbackAvatarImage(sellerName);
             const sellerInitials = String(item?.sellerInitials || item?.sellerProfile?.initials || getInitials(sellerName)).slice(0, 2).toUpperCase();
@@ -197,7 +200,7 @@ export default function SectionPage({ section, businessItems = [], onBack, locat
                 }}
                 className="group min-w-0 cursor-pointer overflow-hidden rounded-[1.5rem] border border-emerald-200 bg-white ring-1 ring-emerald-100/90 shadow-[0_14px_45px_rgba(15,23,42,0.08)] transition hover:-translate-y-1 hover:shadow-[0_22px_60px_rgba(15,23,42,0.12)] focus:outline-none focus:ring-4 focus:ring-emerald-100"
               >
-                {item.image && <img src={item.image} alt={item.title} loading="lazy" decoding="async" className="h-40 w-full object-cover sm:h-44" />}
+                {item.image && <div className="relative"><img src={item.image} alt={item.title} loading="lazy" decoding="async" className="h-40 w-full object-cover sm:h-44" /><span className="absolute bottom-2 left-2 rounded-full bg-emerald-700 px-2.5 py-1 text-[10px] font-extrabold text-white shadow">FREE</span></div>}
                 <div className="p-4">
                   {item.isBusinessProduct && (
                     <div className="mb-3 flex flex-wrap items-center gap-2">
@@ -213,6 +216,7 @@ export default function SectionPage({ section, businessItems = [], onBack, locat
                       <h3 className="mt-1 line-clamp-2 text-lg font-semibold text-slate-900">{item.title}</h3>
                     </div>
                     <div className="flex shrink-0 items-center gap-2">
+                      <ShareButton item={item} className="rounded-full border border-slate-200 bg-white p-2 text-slate-500 transition hover:text-violet-600" />
                       {onToggleFavorite && (
                         <button onClick={(event) => { event.stopPropagation(); onToggleFavorite(item); }} className={`rounded-full border p-2 transition ${isFavorite ? 'border-rose-200 bg-rose-50 text-rose-500' : 'border-slate-200 bg-white text-slate-500 hover:text-rose-500'}`} aria-label="Save item">
                           <Heart size={15} fill={isFavorite ? 'currentColor' : 'none'} />
@@ -229,6 +233,8 @@ export default function SectionPage({ section, businessItems = [], onBack, locat
                     <span className="rounded-full bg-emerald-50 px-2.5 py-1 text-emerald-700">{item.requestState?.stockLabel || (stock.availableQuantity === 1 ? 'Only 1 left' : `${stock.availableQuantity} available`)}</span>
                     {expiryBadge.statusLabel && !expiryBadge.nearExpiry && <span className={`rounded-full px-2.5 py-1 ${expiryBadge.statusClassName}`}>{expiryBadge.statusLabel}</span>}
                   </div>
+                  {availability.timingLabel && <p className="mt-2 truncate text-[11px] font-semibold text-slate-500">{availability.timingLabel}</p>}
+                  {availability.statusLabel && <p className="mt-2 text-[11px] font-bold text-rose-600">{availability.statusLabel}</p>}
                   <div className="mt-4 flex items-center justify-between gap-3 rounded-[1rem] bg-slate-50 px-3 py-3">
                     <div className="min-w-0">
                       <button

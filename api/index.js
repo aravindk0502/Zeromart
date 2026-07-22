@@ -1,5 +1,6 @@
 import serverless from 'serverless-http';
 import { createHash } from 'node:crypto';
+import { readFile } from 'node:fs/promises';
 import { cert, getApps as getFirebaseApps, initializeApp as initializeFirebaseApp } from 'firebase-admin/app';
 import { getMessaging } from 'firebase-admin/messaging';
 import jwt from 'jsonwebtoken';
@@ -84,6 +85,67 @@ function sendJson(res, statusCode, payload) {
   res.statusCode = statusCode;
   Object.entries(jsonHeaders).forEach(([key, value]) => res.setHeader(key, value));
   res.end(JSON.stringify(payload));
+}
+
+function escapeHtml(value = '') {
+  return String(value || '').replace(/[&<>"']/g, (character) => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+  })[character]);
+}
+
+async function sendPublicProductPage(res, listingId) {
+  const rows = await supabaseFetch(`/listings?id=eq.${encodeURIComponent(listingId)}&select=*&limit=1`);
+  const listing = rows?.[0];
+  if (!listing || !isPublicListingRow(listing)) {
+    return sendJson(res, 404, { error: 'Listing not found' });
+  }
+  const product = listingRowToClient(listing);
+  const seller = cleanSellerName(product.sellerName, product.storeName, DEFAULT_SELLER_NAME);
+  const canonicalUrl = `https://www.drizn.com/product/${encodeURIComponent(String(product.id))}`;
+  const title = `${product.title} - FREE | Drizn`;
+  const description = `${product.title} is available FREE from ${seller}. Good Things. Nearby.`;
+  const image = product.image || 'https://www.drizn.com/assets/drizn-logo.png';
+  const structuredData = JSON.stringify({
+    '@context': 'https://schema.org',
+    '@type': 'Product',
+    name: product.title,
+    description: product.description || description,
+    image: [image],
+    offers: {
+      '@type': 'Offer',
+      price: '0',
+      priceCurrency: 'INR',
+      availability: 'https://schema.org/InStock',
+      url: canonicalUrl,
+    },
+  }).replace(/</g, '\\u003c');
+  const htmlPath = new URL('../dist/index.html', import.meta.url);
+  const template = await readFile(htmlPath, 'utf8');
+  const metadata = [
+    `<title>${escapeHtml(title)}</title>`,
+    `<meta name="description" content="${escapeHtml(description)}">`,
+    `<link rel="canonical" href="${escapeHtml(canonicalUrl)}">`,
+    `<meta property="og:type" content="product">`,
+    `<meta property="og:site_name" content="Drizn">`,
+    `<meta property="og:title" content="${escapeHtml(title)}">`,
+    `<meta property="og:description" content="${escapeHtml(description)}">`,
+    `<meta property="og:url" content="${escapeHtml(canonicalUrl)}">`,
+    `<meta property="og:image" content="${escapeHtml(image)}">`,
+    `<meta name="twitter:card" content="summary_large_image">`,
+    `<meta name="twitter:title" content="${escapeHtml(title)}">`,
+    `<meta name="twitter:description" content="${escapeHtml(description)}">`,
+    `<meta name="twitter:image" content="${escapeHtml(image)}">`,
+    `<script type="application/ld+json">${structuredData}</script>`,
+  ].join('\n');
+  const html = template
+    .replace(/<title>[\s\S]*?<\/title>/i, '')
+    .replace(/<meta name="description"[^>]*>/i, '')
+    .replace(/<link rel="canonical"[^>]*>/i, '')
+    .replace('</head>', `${metadata}</head>`);
+  res.statusCode = 200;
+  res.setHeader('Content-Type', 'text/html; charset=utf-8');
+  res.setHeader('Cache-Control', 'public, max-age=60, s-maxage=300, stale-while-revalidate=3600');
+  res.end(html);
 }
 
 function getPathname(req) {
@@ -337,14 +399,14 @@ function getAuthProfileContext(req) {
 }
 
 async function fetchProfileRowByIdentity({ userId = '', accountType = 'personal', normalizedPhone = '' } = {}) {
-  if (userId && userId !== 'guest') {
-    const rowsById = await supabaseFetch(`/profiles?id=eq.${encodeURIComponent(userId)}&select=*&limit=1`).catch(() => []);
-    if (rowsById?.[0]) return rowsById[0];
-  }
-
   if (normalizedPhone) {
     const rowsByIdentity = await supabaseFetch(`/profiles?normalized_phone=eq.${encodeURIComponent(normalizedPhone)}&account_type=eq.${encodeURIComponent(accountType)}&select=*&limit=1`).catch(() => []);
     if (rowsByIdentity?.[0]) return rowsByIdentity[0];
+  }
+
+  if (userId && userId !== 'guest') {
+    const rowsById = await supabaseFetch(`/profiles?id=eq.${encodeURIComponent(userId)}&account_type=eq.${encodeURIComponent(accountType)}&select=*&limit=1`).catch(() => []);
+    if (rowsById?.[0]) return rowsById[0];
   }
 
   return null;
@@ -402,6 +464,20 @@ function mergeProfilePayload(existing = {}, body = {}, context = {}) {
     profile_image: nextProfileImage,
     profile_image_url: nextProfileImage,
     bio: firstDefined(body.bio, existing.bio, existingMetadata.bio) || '',
+    full_name: firstDefined(body.fullName, body.ownerName, existing.full_name, existingMetadata.fullName, existingMetadata.ownerName) || '',
+    business_name: firstDefined(body.businessName, existing.business_name, existingMetadata.businessName) || '',
+    business_type: firstDefined(body.businessType, existing.business_type, existingMetadata.businessType) || '',
+    email: firstDefined(body.email, existing.email, existingMetadata.email) || '',
+    address: firstDefined(body.address, existing.address, existingMetadata.address) || '',
+    city: firstDefined(body.city, body.locality, existing.city, existingMetadata.city, existingMetadata.locality) || '',
+    description: firstDefined(body.description, existing.description, existingMetadata.description) || '',
+    opening_hours: firstDefined(body.openingHours, body.opening_hours, existing.opening_hours, existingMetadata.openingHours) || '',
+    store_location: firstDefined(body.storeLocation, body.store_location, existing.store_location, existingMetadata.storeLocation) || '',
+    registration: firstDefined(body.registration, existing.registration, existingMetadata.registration) || '',
+    cover_image_url: firstDefined(body.coverImage, body.cover_image_url, existing.cover_image_url, existingMetadata.coverImage) || '',
+    verified: Boolean(firstDefined(body.verified, existing.verified, existingMetadata.verified, false)),
+    karma_popup_enabled: firstDefined(body.karmaPopupEnabled, body.karma_popup_enabled, existing.karma_popup_enabled, existingMetadata.karmaPopupEnabled, true) !== false,
+    notification_preferences: firstDefined(body.notificationPreferences, body.notification_preferences, existing.notification_preferences, existingMetadata.notificationPreferences) || {},
     location_link: firstDefined(body.locationLink, body.location_link, existing.location_link, existingMetadata.locationLink) || '',
     website_link: firstDefined(body.websiteLink, body.website_link, existing.website_link, existingMetadata.websiteLink) || '',
     instagram_link: firstDefined(body.instagramLink, body.instagram_link, existing.instagram_link, existingMetadata.instagramLink) || '',
@@ -1149,7 +1225,7 @@ async function handleListingById(req, res, listingId) {
   if (req.method === 'GET' || req.method === 'HEAD') {
     const rows = await supabaseFetch(`/listings?id=eq.${encodeURIComponent(listingId)}&select=*&limit=1`);
     const listing = rows?.[0];
-    if (!listing) return sendJson(res, 404, { error: 'Listing not found' });
+    if (!listing || !isPublicListingRow(listing)) return sendJson(res, 404, { error: 'Listing not found' });
     const [enriched] = await attachListingProfiles([listing]);
     return sendJson(res, 200, listingRowToClient(enriched || listing));
   }
@@ -3164,6 +3240,15 @@ export default async function handler(req, res) {
       return await handleListingById(req, res, decodeURIComponent(listingMatch[1]));
     } catch (error) {
       return sendJson(res, error.status || 500, { error: 'Listing route failed', message: error.message || 'Unknown error' });
+    }
+  }
+
+  const publicProductMatch = url.match(/^\/product\/([^/]+)$/);
+  if (publicProductMatch && (req.method === 'GET' || req.method === 'HEAD')) {
+    try {
+      return await sendPublicProductPage(res, decodeURIComponent(publicProductMatch[1]));
+    } catch (error) {
+      return sendJson(res, error.status || 500, { error: 'Product page failed', message: error.message || 'Unknown error' });
     }
   }
 

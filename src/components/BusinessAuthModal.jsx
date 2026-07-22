@@ -89,7 +89,7 @@ export default function BusinessAuthModal({ open = true, onClose, onSuccess, emb
       }
 
       const profileMetadata = (remoteProfile && typeof remoteProfile.metadata === 'object') ? remoteProfile.metadata : {};
-      const accountId = String(existing?.id || authUser?.id || remoteProfile?.id || `business-${Date.now()}`);
+      const accountId = String(remoteProfile?.id || authUser?.id || existing?.id || `business-${Date.now()}`);
       const profileImage = remoteProfile?.profile_image
         || remoteProfile?.profile_image_url
         || remoteProfile?.avatar_url
@@ -110,6 +110,15 @@ export default function BusinessAuthModal({ open = true, onClose, onSuccess, emb
         storeLocation: remoteProfile?.store_location || profileMetadata.storeLocation || form.storeLocation || existing?.storeLocation || locationLabel(form.locationData || existing?.locationData || null),
         address: remoteProfile?.address || profileMetadata.address || form.address || existing?.address || '',
         registration: remoteProfile?.registration || profileMetadata.registration || form.registration || existing?.registration || '',
+        email: remoteProfile?.email || profileMetadata.email || existing?.email || '',
+        city: remoteProfile?.city || profileMetadata.city || existing?.city || '',
+        description: remoteProfile?.description || profileMetadata.description || existing?.description || '',
+        openingHours: remoteProfile?.opening_hours || profileMetadata.openingHours || existing?.openingHours || '',
+        coverImage: remoteProfile?.cover_image_url || profileMetadata.coverImage || existing?.coverImage || '',
+        notificationPreferences: remoteProfile?.notification_preferences || profileMetadata.notificationPreferences || existing?.notificationPreferences || {},
+        karmaPopupEnabled: typeof remoteProfile?.karma_popup_enabled === 'boolean'
+          ? remoteProfile.karma_popup_enabled
+          : (profileMetadata.karmaPopupEnabled ?? existing?.karmaPopupEnabled ?? true),
         locationData: remoteProfile?.location_data || profileMetadata.locationData || form.locationData || existing?.locationData || null,
         karma: Number(authUser?.karma ?? remoteProfile?.karma_points ?? remoteProfile?.karma ?? existing?.karma ?? 0) || 0,
         verified: true,

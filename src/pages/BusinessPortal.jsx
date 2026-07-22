@@ -33,7 +33,7 @@ import {
   deleteListingFromBackend,
   saveListingToBackend,
 } from '../services/liveListingService';
-import { isLoggedIn, updateProfile, uploadImage } from '../lib/api';
+import { clearToken, fetchNotificationHistory, fetchProfile, isLoggedIn, updateProfile, uploadImage } from '../lib/api';
 
 const emptyProduct = {
   name: '', category: 'Food', quantity: 1, mrp: 0, sellingPrice: 0, expiryDate: '', expiryTime: '',
@@ -118,6 +118,64 @@ export default function BusinessPortal({ path, navigate }) {
   useEffect(() => {
     saveBusinessProducts(products);
   }, []);
+
+  useEffect(() => {
+    if (!account || !isLoggedIn()) return undefined;
+    let cancelled = false;
+    const accountIds = [account.id, account.userId, account.profileId, account.mobile]
+      .filter(Boolean)
+      .map((value) => String(value).trim());
+
+    Promise.allSettled([
+      fetchProfile({ accountType: 'business', phone: account.mobile || '' }),
+      fetchNotificationHistory(account.userId || account.id, 100),
+    ]).then(([profileResult, notificationsResult]) => {
+      if (cancelled) return;
+      if (profileResult.status === 'fulfilled' && profileResult.value) {
+        const profile = profileResult.value;
+        const metadata = profile.metadata && typeof profile.metadata === 'object' ? profile.metadata : {};
+        const nextAccount = {
+          ...account,
+          id: String(profile.id || account.id),
+          userId: String(profile.id || account.userId || account.id),
+          profileId: String(profile.id || account.profileId || account.id),
+          ownerName: profile.full_name || metadata.fullName || metadata.ownerName || account.ownerName,
+          businessName: profile.business_name || metadata.businessName || profile.name || account.businessName,
+          businessType: profile.business_type || metadata.businessType || account.businessType,
+          email: profile.email || metadata.email || account.email || '',
+          address: profile.address || metadata.address || account.address || '',
+          city: profile.city || metadata.city || account.city || '',
+          description: profile.description || metadata.description || account.description || '',
+          openingHours: profile.opening_hours || metadata.openingHours || account.openingHours || '',
+          storeLocation: profile.store_location || metadata.storeLocation || account.storeLocation || '',
+          registration: profile.registration || metadata.registration || account.registration || '',
+          locationData: profile.profile_location || metadata.locationData || account.locationData || null,
+          profileImage: profile.profile_image || profile.profile_image_url || profile.avatar_url || metadata.profileImage || account.profileImage || '',
+          avatarUrl: profile.avatar_url || profile.profile_image || metadata.avatarUrl || account.avatarUrl || '',
+          coverImage: profile.cover_image_url || metadata.coverImage || account.coverImage || '',
+          verified: profile.verified ?? metadata.verified ?? account.verified,
+          karma: Number(profile.karma ?? profile.karma_points ?? account.karma ?? 0) || 0,
+          karmaPopupEnabled: profile.karma_popup_enabled ?? metadata.karmaPopupEnabled ?? account.karmaPopupEnabled ?? true,
+          notificationPreferences: profile.notification_preferences || metadata.notificationPreferences || account.notificationPreferences || {},
+        };
+        setAccount(nextAccount);
+        saveBusinessSession(nextAccount);
+        const accounts = getBusinessAccounts();
+        saveBusinessAccounts([nextAccount, ...accounts.filter((entry) => entry.id !== nextAccount.id && entry.mobile !== nextAccount.mobile)]);
+      }
+      if (notificationsResult.status === 'fulfilled' && Array.isArray(notificationsResult.value)) {
+        setUnreadNotificationCount(notificationsResult.value.filter((notification) => !notification.read).length);
+      } else {
+        const localNotifications = JSON.parse(localStorage.getItem('zeromart-notifications') || '[]');
+        setUnreadNotificationCount(localNotifications.filter((notification) => {
+          const recipient = String(notification?.recipientId || notification?.recipientAccountId || notification?.payload?.recipientAccountId || '').trim();
+          return !notification?.read && (!recipient || accountIds.includes(recipient));
+        }).length);
+      }
+    });
+
+    return () => { cancelled = true; };
+  }, [account?.id, account?.mobile]);
 
   useEffect(() => {
     if (!account || account.karmaPopupEnabled === false) return undefined;
@@ -350,6 +408,8 @@ export default function BusinessPortal({ path, navigate }) {
   };
   const logout = () => {
     clearBusinessSession();
+    clearToken();
+    localStorage.removeItem('zeromart-user');
     setAccount(null);
     navigate('/');
   };
@@ -430,7 +490,10 @@ export default function BusinessPortal({ path, navigate }) {
               </button>
               <div className="min-w-0"><p className="truncate text-xs font-bold uppercase tracking-[0.14em] text-emerald-700">Business console</p><h1 className="truncate text-lg font-extrabold">{titleFor(page)}</h1></div>
             </div>
-            <div className="flex items-center gap-2 rounded-full border border-emerald-100 bg-emerald-50 px-3 py-2"><ShieldCheck size={16} className="text-emerald-600" /><span className="hidden text-sm font-bold sm:inline">Verified</span><span className="rounded-full bg-white px-2 py-1 text-xs font-bold text-emerald-700">{account.karma} karma</span></div>
+            <div className="flex items-center gap-2">
+              <button type="button" onClick={() => navigate('/business/profile')} className="rounded-full border border-emerald-100 bg-emerald-50 p-2.5 text-emerald-700 lg:hidden" aria-label="Open Business Profile"><UserRound size={18} /></button>
+              <div className="flex items-center gap-2 rounded-full border border-emerald-100 bg-emerald-50 px-3 py-2"><ShieldCheck size={16} className="text-emerald-600" /><span className="hidden text-sm font-bold sm:inline">Verified</span><span className="rounded-full bg-white px-2 py-1 text-xs font-bold text-emerald-700">{account.karma} karma</span></div>
+            </div>
           </div>
         </header>
         <main className="mx-auto max-w-7xl p-4 pb-32 sm:p-6 sm:pb-32 lg:pb-12">
@@ -920,7 +983,19 @@ function Analytics({ account, products, orders }) {
 
 function BusinessProfile({ account, updateAccount }) {
   const locationEngine = useLocationEngine();
-  const [form, setForm] = useState({ ...account, karmaPopupEnabled: account?.karmaPopupEnabled !== false });
+  const [form, setForm] = useState({
+    ...account,
+    karmaPopupEnabled: account?.karmaPopupEnabled !== false,
+    notificationPreferences: {
+      productRequests: true,
+      orderUpdates: true,
+      collections: true,
+      cancellations: true,
+      reports: true,
+      system: true,
+      ...(account?.notificationPreferences || {}),
+    },
+  });
   const [showPicker, setShowPicker] = useState(false);
   const [showPhoneChangeModal, setShowPhoneChangeModal] = useState(false);
   const [selectedPurchase, setSelectedPurchase] = useState(null);
@@ -953,6 +1028,13 @@ function BusinessProfile({ account, updateAccount }) {
         const file = new File([blob], `business-profile-${Date.now()}.${imageExt}`, { type: blob.type || 'image/jpeg' });
         profileImageUrl = await uploadImage(file);
       }
+      let coverImageUrl = form.coverImage || '';
+      if (coverImageUrl.startsWith('data:')) {
+        const blob = await fetch(coverImageUrl).then((response) => response.blob());
+        const imageExt = String(blob.type || 'image/jpeg').split('/')[1] || 'jpg';
+        const file = new File([blob], `business-cover-${Date.now()}.${imageExt}`, { type: blob.type || 'image/jpeg' });
+        coverImageUrl = await uploadImage(file);
+      }
 
       const nextAccount = {
         ...form,
@@ -960,6 +1042,7 @@ function BusinessProfile({ account, updateAccount }) {
         profileId: form.profileId || account.profileId || account.id,
         profileImage: profileImageUrl,
         avatarUrl: profileImageUrl,
+        coverImage: coverImageUrl,
         karmaPopupEnabled: form.karmaPopupEnabled !== false,
       };
       if (isLoggedIn()) {
@@ -969,6 +1052,12 @@ function BusinessProfile({ account, updateAccount }) {
           businessName: nextAccount.businessName || '',
           businessType: nextAccount.businessType || '',
           registration: nextAccount.registration || '',
+          email: nextAccount.email || '',
+          city: nextAccount.city || nextAccount.locationData?.city || nextAccount.locationData?.locality || '',
+          description: nextAccount.description || '',
+          openingHours: nextAccount.openingHours || '',
+          coverImage: nextAccount.coverImage || '',
+          notificationPreferences: nextAccount.notificationPreferences || {},
           mobile: nextAccount.mobile || account.mobile || '',
           profileImage: profileImageUrl,
           avatarUrl: profileImageUrl,
@@ -987,6 +1076,7 @@ function BusinessProfile({ account, updateAccount }) {
           ...nextAccount,
           profileImage: persistedProfile?.profile_image || persistedProfile?.avatar_url || profileImageUrl,
           avatarUrl: persistedProfile?.avatar_url || persistedProfile?.profile_image || profileImageUrl,
+          coverImage: persistedProfile?.cover_image_url || coverImageUrl,
         });
       } else {
         updateAccount(nextAccount);
@@ -1011,6 +1101,16 @@ function BusinessProfile({ account, updateAccount }) {
         avatarUrl: String(reader.result || ''),
       }));
       setProfileNotice('Profile image selected. Save profile to publish it live.');
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const onCoverImageSelect = (file) => {
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      setForm((current) => ({ ...current, coverImage: String(reader.result || '') }));
+      setProfileNotice('Cover image selected. Save profile to publish it live.');
     };
     reader.readAsDataURL(file);
   };
@@ -1049,6 +1149,11 @@ function BusinessProfile({ account, updateAccount }) {
         </div>
 
         <section className="rounded-3xl border border-emerald-100 bg-white p-5 shadow-sm sm:p-6">
+          {form.coverImage && <img src={form.coverImage} alt="Business cover" className="mb-5 h-36 w-full rounded-2xl object-cover" />}
+          <label className="mb-5 inline-flex cursor-pointer items-center gap-2 rounded-xl border border-emerald-100 bg-emerald-50 px-3 py-2 text-xs font-bold text-emerald-800">
+            <Upload size={14} /> {form.coverImage ? 'Change cover image' : 'Add cover image'}
+            <input type="file" accept="image/*" className="hidden" onChange={(event) => onCoverImageSelect(event.target.files?.[0])} />
+          </label>
           <div className="flex flex-col gap-4 sm:flex-row sm:items-center">
             <div className="relative h-20 w-20">
               {(form.profileImage || form.avatarUrl) ? (
@@ -1076,6 +1181,10 @@ function BusinessProfile({ account, updateAccount }) {
             <Input label="Owner name" value={form.ownerName} onChange={(v) => setForm({ ...form, ownerName: v })} />
             <Input label="Business type" value={form.businessType} onChange={(v) => setForm({ ...form, businessType: v })} />
             <Input label="GST / FSSAI (optional)" value={form.registration || ''} onChange={(v) => setForm({ ...form, registration: v })} />
+            <Input label="Email" type="email" value={form.email || ''} onChange={(v) => setForm({ ...form, email: v })} />
+            <Input label="City / locality" value={form.city || ''} onChange={(v) => setForm({ ...form, city: v })} />
+            <Input label="Opening hours" value={form.openingHours || ''} onChange={(v) => setForm({ ...form, openingHours: v })} placeholder="Mon-Sat, 9:00 AM-8:00 PM" />
+            <TextArea label="Description" value={form.description || ''} onChange={(v) => setForm({ ...form, description: v })} className="sm:col-span-2" />
             <div className="rounded-xl bg-slate-50 p-3">
               <p className="text-xs font-bold text-slate-500">Mobile</p>
               <p className="mt-2 font-semibold">+91 ******{String(account.mobile).slice(-4)}</p>
@@ -1099,6 +1208,35 @@ function BusinessProfile({ account, updateAccount }) {
                 className="h-5 w-5"
               />
             </label>
+            <fieldset className="rounded-xl border border-emerald-100 p-4 sm:col-span-2">
+              <legend className="px-1 text-xs font-bold uppercase tracking-[0.12em] text-emerald-700">Notification preferences</legend>
+              <div className="mt-2 grid gap-3 sm:grid-cols-2">
+                {[
+                  ['productRequests', 'New product requests'],
+                  ['orderUpdates', 'Accept, decline and order updates'],
+                  ['collections', 'Collection and completion updates'],
+                  ['cancellations', 'Cancellations'],
+                  ['reports', 'Reports'],
+                  ['system', 'System notifications'],
+                ].map(([key, label]) => (
+                  <label key={key} className="flex items-center gap-2 text-sm font-semibold text-slate-700">
+                    <input
+                      type="checkbox"
+                      checked={form.notificationPreferences?.[key] !== false}
+                      onChange={(event) => setForm((current) => ({
+                        ...current,
+                        notificationPreferences: {
+                          ...(current.notificationPreferences || {}),
+                          [key]: event.target.checked,
+                        },
+                      }))}
+                      className="h-4 w-4"
+                    />
+                    {label}
+                  </label>
+                ))}
+              </div>
+            </fieldset>
             <div className="rounded-xl border border-emerald-100 bg-emerald-50 p-3 sm:col-span-2">
               <p className="text-xs font-bold uppercase tracking-[0.12em] text-emerald-700">Geotagged store location</p>
               <p className="mt-2 font-bold text-slate-900">{form.locationData ? locationLabel(form.locationData) : 'No structured location saved'}</p>
@@ -1211,6 +1349,7 @@ function NavButton({ icon: Icon, label, active, onClick }) { return <button data
 function MetricCard({ label, value, icon: Icon }) { return <article className="rounded-2xl border border-emerald-100 bg-white p-4 shadow-sm"><div className="flex h-9 w-9 items-center justify-center rounded-xl bg-emerald-50 text-emerald-700"><Icon size={18} /></div><p className="mt-4 text-2xl font-extrabold">{value}</p><p className="mt-1 text-xs font-semibold text-slate-500">{label}</p></article>; }
 function Quick({ label, icon: Icon, onClick }) { return <button data-help={`${label} opens the related business tool.`} onClick={onClick} className="group flex items-center gap-3 rounded-2xl border border-emerald-100 bg-white p-4 text-left shadow-sm transition hover:-translate-y-0.5 hover:shadow-md"><div className="rounded-xl bg-emerald-50 p-3 text-emerald-700"><Icon size={20} /></div><span className="flex-1 font-bold">{label}</span><ChevronRight size={18} className="text-slate-300 group-hover:text-emerald-600" /></button>; }
 function Input({ label, value, onChange, type = 'text', ...props }) { return <label data-help={`Enter or update ${label.toLowerCase()} here.`} className="text-sm font-bold text-slate-700">{label}<input type={type} value={value} onChange={(e) => onChange(e.target.value)} className="mt-2 w-full rounded-xl border border-slate-200 px-3 py-3 outline-none focus:border-emerald-500 focus:ring-4 focus:ring-emerald-50" {...props} /></label>; }
+function TextArea({ label, value, onChange, className = '' }) { return <label data-help={`Enter or update ${label.toLowerCase()} here.`} className={`text-sm font-bold text-slate-700 ${className}`}>{label}<textarea value={value} onChange={(event) => onChange(event.target.value)} rows={4} className="mt-2 w-full resize-y rounded-xl border border-slate-200 px-3 py-3 outline-none focus:border-emerald-500 focus:ring-4 focus:ring-emerald-50" /></label>; }
 function Status({ value }) { const color = ['Listed', 'Completed', 'Safe', 'Delivered', 'Collected personally'].includes(value) ? 'bg-emerald-100 text-emerald-700' : value === 'Expired' || value === 'Declined' ? 'bg-rose-100 text-rose-700' : 'bg-amber-100 text-amber-800'; return <span className={`rounded-full px-3 py-1 text-xs font-bold ${color}`}>{value}</span>; }
 function Action({ label, onClick, danger }) { return <button data-help={`${label} updates this buyer request.`} onClick={onClick} className={`whitespace-nowrap rounded-lg px-3 py-2 text-xs font-bold ${danger ? 'bg-rose-50 text-rose-700' : 'bg-emerald-600 text-white'}`}>{label}</button>; }
 function Empty({ text }) { return <div className="p-10 text-center text-sm text-slate-500">{text}</div>; }

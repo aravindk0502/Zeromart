@@ -5,6 +5,8 @@ import {
 import { getExpiryBadgeState, normalizeProductStock } from '../services/transactionService';
 import { isListingOwnedByUser } from '../utils/listingOwnership';
 import SiteFooter from '../components/SiteFooter';
+import ShareButton from '../components/ShareButton';
+import { getListingAvailability } from '../utils/listingPresentation';
 
 const getCollectionCta = (item) => (
   item?.isBusinessProduct || item?.listingType === 'business' || item?.sellerType === 'business'
@@ -71,6 +73,7 @@ export function ProductRail({
         {items.map((item) => {
           const stock = normalizeProductStock(item);
           const expiryBadge = item.expiryBadge || getExpiryBadgeState(stock);
+          const availability = getListingAvailability(item);
           const requestState = item.requestState;
           const isOwnListing = isListingOwnedByUser(item, actor);
           const isFavorite = favorites.some((entry) => entry.id === item.id);
@@ -95,19 +98,18 @@ export function ProductRail({
                     {expiryBadge.rescueLabel}
                   </span>
                 )}
-                {rescue && expiryBadge.nearExpiry && (
-                  <span className="absolute right-2 top-2 rounded-full bg-emerald-700 px-2.5 py-1 text-[10px] font-extrabold uppercase tracking-wide text-white shadow">
-                    FREE
-                  </span>
-                )}
-                <button
-                  type="button"
-                  onClick={(event) => { event.stopPropagation(); onToggleFavorite(item); }}
-                  className={`absolute right-2 top-2 flex h-9 w-9 items-center justify-center rounded-full border border-white/80 shadow backdrop-blur ${isFavorite ? 'bg-rose-500 text-white' : 'bg-white/90 text-slate-500'}`}
-                  aria-label={isFavorite ? 'Remove from favorites' : 'Save item'}
-                >
-                  <Heart size={16} fill={isFavorite ? 'currentColor' : 'none'} />
-                </button>
+                <span className="absolute bottom-2 left-2 rounded-full bg-emerald-700 px-2.5 py-1 text-[10px] font-extrabold uppercase tracking-wide text-white shadow">FREE</span>
+                <div className="absolute bottom-2 right-2 flex items-center gap-1.5">
+                  <ShareButton item={item} className="flex h-9 w-9 items-center justify-center rounded-full border border-white/80 bg-white/90 text-slate-600 shadow backdrop-blur" />
+                  <button
+                    type="button"
+                    onClick={(event) => { event.stopPropagation(); onToggleFavorite(item); }}
+                    className={`flex h-9 w-9 items-center justify-center rounded-full border border-white/80 shadow backdrop-blur ${isFavorite ? 'bg-rose-500 text-white' : 'bg-white/90 text-slate-500'}`}
+                    aria-label={isFavorite ? 'Remove from favorites' : 'Save item'}
+                  >
+                    <Heart size={16} fill={isFavorite ? 'currentColor' : 'none'} />
+                  </button>
+                </div>
               </div>
               <div className="p-3">
                 <div className="flex items-start justify-between gap-2">
@@ -129,6 +131,8 @@ export function ProductRail({
                     Expires: {expiryBadge.formattedExpiry}
                   </p>
                 )}
+                {availability.timingLabel && <p className="mt-1 truncate text-[11px] font-semibold text-slate-500">{availability.timingLabel}</p>}
+                {availability.statusLabel && <p className="mt-1 text-[11px] font-bold text-rose-600">{availability.statusLabel}</p>}
                 <div className="mt-2 flex items-center justify-between gap-2 text-xs">
                   <button
                     type="button"
@@ -292,6 +296,7 @@ export default function HomePage({
             const isOwnListing = isListingOwnedByUser(item, user);
             const stock = normalizeProductStock(item);
             const expiryBadge = item.expiryBadge || getExpiryBadgeState(stock);
+            const availability = getListingAvailability(item);
             const isFavorite = favorites.some((entry) => entry.id === item.id);
             const unavailable = !isOwnListing && item.requestState && !item.requestState.canRequest;
             const sellerName = getSellerName(item);
@@ -325,25 +330,26 @@ export default function HomePage({
                       {expiryBadge.rescueLabel}
                     </span>
                   )}
-                  {expiryBadge.nearExpiry && (
-                    <span className="absolute right-2 top-2 rounded-full bg-emerald-700 px-2.5 py-1 text-[10px] font-extrabold uppercase tracking-wide text-white shadow">
-                      FREE
-                    </span>
-                  )}
-                  <button
-                    type="button"
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      onToggleFavorite(item);
-                    }}
-                    className={`absolute bottom-3 right-3 flex h-10 w-10 items-center justify-center rounded-full border border-white/70 shadow-lg backdrop-blur transition hover:scale-105 ${isFavorite ? 'bg-rose-500 text-white' : 'bg-white/90 text-slate-600 hover:text-rose-500'}`}
-                    aria-label={isFavorite ? `Remove ${item.title} from favorites` : `Save ${item.title} to favorites`}
-                  >
-                    <Heart size={18} fill={isFavorite ? 'currentColor' : 'none'} />
-                  </button>
+                  <span className="absolute bottom-3 left-3 rounded-full bg-emerald-700 px-2.5 py-1 text-[10px] font-extrabold uppercase tracking-wide text-white shadow">FREE</span>
+                  <div className="absolute bottom-3 right-3 flex items-center gap-2">
+                    <ShareButton item={item} className="flex h-10 w-10 items-center justify-center rounded-full border border-white/70 bg-white/90 text-slate-600 shadow-lg backdrop-blur transition hover:scale-105" />
+                    <button
+                      type="button"
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        onToggleFavorite(item);
+                      }}
+                      className={`flex h-10 w-10 items-center justify-center rounded-full border border-white/70 shadow-lg backdrop-blur transition hover:scale-105 ${isFavorite ? 'bg-rose-500 text-white' : 'bg-white/90 text-slate-600 hover:text-rose-500'}`}
+                      aria-label={isFavorite ? `Remove ${item.title} from favorites` : `Save ${item.title} to favorites`}
+                    >
+                      <Heart size={18} fill={isFavorite ? 'currentColor' : 'none'} />
+                    </button>
+                  </div>
                 </div>
 
                 <div className="flex flex-1 flex-col p-4">
+                  {availability.timingLabel && <p className="mb-2 truncate text-[11px] font-semibold text-slate-500">{availability.timingLabel}</p>}
+                  {availability.statusLabel && <p className="mb-2 text-[11px] font-bold text-rose-600">{availability.statusLabel}</p>}
                   <div className="flex flex-wrap items-start gap-3">
                     <div className="flex min-w-0 flex-1 items-center gap-3">
                       <button

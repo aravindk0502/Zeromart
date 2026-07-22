@@ -1,6 +1,8 @@
 import { ArrowLeft, MapPin, Pencil, ShieldCheck, Sparkles, Trash2, X } from 'lucide-react';
 import { getExpiryBadgeState, normalizeProductStock } from '../services/transactionService';
 import { isListingOwnedByUser } from '../utils/listingOwnership';
+import ShareButton from './ShareButton';
+import { getListingAvailability } from '../utils/listingPresentation';
 
 const getInitials = (name = 'Drizn User') => String(name)
   .split(' ')
@@ -20,6 +22,7 @@ export default function ItemDetailsModal({ item, onClose, onRequest, onRequireLo
   if (!item) return null;
   const product = normalizeProductStock(item);
   const expiryBadge = item.expiryBadge || getExpiryBadgeState(product);
+  const availability = getListingAvailability(item);
   const sellerName = item.sellerName || item.sellerProfile?.name || 'Drizn User';
   const sellerAvatar = item.sellerProfileImage
     || item.sellerAvatar
@@ -78,9 +81,10 @@ export default function ItemDetailsModal({ item, onClose, onRequest, onRequireLo
             <ArrowLeft size={16} />
             Back
           </button>
-          <button onClick={onClose} className="flex h-10 w-10 items-center justify-center rounded-full bg-slate-100 text-slate-600" aria-label="Close item details">
-            <X size={18} />
-          </button>
+          <div className="flex items-center gap-2">
+            <ShareButton item={item} className="flex h-10 w-10 items-center justify-center rounded-full bg-slate-100 text-slate-600" />
+            <button onClick={onClose} className="flex h-10 w-10 items-center justify-center rounded-full bg-slate-100 text-slate-600" aria-label="Close item details"><X size={18} /></button>
+          </div>
         </div>
 
         <div className="p-4 pb-[calc(1.5rem+env(safe-area-inset-bottom))] sm:p-6">
@@ -89,7 +93,6 @@ export default function ItemDetailsModal({ item, onClose, onRequest, onRequireLo
               {item.isBusinessProduct && (
                 <div className="mb-2 flex flex-wrap gap-2">
                   <span className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-3 py-1 text-xs font-bold text-emerald-700"><ShieldCheck size={13} /> Business Verified</span>
-                  {expiryBadge.nearExpiry && <span className={`rounded-full px-3 py-1 text-xs font-bold ${expiryBadge.statusClassName}`}>{expiryBadge.statusLabel || 'Near Expiry'}</span>}
                 </div>
               )}
               <p className="text-sm font-semibold text-violet-600">{item.category}</p>
@@ -97,17 +100,20 @@ export default function ItemDetailsModal({ item, onClose, onRequest, onRequireLo
             </div>
           </div>
 
-          <img src={item.image} alt={item.title} loading="lazy" decoding="async" className="mt-4 h-56 w-full rounded-[1.5rem] object-cover" />
+          <div className="relative mt-4">
+            <img src={item.image} alt={item.title} loading="lazy" decoding="async" className="h-56 w-full rounded-[1.5rem] object-cover" />
+            <span className="absolute bottom-3 left-3 rounded-full bg-emerald-700 px-3 py-1.5 text-xs font-extrabold text-white shadow">FREE</span>
+          </div>
 
           <div className="mt-4 flex flex-wrap gap-2 text-sm">
             <span className="rounded-full bg-amber-50 px-3 py-1 font-medium text-violet-700">{item.condition}</span>
-            <span className="rounded-full bg-slate-100 px-3 py-1 text-slate-600">{Number(item.price || 0) === 0 ? 'Free' : `₹${item.price}`}</span>
-            <span className="rounded-full bg-slate-100 px-3 py-1 text-slate-600">{item.status}</span>
-            {item.validTill && <span className="rounded-full bg-slate-100 px-3 py-1 text-slate-600">Valid till {item.validTill}</span>}
-            <span className="rounded-full bg-emerald-50 px-3 py-1 font-semibold text-emerald-700">
-              {item.requestState?.stockLabel || (product.availableQuantity === 1 ? 'Only 1 left' : `Available: ${product.availableQuantity} left`)}
-            </span>
-            {expiryBadge.statusLabel && <span className={`rounded-full px-3 py-1 font-semibold ${expiryBadge.statusClassName}`}>{expiryBadge.statusLabel}</span>}
+            {availability.available && (
+              <span className="rounded-full bg-emerald-50 px-3 py-1 font-semibold text-emerald-700">
+                {item.requestState?.stockLabel || (product.availableQuantity === 1 ? 'Only 1 left' : `Available: ${product.availableQuantity} left`)}
+              </span>
+            )}
+            {availability.available && availability.timingLabel && <span className="rounded-full bg-slate-100 px-3 py-1 font-semibold text-slate-600">{availability.timingLabel}</span>}
+            {!availability.available && <span className="rounded-full bg-rose-50 px-3 py-1 font-semibold text-rose-700">{availability.statusLabel || 'Unavailable'}</span>}
           </div>
 
           <p className="mt-4 text-sm leading-6 text-slate-600">{item.description || 'No description added by seller.'}</p>
@@ -172,14 +178,16 @@ export default function ItemDetailsModal({ item, onClose, onRequest, onRequireLo
             <div className="mt-6">
               <button
                 onClick={handlePrimary}
-                disabled={item.requestState && !item.requestState.canRequest}
+                disabled={!availability.available || (item.requestState && !item.requestState.canRequest)}
                 className={`w-full rounded-[1.1rem] px-4 py-3 font-semibold transition-all duration-200 ${
-                  item.requestState && !item.requestState.canRequest
+                  !availability.available || (item.requestState && !item.requestState.canRequest)
                     ? 'cursor-not-allowed border border-slate-300 bg-slate-200 text-slate-700'
                     : 'bg-violet-600 text-white hover:bg-violet-700'
                 }`}
               >
-                {item.requestState && !item.requestState.canRequest
+                {!availability.available
+                  ? availability.statusLabel
+                  : item.requestState && !item.requestState.canRequest
                   ? item.requestState.buttonLabel
                   : item.isBusinessProduct || item.listingType === 'business' || item.sellerType === 'business'
                     ? 'Reserve & Collect'

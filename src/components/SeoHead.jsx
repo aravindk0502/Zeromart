@@ -9,7 +9,7 @@ const ensureTag = (selector, create) => {
   return element;
 };
 
-export default function SeoHead({ title, description, canonicalUrl, structuredData = [] }) {
+export default function SeoHead({ title, description, canonicalUrl, image, type = 'website', structuredData = [] }) {
   useEffect(() => {
     if (title) {
       document.title = title;
@@ -33,6 +33,28 @@ export default function SeoHead({ title, description, canonicalUrl, structuredDa
       canonicalTag.setAttribute('href', canonicalUrl);
     }
 
+    const tags = [
+      ['property', 'og:type', type],
+      ['property', 'og:site_name', 'Drizn'],
+      ['property', 'og:title', title],
+      ['property', 'og:description', description],
+      ['property', 'og:url', canonicalUrl],
+      ['property', 'og:image', image],
+      ['name', 'twitter:card', image ? 'summary_large_image' : 'summary'],
+      ['name', 'twitter:title', title],
+      ['name', 'twitter:description', description],
+      ['name', 'twitter:image', image],
+    ];
+    tags.forEach(([attribute, key, content]) => {
+      if (!content) return;
+      const tag = ensureTag(`meta[${attribute}="${key}"]`, () => {
+        const meta = document.createElement('meta');
+        meta.setAttribute(attribute, key);
+        return meta;
+      });
+      tag.setAttribute('content', content);
+    });
+
     document.head.querySelectorAll('script[data-seo-jsonld="true"]').forEach((tag) => tag.remove());
 
     const payloads = Array.isArray(structuredData) ? structuredData : [structuredData];
@@ -43,7 +65,7 @@ export default function SeoHead({ title, description, canonicalUrl, structuredDa
       script.textContent = JSON.stringify(payload);
       document.head.appendChild(script);
     });
-  }, [title, description, canonicalUrl, structuredData]);
+  }, [title, description, canonicalUrl, image, type, structuredData]);
 
   return null;
 }

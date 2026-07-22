@@ -14,6 +14,8 @@ import QuantityRequestModal from './components/QuantityRequestModal';
 import KarmaPopup from './components/KarmaPopup';
 import BotAssistant from './components/BotAssistant';
 import BusinessAuthModal from './components/BusinessAuthModal';
+import SeoHead from './components/SeoHead';
+import { getListingAvailability, getPublicProductUrl } from './utils/listingPresentation';
 import {
   clearBusinessSession, createBusinessOrder, getBusinessAccounts,
   getBusinessOrders, getBusinessProducts, getBusinessPurchases, getBusinessSession,
@@ -120,9 +122,11 @@ const getHeaderLocationLabel = (location, fallback = 'Choose location') => {
 };
 
 const getCleanLocationLabel = (location, fallback = 'Select location') => {
-  const label = getHeaderLocationLabel(location, fallback);
+  const fallbackLabel = String(fallback || '').trim();
+  const safeFallback = !fallbackLabel || /undefined|null/i.test(fallbackLabel) ? 'Select location' : fallbackLabel;
+  const label = getHeaderLocationLabel(location, safeFallback);
   const normalized = String(label || '').trim();
-  if (!normalized || /undefined|null/i.test(normalized)) return fallback;
+  if (!normalized || /undefined|null/i.test(normalized)) return safeFallback;
   return normalized;
 };
 
@@ -882,9 +886,6 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
       });
 
     refreshListings({ force: false });
-    window.setTimeout(() => {
-      if (mounted) refreshListings({ force: true });
-    }, 800);
     const unsubscribe = subscribeToListingChanges(() => refreshListings({ force: true }));
     const refreshWhenVisible = () => {
       if (document.visibilityState === 'visible') refreshListings({ force: false });
@@ -1191,7 +1192,7 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
 
     const resolveListingRoute = async () => {
       const [pathname = '', rawQuery = ''] = String(path || '/').split('?');
-      const match = pathname.match(/^\/listing\/([^/]+)/);
+      const match = pathname.match(/^\/(?:listing|product)\/([^/]+)/);
       if (!match) return;
       const listingId = decodeURIComponent(match[1]);
       const query = new URLSearchParams(rawQuery || '');
@@ -3189,6 +3190,13 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
 
   return (
     <div className="min-h-screen overflow-x-hidden bg-[radial-gradient(circle_at_top_left,_rgba(245,158,11,0.18),_transparent_30%),radial-gradient(circle_at_top_right,_rgba(124,58,237,0.14),_transparent_28%),linear-gradient(135deg,_#fffaf2_0%,_#f7f4ff_48%,_#f8fafc_100%)] text-slate-800">
+      {selectedItemData && (() => {
+        const availability = getListingAvailability(selectedItemData);
+        const seller = selectedItemData.sellerName || selectedItemData.storeName || 'Drizn';
+        const description = `${selectedItemData.title} is available FREE from ${seller}${availability.timingLabel ? ` · ${availability.timingLabel}` : ''}. Good Things. Nearby.`;
+        const canonicalUrl = getPublicProductUrl(selectedItemData).replace(/^http:\/\/127\.0\.0\.1:\d+/, 'https://www.drizn.com');
+        return <SeoHead title={`${selectedItemData.title} - FREE | Drizn`} description={description} canonicalUrl={canonicalUrl} image={selectedItemData.image} type="product" structuredData={{ '@context': 'https://schema.org', '@type': 'Product', name: selectedItemData.title, description: selectedItemData.description || description, image: [selectedItemData.image], offers: { '@type': 'Offer', price: 0, priceCurrency: 'INR', availability: availability.available ? 'https://schema.org/InStock' : 'https://schema.org/OutOfStock', url: canonicalUrl } }} />;
+      })()}
       <div className="mx-auto flex min-h-screen max-w-6xl flex-col lg:flex-row">
         <aside className="hidden w-80 flex-col justify-between rounded-r-[2rem] border border-amber-100/80 bg-white/75 p-8 shadow-[0_20px_65px_rgba(15,23,42,0.08)] backdrop-blur lg:flex">
           <div>
