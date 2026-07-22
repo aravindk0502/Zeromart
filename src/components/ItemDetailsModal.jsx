@@ -2,7 +2,7 @@ import { ArrowLeft, MapPin, Pencil, ShieldCheck, Sparkles, Trash2, X } from 'luc
 import { getExpiryBadgeState, normalizeProductStock } from '../services/transactionService';
 import { isListingOwnedByUser } from '../utils/listingOwnership';
 import ShareButton from './ShareButton';
-import { getListingAvailability } from '../utils/listingPresentation';
+import { getListingAvailability, getOptimizedProductImageUrl } from '../utils/listingPresentation';
 
 const getInitials = (name = 'Drizn User') => String(name)
   .split(' ')
@@ -101,7 +101,7 @@ export default function ItemDetailsModal({ item, onClose, onRequest, onRequireLo
           </div>
 
           <div className="relative mt-4">
-            <img src={item.image} alt={item.title} loading="lazy" decoding="async" className="h-56 w-full rounded-[1.5rem] object-cover" />
+            <img src={getOptimizedProductImageUrl(item.image, 1200, 800)} alt={item.title} loading="eager" fetchPriority="high" decoding="async" className="h-56 w-full rounded-[1.5rem] object-cover" />
             <span className="absolute bottom-3 left-3 rounded-full bg-emerald-700 px-3 py-1.5 text-xs font-extrabold text-white shadow">FREE</span>
           </div>
 

@@ -1,5 +1,15 @@
 const CLOSED_STATUSES = new Set(['expired', 'collected', 'completed', 'sold', 'sold out', 'sold_out', 'deleted', 'blocked', 'hidden']);
 
+export const getProductRouteId = (pathname = '') => {
+  const match = String(pathname || '').match(/^\/(?:listing|product)\/([^/]+)/);
+  if (!match) return '';
+  try {
+    return decodeURIComponent(match[1]);
+  } catch {
+    return '';
+  }
+};
+
 export const getListingExpiryTimestamp = (item = {}) => {
   const date = item.expiryDate || item.validTill || item.availableUntil || item.metadata?.expiryDate || item.metadata?.validTill;
   if (!date) return null;
@@ -40,5 +50,13 @@ export const getListingAvailability = (item = {}, now = Date.now()) => {
 export const getPublicProductUrl = (item = {}) => {
   const id = encodeURIComponent(String(item.publicSlug || item.slug || item.serverId || item.id || '').trim());
   const origin = typeof window !== 'undefined' ? window.location.origin : 'https://www.drizn.com';
-  return `${origin}/product/${id}`;
+  return `${origin}/product/${id}?preview=2`;
+};
+
+export const getOptimizedProductImageUrl = (imageUrl = '', width = 720, height = 480) => {
+  const image = String(imageUrl || '').trim();
+  if (!image || !image.includes('.supabase.co/storage/v1/object/public/')) return image;
+  const transformed = image.replace('/storage/v1/object/public/', '/storage/v1/render/image/public/');
+  const separator = transformed.includes('?') ? '&' : '?';
+  return `${transformed}${separator}width=${width}&height=${height}&resize=cover&quality=78`;
 };

@@ -6,7 +6,7 @@ import { getExpiryBadgeState, normalizeProductStock } from '../services/transact
 import { isListingOwnedByUser } from '../utils/listingOwnership';
 import SiteFooter from '../components/SiteFooter';
 import ShareButton from '../components/ShareButton';
-import { getListingAvailability } from '../utils/listingPresentation';
+import { getListingAvailability, getOptimizedProductImageUrl } from '../utils/listingPresentation';
 
 const getCollectionCta = (item) => (
   item?.isBusinessProduct || item?.listingType === 'business' || item?.sellerType === 'business'
@@ -70,7 +70,7 @@ export function ProductRail({
         </div>
       </div>
       <div className="flex snap-x gap-3 overflow-x-auto pb-2">
-        {items.map((item) => {
+        {items.map((item, index) => {
           const stock = normalizeProductStock(item);
           const expiryBadge = item.expiryBadge || getExpiryBadgeState(stock);
           const availability = getListingAvailability(item);
@@ -92,7 +92,7 @@ export function ProductRail({
               className="group min-w-[245px] max-w-[245px] snap-start cursor-pointer overflow-hidden rounded-2xl border border-slate-200 bg-white ring-1 ring-slate-200/80 shadow-sm transition hover:-translate-y-1 hover:shadow-lg focus:outline-none focus:ring-4 focus:ring-violet-100"
             >
               <div className="relative">
-                <img src={item.image} alt={item.title} loading="lazy" decoding="async" className="h-32 w-full object-cover" />
+                <img src={getOptimizedProductImageUrl(item.image)} alt={item.title} loading={index < 2 ? 'eager' : 'lazy'} fetchPriority={index < 2 ? 'high' : 'auto'} decoding="async" className="h-32 w-full object-cover" />
                 {rescue && expiryBadge.nearExpiry && expiryBadge.rescueLabel && (
                   <span className={`absolute left-2 top-2 rounded-full px-2.5 py-1 text-[10px] font-extrabold uppercase tracking-wide text-white shadow ${expiryBadge.rescueClassName}`}>
                     {expiryBadge.rescueLabel}
@@ -291,7 +291,7 @@ export default function HomePage({
               <p className="text-base font-bold text-slate-700">No live listings yet.</p>
               <p className="mt-1 text-sm text-slate-500">List an item and it will appear here instantly.</p>
             </div>
-          ) : nearbyProducts.map((item) => {
+          ) : nearbyProducts.map((item, index) => {
             const isBusiness = item.isBusinessProduct || item.listingType === 'business' || item.sellerType === 'business';
             const isOwnListing = isListingOwnedByUser(item, user);
             const stock = normalizeProductStock(item);
@@ -314,7 +314,7 @@ export default function HomePage({
                 className={`group flex h-full min-w-0 cursor-pointer flex-col overflow-hidden rounded-[1.5rem] border bg-white ring-1 shadow-[0_14px_45px_rgba(15,23,42,0.08)] transition-all duration-200 hover:-translate-y-1 hover:shadow-[0_22px_60px_rgba(15,23,42,0.12)] focus:outline-none focus:ring-4 ${isBusiness ? 'border-emerald-200 ring-emerald-100/90 focus:ring-emerald-100' : 'border-amber-200/90 ring-amber-100/90 focus:ring-violet-100'}`}
               >
                 <div className="relative">
-                  <img src={item.image} alt={item.title} loading="lazy" decoding="async" className="h-40 w-full object-cover transition duration-500 group-hover:scale-[1.03]" />
+                  <img src={getOptimizedProductImageUrl(item.image)} alt={item.title} loading={index < 2 ? 'eager' : 'lazy'} fetchPriority={index < 2 ? 'high' : 'auto'} decoding="async" className="h-40 w-full object-cover transition duration-500 group-hover:scale-[1.03]" />
                   {isBusiness && (
                     <div className="absolute inset-x-0 top-0 flex items-start justify-between gap-2 p-3">
                       <span className="inline-flex items-center gap-1 rounded-full border border-white/60 bg-white/90 px-2.5 py-1 text-[10px] font-extrabold text-emerald-700 shadow-sm backdrop-blur">

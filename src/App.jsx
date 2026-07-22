@@ -15,7 +15,7 @@ import KarmaPopup from './components/KarmaPopup';
 import BotAssistant from './components/BotAssistant';
 import BusinessAuthModal from './components/BusinessAuthModal';
 import SeoHead from './components/SeoHead';
-import { getListingAvailability, getPublicProductUrl } from './utils/listingPresentation';
+import { getListingAvailability, getProductRouteId, getPublicProductUrl } from './utils/listingPresentation';
 import {
   clearBusinessSession, createBusinessOrder, getBusinessAccounts,
   getBusinessOrders, getBusinessProducts, getBusinessPurchases, getBusinessSession,
@@ -1219,6 +1219,8 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
         return;
       }
 
+      if (getProductRouteId(window.location.pathname) !== listingId) return;
+
       const normalizedListing = normalizeProductStock(listing);
       const requestState = getProductRequestState(normalizedListing, activeAccountId, requestClock);
       setSelectedItem(normalizedListing);
@@ -1235,7 +1237,7 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
     return () => {
       cancelled = true;
     };
-  }, [activeAccountId, items, path, requestClock]);
+  }, [activeAccountId, path]);
 
   useEffect(() => {
     if (!activeAccountId) return;
@@ -1422,6 +1424,13 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
     setSelectedNotification(null);
     setSelectedItem(null);
     setNotice('');
+  };
+
+  const closeItemDetails = () => {
+    if (getProductRouteId(window.location.pathname)) {
+      navigate('/');
+    }
+    setSelectedItem(null);
   };
 
   const handleTourFinish = () => {
@@ -3764,7 +3773,7 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
       {selectedItemData && (
         <ItemDetailsModal
           item={selectedItemData}
-          onClose={() => setSelectedItem(null)}
+          onClose={closeItemDetails}
           onRequest={handleRequest}
           onRequireLogin={() => requireLogin('request')}
           onRequireBuyerAccess={(itemId) => {

@@ -122,13 +122,13 @@ export const fromServerListing = (listing = {}) => normalizeLiveListing({
 
 const mergeRemoteWithLocalDrafts = (remoteListings) => {
   if (isProductionRuntime) {
-    saveLiveListings(remoteListings);
+    saveLiveListings(remoteListings, { broadcastUpdate: false });
     return remoteListings;
   }
   const remoteIds = new Set(remoteListings.map((listing) => String(listing.id)));
   const drafts = getLiveListings().filter((listing) => !listing.serverPersisted && !remoteIds.has(String(listing.id)));
   const nextListings = [...remoteListings, ...drafts];
-  saveLiveListings(nextListings);
+  saveLiveListings(nextListings, { broadcastUpdate: false });
   return nextListings;
 };
 

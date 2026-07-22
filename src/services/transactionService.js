@@ -9,7 +9,19 @@ const STORAGE_KEYS = {
   pendingKarmaActions: 'pendingKarmaActions',
 };
 
-let liveListingsMemory = [];
+const LIVE_LISTINGS_CACHE_TTL_MS = 5 * 60 * 1000;
+
+const readLiveListingsCache = () => {
+  try {
+    const cached = JSON.parse(localStorage.getItem(STORAGE_KEYS.liveListings));
+    if (!cached || !Array.isArray(cached.listings) || Date.now() - Number(cached.savedAt || 0) > LIVE_LISTINGS_CACHE_TTL_MS) return [];
+    return cached.listings;
+  } catch {
+    return [];
+  }
+};
+
+let liveListingsMemory = readLiveListingsCache();
 
 export const PURCHASE_LIMIT_WINDOW_MS = 24 * 60 * 60 * 1000;
 
@@ -133,7 +145,7 @@ export const getLiveListings = () => {
   return liveListingsMemory.map(normalizeLiveListing);
 };
 
-export const saveLiveListings = (listings) => {
+export const saveLiveListings = (listings, { broadcastUpdate = true } = {}) => {
   const deduped = new Map();
   listings.filter(Boolean).map(normalizeLiveListing).forEach((listing) => {
     deduped.set(String(listing.id), listing);
@@ -141,10 +153,10 @@ export const saveLiveListings = (listings) => {
   const value = [...deduped.values()];
   liveListingsMemory = value;
   if (typeof window !== 'undefined') {
+    localStorage.setItem(STORAGE_KEYS.liveListings, JSON.stringify({ savedAt: Date.now(), listings: value }));
     window.dispatchEvent(new CustomEvent('zeromart-live-listings-change', { detail: { key: STORAGE_KEYS.liveListings, value } }));
     window.dispatchEvent(new CustomEvent('zeromart-transactions-change', { detail: { key: STORAGE_KEYS.liveListings, value } }));
-    // Single public signal that any live-listing write happened (same-tab live refresh).
-    window.dispatchEvent(new Event('drizn_listings_updated'));
+    if (broadcastUpdate) window.dispatchEvent(new Event('drizn_listings_updated'));
   }
   return value;
 };
