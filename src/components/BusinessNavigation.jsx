@@ -41,7 +41,7 @@ export function BottomNavigation({
             <button
               key={item.key}
               onClick={() => onSelect(item)}
-              className={`relative mx-auto flex min-w-0 flex-col items-center justify-center rounded-full px-1 text-[10px] font-semibold leading-none sm:text-[11px] ${
+              className={`relative mx-auto flex h-[58px] w-full max-w-[74px] min-w-0 flex-col items-center justify-center rounded-full px-1 text-[10px] font-semibold leading-none sm:text-[11px] ${
                 isActive ? 'bg-gradient-to-r from-amber-500 to-violet-600 text-white shadow' : 'text-slate-600'
               }`}
             >
