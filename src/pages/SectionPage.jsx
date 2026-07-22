@@ -200,10 +200,10 @@ export default function SectionPage({ section, businessItems = [], onBack, locat
                 }}
                 className="group min-w-0 cursor-pointer overflow-hidden rounded-[1.5rem] border border-emerald-200 bg-white ring-1 ring-emerald-100/90 shadow-[0_14px_45px_rgba(15,23,42,0.08)] transition hover:-translate-y-1 hover:shadow-[0_22px_60px_rgba(15,23,42,0.12)] focus:outline-none focus:ring-4 focus:ring-emerald-100 xl:flex xl:h-full xl:flex-col"
               >
-                {item.image && <div className="relative"><img src={getOptimizedProductImageUrl(item.image)} alt={item.title} loading="lazy" decoding="async" className="h-40 w-full object-cover sm:h-44 xl:h-32" /><span className="absolute bottom-2 left-2 rounded-full bg-emerald-700 px-2.5 py-1 text-[10px] font-extrabold text-white shadow">FREE</span></div>}
-                <div className="p-4 xl:flex xl:flex-1 xl:flex-col xl:p-3">
+                {item.image && <div className="relative"><img src={getOptimizedProductImageUrl(item.image)} alt={item.title} loading="lazy" decoding="async" className="h-44 w-full object-cover sm:h-48 xl:h-36" /><span className="absolute bottom-2 left-2 rounded-full bg-emerald-700 px-2.5 py-1 text-[10px] font-extrabold text-white shadow">FREE</span></div>}
+                <div className="p-3.5 xl:flex xl:flex-1 xl:flex-col xl:p-3">
                   {item.isBusinessProduct && (
-                    <div className="mb-3 flex flex-wrap items-center gap-2 xl:mb-2">
+                    <div className="mb-2.5 flex flex-wrap items-center gap-1.5 xl:mb-2">
                       <span className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2.5 py-1 text-[11px] font-bold text-emerald-700">
                         <ShieldCheck size={13} /> Business Verified
                       </span>
@@ -235,7 +235,7 @@ export default function SectionPage({ section, businessItems = [], onBack, locat
                   </div>
                   {availability.timingLabel && <p className="mt-2 truncate text-[11px] font-semibold text-slate-500 xl:mt-1.5">{availability.timingLabel}</p>}
                   {availability.statusLabel && <p className="mt-2 text-[11px] font-bold text-rose-600 xl:mt-1.5">{availability.statusLabel}</p>}
-                  <div className="mt-4 flex items-center justify-between gap-3 rounded-[1rem] bg-slate-50 px-3 py-3 xl:mt-auto xl:pt-2 xl:pb-2">
+                  <div className="mt-3.5 flex items-center justify-between gap-3 rounded-[1rem] bg-slate-50 px-3 py-3 xl:mt-auto xl:pt-2 xl:pb-2">
                     <div className="min-w-0">
                       <button
                         type="button"

@@ -314,7 +314,7 @@ export default function HomePage({
                 className={`group flex h-full min-w-0 cursor-pointer flex-col overflow-hidden rounded-[1.5rem] border bg-white ring-1 shadow-[0_14px_45px_rgba(15,23,42,0.08)] transition-all duration-200 hover:-translate-y-1 hover:shadow-[0_22px_60px_rgba(15,23,42,0.12)] focus:outline-none focus:ring-4 ${isBusiness ? 'border-emerald-200 ring-emerald-100/90 focus:ring-emerald-100' : 'border-amber-200/90 ring-amber-100/90 focus:ring-violet-100'}`}
               >
                 <div className="relative">
-                  <img src={getOptimizedProductImageUrl(item.image)} alt={item.title} loading={index < 2 ? 'eager' : 'lazy'} fetchPriority={index < 2 ? 'high' : 'auto'} decoding="async" className="h-40 w-full object-cover transition duration-500 group-hover:scale-[1.03] xl:h-32" />
+                  <img src={getOptimizedProductImageUrl(item.image)} alt={item.title} loading={index < 2 ? 'eager' : 'lazy'} fetchPriority={index < 2 ? 'high' : 'auto'} decoding="async" className="h-44 w-full object-cover transition duration-500 group-hover:scale-[1.03] xl:h-36" />
                   {isBusiness && (
                     <div className="absolute inset-x-0 top-0 flex items-start justify-between gap-2 p-3">
                       <span className="inline-flex items-center gap-1 rounded-full border border-white/60 bg-white/90 px-2.5 py-1 text-[10px] font-extrabold text-emerald-700 shadow-sm backdrop-blur">
@@ -324,11 +324,6 @@ export default function HomePage({
                         Verified
                       </span>
                     </div>
-                  )}
-                  {expiryBadge.nearExpiry && expiryBadge.rescueLabel && (
-                    <span className={`absolute left-2 top-2 rounded-full px-2.5 py-1 text-[10px] font-extrabold uppercase tracking-wide text-white shadow ${expiryBadge.rescueClassName}`}>
-                      {expiryBadge.rescueLabel}
-                    </span>
                   )}
                   <span className="absolute bottom-3 left-3 rounded-full bg-emerald-700 px-2.5 py-1 text-[10px] font-extrabold uppercase tracking-wide text-white shadow">FREE</span>
                   <div className="absolute bottom-3 right-3 flex items-center gap-2">
@@ -347,10 +342,10 @@ export default function HomePage({
                   </div>
                 </div>
 
-                <div className="flex flex-1 flex-col p-4 xl:p-3">
+                <div className="flex flex-1 flex-col p-3.5 xl:p-3">
                   {availability.timingLabel && <p className="mb-2 truncate text-[11px] font-semibold text-slate-500 xl:mb-1">{availability.timingLabel}</p>}
                   {availability.statusLabel && <p className="mb-2 text-[11px] font-bold text-rose-600 xl:mb-1">{availability.statusLabel}</p>}
-                  <div className="flex flex-wrap items-start gap-3 xl:gap-2">
+                  <div className="flex items-start gap-3 xl:gap-2">
                     <div className="flex min-w-0 flex-1 items-center gap-3 xl:gap-2">
                       <button
                         type="button"
@@ -386,11 +381,16 @@ export default function HomePage({
                         </p>
                       </div>
                     </div>
-                    <div className="ml-auto flex shrink-0 flex-wrap items-center justify-end gap-2">
+                    <div className="flex shrink-0 flex-col items-end gap-1 pl-1 text-right">
                       {item.serverPersisted || isOwnListing ? (
                         <span className="shrink-0 rounded-full bg-emerald-50 px-2 py-1 text-xs font-bold text-emerald-800">Live</span>
                       ) : (
                         <span className="shrink-0 rounded-full bg-slate-100 px-2 py-1 text-xs font-bold text-slate-600">Local</span>
+                      )}
+                      {expiryBadge.nearExpiry && expiryBadge.statusLabel && (
+                        <span className={`shrink-0 rounded-full px-2 py-1 text-[11px] font-bold ${expiryBadge.statusClassName}`}>
+                          {expiryBadge.statusLabel}
+                        </span>
                       )}
                     </div>
                   </div>
@@ -406,7 +406,7 @@ export default function HomePage({
                   </div>
                   <div className="mt-3 xl:mt-2">
                     <p className="min-w-0 text-sm text-slate-500">{item.condition || item.category || 'Available'} · {item.distance || 'nearby'}</p>
-                    {expiryBadge?.formattedExpiry && (
+                    {!expiryBadge.nearExpiry && expiryBadge?.formattedExpiry && (
                       <p className="mt-1 text-xs font-semibold text-slate-500 xl:mt-0.5">Expires: {expiryBadge.formattedExpiry}</p>
                     )}
                   </div>

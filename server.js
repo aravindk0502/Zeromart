@@ -1395,7 +1395,7 @@ async function reserveListingViaSupabase(listingId, quantity = 1) {
     if (!update.error && update.data) return listingRowToClient(update.data);
   }
 
-  const race = new Error('This item was just claimed by someone else.');
+  const race = new Error('Sorry, this item has already been reserved by another user. Please explore other nearby products.');
   race.status = 409;
   throw race;
 }

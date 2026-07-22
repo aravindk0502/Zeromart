@@ -1380,129 +1380,126 @@ async function handleListingReserve(req, res, listingId) {
   const nextAvailable = Math.max(0, available - quantity);
   const nextReserved = currentReserved + quantity;
 
-  for (let attempt = 1; attempt <= 4; attempt += 1) {
-    const updatedRows = await supabaseFetch(
-      `/listings?id=eq.${encodeURIComponent(listingId)}&available_quantity=eq.${available}&select=*`,
-      {
-        method: 'PATCH',
-        headers: { Prefer: 'return=representation' },
-        body: JSON.stringify({
-          available_quantity: nextAvailable,
-          reserved_quantity: nextReserved,
-          updated_at: now,
-        }),
-      }
-    );
+  const updatedRows = await supabaseFetch(
+    `/listings?id=eq.${encodeURIComponent(listingId)}&available_quantity=eq.${available}&select=*`,
+    {
+      method: 'PATCH',
+      headers: { Prefer: 'return=representation' },
+      body: JSON.stringify({
+        available_quantity: nextAvailable,
+        reserved_quantity: nextReserved,
+        updated_at: now,
+      }),
+    }
+  );
 
-    if (Array.isArray(updatedRows) && updatedRows.length > 0) {
-      const updatedListing = updatedRows[0];
-      let createdRequest = null;
+  if (!Array.isArray(updatedRows) || updatedRows.length === 0) {
+    console.warn('[reserve] race conflict', {
+      listingId: String(listingId),
+      buyerAccountId: buyerAccountId || 'anonymous',
+      sellerAccountId: sellerAccountId || 'unknown',
+      quantity,
+    });
+    return sendJson(res, 409, { success: false, code: 'RACE_CONFLICT', message: 'Sorry, this item has already been reserved by another user. Please explore other nearby products.' });
+  }
 
-      if (requestId && buyerAccountId && sellerAccountId) {
-        const identityMap = await fetchProfilesByAccountIds([buyerAccountId, sellerAccountId]).catch(() => new Map());
-        const buyerIdentity = profileIdentity(identityMap.get(String(buyerAccountId).trim()) || {}, String(body.buyerName || '').trim() || 'Buyer');
-        const sellerIdentity = profileIdentity(identityMap.get(String(sellerAccountId).trim()) || {}, String(listing.seller_name || '').trim() || 'Seller');
-        try {
-          const requestPayload = {
-            id: requestId,
-            listing_id: String(listingId),
-            buyer_id: buyerAccountId,
-            seller_id: sellerAccountId,
-            quantity,
-            status: 'pending',
-            details: {
-              requestId,
-              listingId: String(listingId),
-              buyerAccountId,
-              sellerAccountId,
-              buyerName: buyerIdentity.name,
-              buyerAvatar: buyerIdentity.avatarUrl || '',
-              buyerProfileImage: buyerIdentity.avatarUrl || '',
-              buyerPhone: String(body.buyerPhone || '').trim(),
-              buyerLocation: String(body.buyerLocation || '').trim(),
-              sellerName: sellerIdentity.name,
-              sellerAvatar: sellerIdentity.avatarUrl || '',
-              sellerProfileImage: sellerIdentity.avatarUrl || '',
-              productName: String(listing.title || '').trim(),
-              source: 'reserve-endpoint',
-            },
-          };
-          const requestRows = await supabaseFetch('/requests?on_conflict=id&select=*', {
-            method: 'POST',
-            headers: { Prefer: 'resolution=merge-duplicates,return=representation' },
-            body: JSON.stringify(requestPayload),
-          });
-          createdRequest = requestRows?.[0] || null;
-        } catch (requestError) {
-          // Compensate stock reservation if canonical request creation fails.
-          await supabaseFetch(
-            `/listings?id=eq.${encodeURIComponent(listingId)}&available_quantity=eq.${Math.max(0, Number(updatedListing.available_quantity || 0))}&reserved_quantity=eq.${Math.max(0, Number(updatedListing.reserved_quantity || 0))}`,
-            {
-              method: 'PATCH',
-              headers: { Prefer: 'return=minimal' },
-              body: JSON.stringify({
-                available_quantity: available,
-                reserved_quantity: currentReserved,
-                updated_at: nowIso(),
-              }),
-            }
-          );
-          return sendJson(res, 409, {
-            success: false,
-            code: 'REQUEST_PERSIST_CONFLICT',
-            message: 'Could not create request record. Please try again.',
-            details: requestError?.message || 'request-persist-failed',
-          });
-        }
-      }
+  const updatedListing = updatedRows[0];
+  let createdRequest = null;
 
-      console.info('[reserve] success', {
-        listingId: String(listingId),
-        buyerAccountId: buyerAccountId || 'anonymous',
-        sellerAccountId: sellerAccountId || 'unknown',
+  if (requestId && buyerAccountId && sellerAccountId) {
+    const identityMap = await fetchProfilesByAccountIds([buyerAccountId, sellerAccountId]).catch(() => new Map());
+    const buyerIdentity = profileIdentity(identityMap.get(String(buyerAccountId).trim()) || {}, String(body.buyerName || '').trim() || 'Buyer');
+    const sellerIdentity = profileIdentity(identityMap.get(String(sellerAccountId).trim()) || {}, String(listing.seller_name || '').trim() || 'Seller');
+    try {
+      const requestPayload = {
+        id: requestId,
+        listing_id: String(listingId),
+        buyer_id: buyerAccountId,
+        seller_id: sellerAccountId,
         quantity,
-        attempt,
-      });
-      if (createdRequest && sellerAccountId) {
-        const requestDetails = parseJsonValue(createdRequest.details, {});
-        await persistNotificationEvent({
-          eventType: 'new_request',
-          recipientAccountId: sellerAccountId,
-          actorAccountId: buyerAccountId,
-          listingId: String(listingId),
+        status: 'pending',
+        details: {
           requestId,
-          title: '📦 New Collection Request',
-          body: `${requestDetails.buyerName || 'A buyer'} wants to collect ${requestDetails.productName || listing.title || 'your item'} × ${quantity}.`,
-          dedupeKey: `new_request:${requestId}`,
-          payload: {
-            buyerId: buyerAccountId,
-            buyerName: requestDetails.buyerName || '',
-            buyerAvatar: requestDetails.buyerAvatar || requestDetails.buyerProfileImage || '',
-            buyerPhone: requestDetails.buyerPhone || '',
-            buyerLocation: requestDetails.buyerLocation || '',
-            sellerId: sellerAccountId,
-            sellerName: requestDetails.sellerName || listing.seller_name || '',
-            sellerAvatar: requestDetails.sellerAvatar || requestDetails.sellerProfileImage || '',
-            productName: requestDetails.productName || listing.title || '',
-            quantity,
-          },
-        });
-      }
-      return sendJson(res, 200, {
-        success: true,
-        listing: listingRowToClient(updatedListing),
-        request: createdRequest ? requestRowToOrder(createdRequest) : null,
+          listingId: String(listingId),
+          buyerAccountId,
+          sellerAccountId,
+          buyerName: buyerIdentity.name,
+          buyerAvatar: buyerIdentity.avatarUrl || '',
+          buyerProfileImage: buyerIdentity.avatarUrl || '',
+          buyerPhone: String(body.buyerPhone || '').trim(),
+          buyerLocation: String(body.buyerLocation || '').trim(),
+          sellerName: sellerIdentity.name,
+          sellerAvatar: sellerIdentity.avatarUrl || '',
+          sellerProfileImage: sellerIdentity.avatarUrl || '',
+          productName: String(listing.title || '').trim(),
+          source: 'reserve-endpoint',
+        },
+      };
+      const requestRows = await supabaseFetch('/requests?on_conflict=id&select=*', {
+        method: 'POST',
+        headers: { Prefer: 'resolution=merge-duplicates,return=representation' },
+        body: JSON.stringify(requestPayload),
+      });
+      createdRequest = requestRows?.[0] || null;
+    } catch (requestError) {
+      // Compensate stock reservation if canonical request creation fails.
+      await supabaseFetch(
+        `/listings?id=eq.${encodeURIComponent(listingId)}&available_quantity=eq.${Math.max(0, Number(updatedListing.available_quantity || 0))}&reserved_quantity=eq.${Math.max(0, Number(updatedListing.reserved_quantity || 0))}`,
+        {
+          method: 'PATCH',
+          headers: { Prefer: 'return=minimal' },
+          body: JSON.stringify({
+            available_quantity: available,
+            reserved_quantity: currentReserved,
+            updated_at: nowIso(),
+          }),
+        }
+      );
+      return sendJson(res, 409, {
+        success: false,
+        code: 'REQUEST_PERSIST_CONFLICT',
+        message: 'Could not create request record. Please try again.',
+        details: requestError?.message || 'request-persist-failed',
       });
     }
   }
 
-  console.warn('[reserve] race conflict', {
+  console.info('[reserve] success', {
     listingId: String(listingId),
     buyerAccountId: buyerAccountId || 'anonymous',
     sellerAccountId: sellerAccountId || 'unknown',
     quantity,
   });
-  return sendJson(res, 409, { success: false, code: 'RACE_CONFLICT', message: 'This item was just claimed by someone else.' });
+  if (createdRequest && sellerAccountId) {
+    const requestDetails = parseJsonValue(createdRequest.details, {});
+    await persistNotificationEvent({
+      eventType: 'new_request',
+      recipientAccountId: sellerAccountId,
+      actorAccountId: buyerAccountId,
+      listingId: String(listingId),
+      requestId,
+      title: '📦 New Collection Request',
+      body: `${requestDetails.buyerName || 'A buyer'} wants to collect ${requestDetails.productName || listing.title || 'your item'} × ${quantity}.`,
+      dedupeKey: `new_request:${requestId}`,
+      payload: {
+        buyerId: buyerAccountId,
+        buyerName: requestDetails.buyerName || '',
+        buyerAvatar: requestDetails.buyerAvatar || requestDetails.buyerProfileImage || '',
+        buyerPhone: requestDetails.buyerPhone || '',
+        buyerLocation: requestDetails.buyerLocation || '',
+        sellerId: sellerAccountId,
+        sellerName: requestDetails.sellerName || listing.seller_name || '',
+        sellerAvatar: requestDetails.sellerAvatar || requestDetails.sellerProfileImage || '',
+        productName: requestDetails.productName || listing.title || '',
+        quantity,
+      },
+    });
+  }
+  return sendJson(res, 200, {
+    success: true,
+    listing: listingRowToClient(updatedListing),
+    request: createdRequest ? requestRowToOrder(createdRequest) : null,
+  });
 }
 
 async function handleUpload(req, res) {
