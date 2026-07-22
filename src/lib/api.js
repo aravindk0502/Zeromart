@@ -14,7 +14,13 @@ const IS_PRODUCTION = import.meta.env.PROD;
 const PROD_API_FALLBACK = 'https://drizn.com';
 const PROD_PAYMENT_API_FALLBACK = 'https://web-production-74e61.up.railway.app';
 const BUYER_ACCESS_CREATE_ORDER_TIMEOUT_MS = 15000;
-const OTP_REQUEST_TIMEOUT_MS = 15000;
+const OTP_REQUEST_TIMEOUT_MS = 30000;
+const AUTH_REQUEST_MAX_ATTEMPTS = 2;
+
+const normalizeAuthAccountType = (value = '') => {
+  const type = String(value || '').trim().toLowerCase();
+  return type === 'business' || type === 'store' ? 'business' : 'personal';
+};
 
 const apiUrl = (path, base = BASE) => `${String(base || '').replace(/\/$/, '')}${path}`;
 
@@ -96,6 +102,21 @@ async function requestAcrossBases(path, options = {}, bases = []) {
   throw lastError || new Error('Request failed');
 }
 
+async function requestAuthAcrossBasesWithRetry(path, options = {}, maxAttempts = AUTH_REQUEST_MAX_ATTEMPTS) {
+  let lastError = null;
+  for (let attempt = 1; attempt <= Number(maxAttempts); attempt += 1) {
+    try {
+      return await requestAcrossBases(path, options, getAuthBases());
+    } catch (error) {
+      lastError = error;
+      if (attempt >= Number(maxAttempts) || !isRetryableBuyerAccessError(error)) {
+        throw error;
+      }
+    }
+  }
+  throw lastError || new Error('Request failed');
+}
+
 async function requestJson(path, options = {}) {
   const {
     method = 'GET',
@@ -155,8 +176,9 @@ async function requestJson(path, options = {}) {
       }
       return data;
     } catch (error) {
+      const isAuthPath = /^\/api\/auth\//.test(String(path || ''));
       const normalizedError = error?.name === 'AbortError'
-        ? new Error('Request timed out.')
+        ? new Error(isAuthPath ? 'OTP service is taking longer than usual. Please retry once.' : 'Request timed out.')
         : error;
       console.error('[api] request error', {
         url,
@@ -230,31 +252,34 @@ async function put(path, body) {
 }
 
 // ── Auth ──────────────────────────────────────────────────────────────────────
-export async function sendOtp(phone) {
-  return requestAcrossBases('/api/auth/send-otp', {
+export async function sendOtp(phone, options = {}) {
+  const accountType = normalizeAuthAccountType(options.accountType || options.account_type || 'personal');
+  return requestAuthAcrossBasesWithRetry('/api/auth/send-otp', {
     method: 'POST',
-    body: { phone },
+    body: { phone, accountType },
     auth: false,
     timeoutMs: OTP_REQUEST_TIMEOUT_MS,
-  }, getAuthBases());
+  });
 }
 
-export async function verifyOtp(phone, otp) {
-  return requestAcrossBases('/api/auth/verify-otp', {
+export async function verifyOtp(phone, otp, options = {}) {
+  const accountType = normalizeAuthAccountType(options.accountType || options.account_type || 'personal');
+  return requestAuthAcrossBasesWithRetry('/api/auth/verify-otp', {
     method: 'POST',
-    body: { phone, otp },
+    body: { phone, otp, accountType },
     auth: false,
     timeoutMs: OTP_REQUEST_TIMEOUT_MS,
-  }, getAuthBases());
+  });
 }
 
-export async function resendOtp(phone, retryType = 'text') {
-  return requestAcrossBases('/api/auth/resend-otp', {
+export async function resendOtp(phone, retryType = 'text', options = {}) {
+  const accountType = normalizeAuthAccountType(options.accountType || options.account_type || 'personal');
+  return requestAuthAcrossBasesWithRetry('/api/auth/resend-otp', {
     method: 'POST',
-    body: { phone, retryType },
+    body: { phone, retryType, accountType },
     auth: false,
     timeoutMs: OTP_REQUEST_TIMEOUT_MS,
-  }, getAuthBases());
+  });
 }
 
 export async function initiatePhoneChange(newPhone) {

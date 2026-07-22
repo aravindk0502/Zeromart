@@ -35,6 +35,13 @@ const jsonHeaders = {
 const DEFAULT_SELLER_NAME = 'Drizn User';
 const FALLBACK_JWT_SECRET = 'zeromart-dev-secret-change-in-prod';
 const JWT_SECRET = String(process.env.JWT_SECRET || FALLBACK_JWT_SECRET).trim();
+const AUTH_PROXY_BASE_URL = String(
+  process.env.AUTH_PROXY_BASE_URL
+  || process.env.RAILWAY_API_URL
+  || 'https://web-production-74e61.up.railway.app'
+).trim().replace(/\/+$/, '');
+const AUTH_PROXY_TIMEOUT_MS = Math.max(5000, Number(process.env.AUTH_PROXY_TIMEOUT_MS || 20000) || 20000);
+const AUTH_PROXY_MAX_ATTEMPTS = Math.max(1, Number(process.env.AUTH_PROXY_MAX_ATTEMPTS || 2) || 2);
 
 function isPlaceholderName(value = '') {
   const normalized = String(value || '').trim().toLowerCase();
@@ -86,6 +93,84 @@ function getPathname(req) {
   } catch {
     return rawUrl.split('?')[0] || '/';
   }
+}
+
+function isAuthProxyRetryableError(error) {
+  if (!error) return false;
+  const status = Number(error?.status || 0);
+  if ([408, 425, 429, 500, 502, 503, 504].includes(status)) return true;
+  const message = String(error?.message || error || '').toLowerCase();
+  return /timed out|timeout|aborted|network|fetch failed|socket|econnreset|econnrefused|enotfound|eai_again/.test(message);
+}
+
+async function forwardAuthRequest(req, res, urlPath) {
+  if (!AUTH_PROXY_BASE_URL) {
+    return sendJson(res, 503, {
+      error: 'Auth service unavailable',
+      code: 'AUTH_PROXY_NOT_CONFIGURED',
+    });
+  }
+
+  const method = String(req.method || 'GET').toUpperCase();
+  if (!['POST', 'GET'].includes(method)) {
+    return sendJson(res, 405, { error: 'Method not allowed' });
+  }
+
+  const body = method === 'GET' ? null : await readRequestJson(req);
+  let lastError = null;
+
+  for (let attempt = 1; attempt <= AUTH_PROXY_MAX_ATTEMPTS; attempt += 1) {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), AUTH_PROXY_TIMEOUT_MS);
+    try {
+      const response = await fetch(`${AUTH_PROXY_BASE_URL}${urlPath}`, {
+        method,
+        headers: {
+          'Content-Type': 'application/json',
+          ...(req.headers?.authorization ? { Authorization: req.headers.authorization } : {}),
+        },
+        ...(body ? { body: JSON.stringify(body) } : {}),
+        signal: controller.signal,
+      });
+
+      const raw = await response.text();
+      let parsed;
+      try {
+        parsed = raw ? JSON.parse(raw) : {};
+      } catch {
+        parsed = { message: raw || '' };
+      }
+
+      if (!response.ok) {
+        const error = new Error(parsed?.error || parsed?.message || `Auth upstream failed (${response.status})`);
+        error.status = response.status;
+        error.response = parsed;
+        if (attempt < AUTH_PROXY_MAX_ATTEMPTS && isAuthProxyRetryableError(error)) {
+          lastError = error;
+          continue;
+        }
+        return sendJson(res, response.status, parsed);
+      }
+
+      return sendJson(res, response.status || 200, parsed);
+    } catch (error) {
+      const normalizedError = error?.name === 'AbortError'
+        ? Object.assign(new Error('Auth request timed out'), { status: 504 })
+        : error;
+      lastError = normalizedError;
+      if (attempt < AUTH_PROXY_MAX_ATTEMPTS && isAuthProxyRetryableError(normalizedError)) {
+        continue;
+      }
+    } finally {
+      clearTimeout(timeoutId);
+    }
+  }
+
+  return sendJson(res, Number(lastError?.status || 502), {
+    error: 'Auth service temporarily unavailable',
+    code: 'AUTH_PROXY_FAILED',
+    message: String(lastError?.message || 'Unknown auth proxy error'),
+  });
 }
 
 function normalizeSupabaseRestUrl() {
@@ -1360,6 +1445,15 @@ function toFiniteNumber(value) {
   return Number.isFinite(next) ? next : null;
 }
 
+function normalizeAccountTypeValue(value = '') {
+  const type = String(value || '').trim().toLowerCase();
+  return type === 'business' || type === 'store' ? 'business' : 'personal';
+}
+
+function isPersonalAccountType(value = '') {
+  return normalizeAccountTypeValue(value) === 'personal';
+}
+
 function haversineKm(from, to) {
   const rad = (value) => (value * Math.PI) / 180;
   const dLat = rad(to.lat - from.lat);
@@ -1458,7 +1552,7 @@ async function dispatchNearbyListingNotifications(payload = {}) {
     return { success: true, persisted: false, notifiedCount: 0 };
   }
 
-  const radiusKm = 2;
+  const radiusKm = Math.max(1, Number(payload.radiusKm || 5) || 5);
   const listingRows = await supabaseFetch(`/listings?id=eq.${encodeURIComponent(listingId)}&select=*&limit=1`);
   const listing = listingRows?.[0];
   if (!listing || !isPublicListingRow(listing)) {
@@ -1496,10 +1590,21 @@ async function dispatchNearbyListingNotifications(payload = {}) {
     usersWithinRadius: 0,
     eligibleDevices: 0,
     preferenceSkips: 0,
+    businessRecipientSkips: 0,
     invalidLocationSkips: 0,
     dedupeSkips: 0,
     sendsSucceeded: 0,
     sendsFailed: 0,
+  };
+
+  const profileRows = await supabaseFetch('/profiles?select=*');
+  const profileByAccountId = new Map((profileRows || []).map((profile) => [String(profile.id || '').trim(), profile]));
+
+  const isPersonalRecipient = (accountId) => {
+    const profile = profileByAccountId.get(String(accountId || '').trim()) || {};
+    const metadata = parseJsonValue(profile.metadata, {});
+    const accountType = profile.account_type || profile.mode || metadata.accountType || metadata.mode || '';
+    return isPersonalAccountType(accountType);
   };
 
   const isBlockedByPreference = (accountId) => {
@@ -1513,6 +1618,10 @@ async function dispatchNearbyListingNotifications(payload = {}) {
   const recipientByAccount = new Map();
   const trackRecipient = (accountId, coordinates) => {
     if (!accountId || accountId === ownerId) return;
+    if (!isPersonalRecipient(accountId)) {
+      diagnostics.businessRecipientSkips += 1;
+      return;
+    }
     if (isBlockedByPreference(accountId)) {
       diagnostics.preferenceSkips += 1;
       return;
@@ -1534,7 +1643,6 @@ async function dispatchNearbyListingNotifications(payload = {}) {
     trackRecipient(accountId, getLocationFromTokenMetadata(parseJsonValue(row.metadata, {})));
   });
 
-  const profileRows = await supabaseFetch('/profiles?select=*');
   (profileRows || []).forEach((profile) => {
     const accountId = String(profile.id || '').trim();
     trackRecipient(accountId, getLocationFromProfileRow(profile));
@@ -1572,6 +1680,8 @@ async function dispatchNearbyListingNotifications(payload = {}) {
         area: String(payload.area || ''),
         city: String(payload.city || ''),
         listingId,
+        recipientAccountType: 'personal',
+        actorAccountType: normalizeAccountTypeValue(payload.actorAccountType || payload.ownerAccountType || ''),
         sellerId: String(baseListing.sellerId || baseListing.businessId || ownerId),
         sellerName: sellerLabel,
         productName,
@@ -2102,7 +2212,9 @@ async function persistNotificationEvent(payload = {}) {
   const {
     eventType,
     recipientAccountId,
+    recipientAccountType = 'personal',
     actorAccountId = '',
+    actorAccountType = '',
     listingId = '',
     requestId = '',
     orderId = '',
@@ -2133,6 +2245,8 @@ async function persistNotificationEvent(payload = {}) {
 
   const mergedPayload = {
     ...(metadataPayload || {}),
+    recipientAccountType: normalizeAccountTypeValue(metadataPayload?.recipientAccountType || recipientAccountType || 'personal'),
+    actorAccountType: normalizeAccountTypeValue(metadataPayload?.actorAccountType || actorAccountType || ''),
     dedupeKey: dedupeKey || metadataPayload?.dedupeKey || '',
     openPath,
     actorName: isPlaceholderName(metadataPayload?.actorName) ? actorIdentity.name : metadataPayload?.actorName,
@@ -2278,6 +2392,8 @@ async function persistNotificationEvent(payload = {}) {
           listingId,
           requestId,
           orderId,
+          recipientAccountType: normalizeAccountTypeValue(mergedPayload.recipientAccountType || 'personal'),
+          actorAccountType: normalizeAccountTypeValue(mergedPayload.actorAccountType || ''),
           openPath,
         },
       });
@@ -2481,7 +2597,9 @@ async function handleNotifications(req, res, url) {
     const result = await persistNotificationEvent({
       eventType: String(body.eventType),
       recipientAccountId: String(body.recipientAccountId),
+      recipientAccountType: normalizeAccountTypeValue(body.recipientAccountType || body.payload?.recipientAccountType || 'personal'),
       actorAccountId: String(body.actorAccountId || getAuthUserId(req) || ''),
+      actorAccountType: normalizeAccountTypeValue(body.actorAccountType || body.payload?.actorAccountType || ''),
       listingId: body.listingId ? String(body.listingId) : '',
       requestId: body.requestId ? String(body.requestId) : '',
       orderId: body.orderId ? String(body.orderId) : '',
@@ -2508,7 +2626,7 @@ async function handleNotifications(req, res, url) {
     }
 
     try {
-      const radiusKm = 2;
+      const radiusKm = Math.max(1, Number(body.radiusKm || 5) || 5);
       const listingRows = await supabaseFetch(`/listings?id=eq.${encodeURIComponent(listingId)}&select=*&limit=1`);
       const listing = listingRows?.[0];
       if (!listing || !isPublicListingRow(listing)) {
@@ -2535,10 +2653,21 @@ async function handleNotifications(req, res, url) {
         candidateTokens: Number(tokenRows?.length || 0),
         withinRadius: 0,
         preferenceSkips: 0,
+        businessRecipientSkips: 0,
         invalidLocationSkips: 0,
         dedupeSkips: 0,
         sent: 0,
         failed: 0,
+      };
+
+      const profileRows = await supabaseFetch('/profiles?select=*');
+      const profileByAccountId = new Map((profileRows || []).map((profile) => [String(profile.id || '').trim(), profile]));
+
+      const isPersonalRecipient = (accountId) => {
+        const profile = profileByAccountId.get(String(accountId || '').trim()) || {};
+        const metadata = parseJsonValue(profile.metadata, {});
+        const accountType = profile.account_type || profile.mode || metadata.accountType || metadata.mode || '';
+        return isPersonalAccountType(accountType);
       };
 
       const isBlockedByPreference = (accountId) => {
@@ -2552,6 +2681,10 @@ async function handleNotifications(req, res, url) {
       (tokenRows || []).forEach((row) => {
         const accountId = String(row.account_id || '').trim();
         if (!accountId || accountId === ownerId) return;
+        if (!isPersonalRecipient(accountId)) {
+          diagnostics.businessRecipientSkips += 1;
+          return;
+        }
         if (isBlockedByPreference(accountId)) {
           diagnostics.preferenceSkips += 1;
           return;
@@ -2571,10 +2704,13 @@ async function handleNotifications(req, res, url) {
       });
 
       // Include nearby users even if they do not currently have push-token metadata.
-      const profileRows = await supabaseFetch('/profiles?select=*');
       (profileRows || []).forEach((profile) => {
         const accountId = String(profile.id || '').trim();
         if (!accountId || accountId === ownerId) return;
+        if (!isPersonalRecipient(accountId)) {
+          diagnostics.businessRecipientSkips += 1;
+          return;
+        }
         if (isBlockedByPreference(accountId)) {
           diagnostics.preferenceSkips += 1;
           return;
@@ -2621,6 +2757,8 @@ async function handleNotifications(req, res, url) {
             area: String(body.area || ''),
             city: String(body.city || ''),
             listingId,
+            recipientAccountType: 'personal',
+            actorAccountType: normalizeAccountTypeValue(body.actorAccountType || ''),
             sellerId: String(baseListing.sellerId || baseListing.businessId || ownerId),
             openPath: `/listing/${encodeURIComponent(listingId)}?action=${action}`,
             action,
@@ -2754,6 +2892,26 @@ export default async function handler(req, res) {
       uploads: true,
       timestamp: new Date().toISOString(),
     });
+  }
+
+  if (url === '/api/auth/send-otp' || url === '/auth/send-otp') {
+    return forwardAuthRequest(req, res, '/api/auth/send-otp');
+  }
+
+  if (url === '/api/auth/resend-otp' || url === '/auth/resend-otp') {
+    return forwardAuthRequest(req, res, '/api/auth/resend-otp');
+  }
+
+  if (url === '/api/auth/verify-otp' || url === '/auth/verify-otp') {
+    return forwardAuthRequest(req, res, '/api/auth/verify-otp');
+  }
+
+  if (url === '/api/profile/phone-change/initiate' || url === '/profile/phone-change/initiate') {
+    return forwardAuthRequest(req, res, '/api/profile/phone-change/initiate');
+  }
+
+  if (url === '/api/profile/phone-change/confirm' || url === '/profile/phone-change/confirm') {
+    return forwardAuthRequest(req, res, '/api/profile/phone-change/confirm');
   }
 
   if (url === '/api/listings' || url === '/listings') {

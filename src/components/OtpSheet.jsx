@@ -35,7 +35,7 @@ export default function OtpSheet() {
     setPhoneErr('');
     setSending(true);
     try {
-      const res = await sendOtp(phone);
+      const res = await sendOtp(phone, { accountType: 'personal' });
       setIsDemo(!!res.demo);
       setStep('otp');
       setTimeout(() => inputRefs.current[0]?.focus(), 100);
@@ -63,7 +63,7 @@ export default function OtpSheet() {
     setOtpErr('');
     setVerifying(true);
     try {
-      const res = await verifyOtp(phone, code);
+      const res = await verifyOtp(phone, code, { accountType: 'personal' });
       setStep('done');
       // Pass Supabase tokens to completeAuth if available
       setTimeout(() => completeAuth(phone, res), 1000);

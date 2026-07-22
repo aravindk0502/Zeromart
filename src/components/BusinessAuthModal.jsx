@@ -36,7 +36,7 @@ export default function BusinessAuthModal({ open = true, onClose, onSuccess, emb
     setSubmitting(true);
     setError('');
     try {
-      await sendOtp(form.mobile);
+      await sendOtp(form.mobile, { accountType: 'business' });
       setStep('otp');
     } catch (nextError) {
       setError(nextError?.message || 'Could not send OTP. Please try again.');
@@ -52,7 +52,7 @@ export default function BusinessAuthModal({ open = true, onClose, onSuccess, emb
     setSubmitting(true);
     setError('');
     try {
-      const authResult = await verifyOtpApi(form.mobile, otp);
+      const authResult = await verifyOtpApi(form.mobile, otp, { accountType: 'business' });
       if (!authResult?.token) {
         throw new Error('Login failed. Token missing in verification response.');
       }

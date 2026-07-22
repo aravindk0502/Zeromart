@@ -308,6 +308,20 @@ export async function initDB() {
     ALTER TABLE users ADD COLUMN IF NOT EXISTS buyer_access_expires_at TIMESTAMPTZ;
     ALTER TABLE users ADD COLUMN IF NOT EXISTS buyer_access_order_id TEXT;
     ALTER TABLE users ADD COLUMN IF NOT EXISTS buyer_access_payment_id TEXT;
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS account_type TEXT NOT NULL DEFAULT 'personal';
+
+    UPDATE users
+       SET account_type = CASE
+         WHEN LOWER(COALESCE(account_type, '')) IN ('business', 'store') THEN 'business'
+         ELSE 'personal'
+       END;
+
+    DO $$ BEGIN
+      ALTER TABLE users DROP CONSTRAINT IF EXISTS users_phone_key;
+    EXCEPTION WHEN undefined_table THEN NULL; END $$;
+
+    CREATE UNIQUE INDEX IF NOT EXISTS users_phone_account_type_uidx ON users (phone, account_type);
+    CREATE INDEX IF NOT EXISTS users_phone_idx ON users (phone);
 
     CREATE TABLE IF NOT EXISTS products (
       id              SERIAL PRIMARY KEY,
@@ -475,10 +489,15 @@ export async function initDB() {
       receiver_id TEXT,
       listing_id  TEXT,
       order_id    TEXT,
+      request_id  TEXT,
       points      INTEGER NOT NULL DEFAULT 1,
       note        TEXT,
       created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
     );
+
+    ALTER TABLE karma_events ADD COLUMN IF NOT EXISTS request_id TEXT;
+    CREATE UNIQUE INDEX IF NOT EXISTS karma_events_request_id_uidx ON karma_events (request_id) WHERE request_id IS NOT NULL;
+    CREATE INDEX IF NOT EXISTS karma_events_receiver_idx ON karma_events (receiver_id, created_at DESC);
 
     -- Add pickup_area column if missing (safe to run repeatedly)
     DO $$ BEGIN
@@ -1475,68 +1494,288 @@ async function hideListingViaSupabase(id, user = null) {
   return { success: true };
 }
 
-async function awardCommunityKarmaViaSupabase(sellerId) {
-  if (!canUseSupabaseTable()) return [];
+function isDuplicateKeyError(error) {
+  const code = String(error?.code || '').trim();
+  const message = String(error?.message || error || '').toLowerCase();
+  return code === '23505' || message.includes('duplicate key');
+}
+
+function normalizeRequestLifecycleStatus(input = '') {
+  return String(input || '').trim().toLowerCase();
+}
+
+function isKarmaAllowedForRequestStatus(input = '') {
+  const status = normalizeRequestLifecycleStatus(input);
+  return status === 'handed_over' || status === 'karma_pending' || status === 'completed';
+}
+
+function createStableKarmaEventId(requestId = '') {
+  const digest = crypto.createHash('sha256').update(String(requestId || '').trim()).digest('hex').slice(0, 24);
+  return `karma_${digest}`;
+}
+
+async function computeCanonicalKarmaViaSupabase(receiverId) {
   const rows = await supabase
+    .from('karma_events')
+    .select('points')
+    .eq('receiver_id', receiverId);
+  if (rows.error) throw rows.error;
+  return (rows.data || []).reduce((sum, row) => sum + (Number(row?.points || 0) || 0), 0);
+}
+
+async function computeCanonicalKarmaViaDb(receiverId) {
+  const result = await pool.query(
+    `SELECT COALESCE(SUM(points), 0)::int AS karma
+       FROM karma_events
+      WHERE receiver_id = $1`,
+    [String(receiverId)]
+  );
+  return Number(result.rows[0]?.karma || 0) || 0;
+}
+
+async function syncCanonicalKarmaReadModelsViaSupabase({ sellerId, canonicalKarma, listingId = '' }) {
+  if (!canUseSupabaseTable()) return [];
+  const normalizedKarma = Math.max(0, Number(canonicalKarma || 0));
+  const now = new Date().toISOString();
+
+  await supabase
+    .from('profiles')
+    .upsert({ id: String(sellerId), karma: normalizedKarma, updated_at: now }, { onConflict: 'id' });
+
+  const listingRows = await supabase
     .from('listings')
     .select('*')
-    .eq('seller_id', sellerId);
-  if (rows.error) throw rows.error;
+    .or(`seller_id.eq.${String(sellerId)},business_id.eq.${String(sellerId)}`);
+  if (listingRows.error) throw listingRows.error;
 
-  const nextRows = [];
-  for (const row of rows.data || []) {
+  const rowsById = new Map((listingRows.data || []).map((row) => [String(row.id), row]));
+  if (listingId && !rowsById.has(String(listingId))) {
+    const single = await supabase
+      .from('listings')
+      .select('*')
+      .eq('id', String(listingId))
+      .maybeSingle();
+    if (!single.error && single.data) rowsById.set(String(single.data.id), single.data);
+  }
+
+  const updatedRows = [];
+  for (const row of rowsById.values()) {
     const metadata = parseJsonValue(row.metadata, {});
     const sellerProfile = parseJsonValue(metadata.sellerProfile, {});
-    const nextKarma = Number(row.karma_score || 0) + 1;
     const nextMetadata = {
       ...metadata,
+      karma: normalizedKarma,
+      storeKarma: normalizedKarma,
+      sellerKarma: normalizedKarma,
       sellerProfile: {
         ...sellerProfile,
-        karma: nextKarma,
+        karma: normalizedKarma,
       },
     };
     const updated = await supabase
       .from('listings')
-      .update({ karma_score: nextKarma, metadata: nextMetadata, updated_at: new Date().toISOString() })
+      .update({ karma_score: normalizedKarma, metadata: nextMetadata, updated_at: now })
       .eq('id', row.id)
       .select('*')
       .single();
-    if (updated.error) throw updated.error;
-    nextRows.push(listingRowToClient(updated.data));
+    if (!updated.error && updated.data) {
+      updatedRows.push(listingRowToClient(updated.data));
+    }
   }
-  return nextRows;
+  return updatedRows;
 }
 
-async function awardCommunityKarmaViaDb(sellerId) {
+async function syncCanonicalKarmaReadModelsViaDb({ sellerId, canonicalKarma, listingId = '' }) {
   if (!dbEnabled || !pool) return [];
-  const rows = await pool.query('SELECT * FROM listings WHERE seller_id = $1', [sellerId]);
+  const normalizedKarma = Math.max(0, Number(canonicalKarma || 0));
   const updatedRows = [];
-  for (const row of rows.rows || []) {
+
+  await pool.query('UPDATE users SET karma = $1 WHERE id::text = $2', [normalizedKarma, String(sellerId)]);
+  await pool.query(
+    `INSERT INTO profiles (id, karma, updated_at)
+     VALUES ($1, $2, now())
+     ON CONFLICT (id) DO UPDATE SET karma = EXCLUDED.karma, updated_at = now()`,
+    [String(sellerId), normalizedKarma]
+  );
+
+  const listingRows = await pool.query(
+    `SELECT *
+       FROM listings
+      WHERE seller_id = $1
+         OR business_id = $1
+         OR ($2 <> '' AND id = $2)`,
+    [String(sellerId), String(listingId || '')]
+  );
+
+  for (const row of listingRows.rows || []) {
     const metadata = parseJsonValue(row.metadata, {});
     const sellerProfile = parseJsonValue(metadata.sellerProfile, {});
-    const nextKarma = Number(row.karma_score || 0) + 1;
     const nextMetadata = {
       ...metadata,
+      karma: normalizedKarma,
+      storeKarma: normalizedKarma,
+      sellerKarma: normalizedKarma,
       sellerProfile: {
         ...sellerProfile,
-        karma: nextKarma,
+        karma: normalizedKarma,
       },
     };
     const updated = await pool.query(
       `UPDATE listings
-       SET karma_score = $2,
-           metadata = $3,
-           updated_at = now()
-       WHERE id = $1
-       RETURNING *`,
-      [row.id, nextKarma, JSON.stringify(nextMetadata)]
+          SET karma_score = $2,
+              metadata = $3,
+              updated_at = now()
+        WHERE id = $1
+        RETURNING *`,
+      [row.id, normalizedKarma, JSON.stringify(nextMetadata)]
     );
     if (updated.rows[0]) updatedRows.push(listingRowToClient(updated.rows[0]));
   }
   return updatedRows;
 }
 
+async function awardCommunityKarmaViaSupabase({ sellerId, buyerId, requestId, listingId = '', note = '' }) {
+  if (!canUseSupabaseTable()) return { code: 'KARMA_NOT_AVAILABLE', sellerId, karma: 0, listings: [] };
+  const eventId = createStableKarmaEventId(requestId);
+  let inserted = false;
+  try {
+    const created = await supabase
+      .from('karma_events')
+      .insert({
+        id: eventId,
+        giver_id: String(buyerId || ''),
+        receiver_id: String(sellerId || ''),
+        listing_id: listingId || null,
+        order_id: String(requestId || ''),
+        request_id: String(requestId || ''),
+        points: 1,
+        note: String(note || '').trim() || null,
+        created_at: new Date().toISOString(),
+      })
+      .select('id')
+      .single();
+    if (created.error) throw created.error;
+    inserted = true;
+  } catch (error) {
+    if (!isDuplicateKeyError(error)) throw error;
+  }
+
+  const canonicalKarma = await computeCanonicalKarmaViaSupabase(String(sellerId || ''));
+  const listings = await syncCanonicalKarmaReadModelsViaSupabase({
+    sellerId: String(sellerId || ''),
+    canonicalKarma,
+    listingId: String(listingId || ''),
+  });
+  return {
+    code: inserted ? 'KARMA_SUBMITTED' : 'KARMA_ALREADY_SUBMITTED',
+    sellerId: String(sellerId || ''),
+    karma: canonicalKarma,
+    listings,
+  };
+}
+
+async function awardCommunityKarmaViaDb({ sellerId, buyerId, requestId, listingId = '', note = '' }) {
+  if (!dbEnabled || !pool) return { code: 'KARMA_NOT_AVAILABLE', sellerId, karma: 0, listings: [] };
+  const client = await pool.connect();
+  let resolvedSellerId = String(sellerId || '').trim();
+  let inserted = false;
+  let requestRow = null;
+  let canonicalKarma = 0;
+  try {
+    await client.query('BEGIN');
+    const requestResult = await client.query('SELECT * FROM requests WHERE id = $1 LIMIT 1', [String(requestId)]);
+    requestRow = requestResult.rows[0] || null;
+
+    if (requestRow) {
+      const requestStatus = normalizeRequestLifecycleStatus(requestRow.status);
+      if (!isKarmaAllowedForRequestStatus(requestStatus)) {
+        const error = new Error('Good Karma is only available after handover.');
+        error.status = 409;
+        throw error;
+      }
+      resolvedSellerId = String(requestRow.seller_id || resolvedSellerId).trim();
+      if (String(requestRow.buyer_id || '').trim() && String(requestRow.buyer_id || '').trim() !== String(buyerId || '').trim()) {
+        const error = new Error('Only the receiving buyer can submit Good Karma for this request.');
+        error.status = 403;
+        throw error;
+      }
+    }
+
+    if (!resolvedSellerId) {
+      const error = new Error('sellerId is required');
+      error.status = 400;
+      throw error;
+    }
+
+    const eventId = createStableKarmaEventId(requestId);
+    const insertedEvent = await client.query(
+      `INSERT INTO karma_events (id, giver_id, receiver_id, listing_id, order_id, request_id, points, note)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+       ON CONFLICT (request_id) DO NOTHING
+       RETURNING id`,
+      [
+        eventId,
+        String(buyerId || ''),
+        resolvedSellerId,
+        String(listingId || requestRow?.listing_id || '') || null,
+        String(requestId),
+        String(requestId),
+        1,
+        String(note || '').trim() || null,
+      ]
+    );
+    inserted = Boolean(insertedEvent.rows[0]);
+
+    const karmaResult = await client.query(
+      `SELECT COALESCE(SUM(points), 0)::int AS karma
+         FROM karma_events
+        WHERE receiver_id = $1`,
+      [resolvedSellerId]
+    );
+    canonicalKarma = Number(karmaResult.rows[0]?.karma || 0) || 0;
+
+    if (requestRow && normalizeRequestLifecycleStatus(requestRow.status) !== 'completed') {
+      const currentDetails = parseJsonValue(requestRow.details, {});
+      const nextDetails = {
+        ...currentDetails,
+        karmaGiven: true,
+        karmaSubmittedAt: new Date().toISOString(),
+      };
+      await client.query(
+        `UPDATE requests
+            SET status = 'completed',
+                details = $2,
+                updated_at = now()
+          WHERE id = $1`,
+        [String(requestId), JSON.stringify(nextDetails)]
+      );
+    }
+
+    await client.query('COMMIT');
+  } catch (error) {
+    try { await client.query('ROLLBACK'); } catch {}
+    throw error;
+  } finally {
+    client.release();
+  }
+
+  const listings = await syncCanonicalKarmaReadModelsViaDb({
+    sellerId: resolvedSellerId,
+    canonicalKarma,
+    listingId: String(listingId || requestRow?.listing_id || ''),
+  });
+
+  return {
+    code: inserted ? 'KARMA_SUBMITTED' : 'KARMA_ALREADY_SUBMITTED',
+    sellerId: resolvedSellerId,
+    karma: canonicalKarma,
+    listings,
+  };
+}
+
 const MSG91_TIMEOUT_MS = 15000;
+const MSG91_MAX_ATTEMPTS = 2;
+const MSG91_RETRY_DELAY_MS = 350;
 
 function normalizeIndianMobile(input = '') {
   const digits = String(input || '').replace(/\D/g, '');
@@ -1550,41 +1789,105 @@ function normalizePhoneDigits(input = '') {
   return mobile ? mobile.slice(-10) : '';
 }
 
+function normalizeAuthAccountType(input = '') {
+  const value = String(input || '').trim().toLowerCase();
+  return value === 'business' || value === 'store' ? 'business' : 'personal';
+}
+
 function getPhoneCandidates(phoneDigits = '') {
   if (!/^\d{10}$/.test(String(phoneDigits || ''))) return [];
   return [String(phoneDigits), `91${String(phoneDigits)}`];
 }
 
-async function findUserByNormalizedPhone(client, phoneDigits) {
+async function findUserByNormalizedPhone(client, phoneDigits, accountType = 'personal') {
   const normalized = normalizePhoneDigits(phoneDigits);
   if (!normalized) return null;
+  const normalizedAccountType = normalizeAuthAccountType(accountType);
   const result = await client.query(
     `SELECT *
        FROM users
-      WHERE phone = ANY($1::text[])
-         OR RIGHT(REGEXP_REPLACE(phone, '[^0-9]', '', 'g'), 10) = $2
+      WHERE (
+            phone = ANY($1::text[])
+            OR RIGHT(REGEXP_REPLACE(phone, '[^0-9]', '', 'g'), 10) = $2
+          )
+        AND COALESCE(account_type, 'personal') = $3
       ORDER BY id ASC
       LIMIT 1`,
-    [getPhoneCandidates(normalized), normalized]
+    [getPhoneCandidates(normalized), normalized, normalizedAccountType]
   );
   return result.rows[0] || null;
 }
 
-async function isPhoneInUseByAnotherUser(client, phoneDigits, excludeUserId) {
+async function isPhoneInUseByAnotherUser(client, phoneDigits, excludeUserId, accountType = 'personal') {
   const normalized = normalizePhoneDigits(phoneDigits);
   if (!normalized) return false;
+  const normalizedAccountType = normalizeAuthAccountType(accountType);
   const result = await client.query(
     `SELECT id
        FROM users
       WHERE id <> $3
+        AND COALESCE(account_type, 'personal') = $4
         AND (
           phone = ANY($1::text[])
           OR RIGHT(REGEXP_REPLACE(phone, '[^0-9]', '', 'g'), 10) = $2
         )
       LIMIT 1`,
-    [getPhoneCandidates(normalized), normalized, excludeUserId]
+    [getPhoneCandidates(normalized), normalized, excludeUserId, normalizedAccountType]
   );
   return Boolean(result.rows[0]);
+}
+
+function isMsg91TransientError(error) {
+  if (!error) return false;
+  const message = String(error?.message || error || '').toLowerCase();
+  const name = String(error?.name || '').toLowerCase();
+  return name === 'aborterror'
+    || name === 'timeouterror'
+    || /aborted|timed out|timeout|network|fetch failed|socket|econnreset|econnrefused|enotfound|eai_again/.test(message);
+}
+
+function isMsg91TransientResponse(response) {
+  const status = Number(response?.status || 0);
+  return [408, 425, 429, 500, 502, 503, 504].includes(status);
+}
+
+const waitMs = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+async function withMsg91Retry(operationName, execute, details = {}) {
+  let lastError = null;
+  let lastResult = null;
+  for (let attempt = 1; attempt <= MSG91_MAX_ATTEMPTS; attempt += 1) {
+    try {
+      const result = await execute();
+      lastResult = result;
+      if (attempt < MSG91_MAX_ATTEMPTS && isMsg91TransientResponse(result?.response)) {
+        console.warn('[MSG91] transient provider response, retrying', {
+          operation: operationName,
+          attempt,
+          status: Number(result?.response?.status || 0),
+          ...details,
+        });
+        await waitMs(MSG91_RETRY_DELAY_MS);
+        continue;
+      }
+      return result;
+    } catch (error) {
+      lastError = error;
+      if (attempt < MSG91_MAX_ATTEMPTS && isMsg91TransientError(error)) {
+        console.warn('[MSG91] transient provider error, retrying', {
+          operation: operationName,
+          attempt,
+          message: String(error?.message || error),
+          ...details,
+        });
+        await waitMs(MSG91_RETRY_DELAY_MS);
+        continue;
+      }
+      throw error;
+    }
+  }
+  if (lastResult) return lastResult;
+  throw lastError || new Error('MSG91 request failed');
 }
 
 async function parseProviderBody(response) {
@@ -1687,8 +1990,9 @@ async function resendMsg91Otp({ authKey, mobile, retryType = 'text' }) {
 
 // Send OTP via MSG91
 app.post(['/api/auth/send-otp', '/api/send-otp'], otpSendRateLimit, async (req, res) => {
-  const { phone } = req.body || {};
+  const { phone, accountType } = req.body || {};
   const mobile = normalizeIndianMobile(phone);
+  const normalizedAccountType = normalizeAuthAccountType(accountType);
   if (!mobile) {
     return res.status(400).json({ error: 'Valid Indian mobile number required' });
   }
@@ -1697,10 +2001,13 @@ app.post(['/api/auth/send-otp', '/api/send-otp'], otpSendRateLimit, async (req, 
   if (!config) return;
 
   try {
-    const { response, body, url } = await sendMsg91Otp({
+    const { response, body, url } = await withMsg91Retry('send-otp', () => sendMsg91Otp({
       authKey: config.authKey,
       templateId: config.templateId,
       mobile,
+    }), {
+      mobile,
+      accountType: normalizedAccountType,
     });
     if (response.ok && String(body?.type || '').toLowerCase() === 'success') {
       console.info('[MSG91] send otp success', {
@@ -1713,6 +2020,7 @@ app.post(['/api/auth/send-otp', '/api/send-otp'], otpSendRateLimit, async (req, 
       return res.json({
         success: true,
         mobile,
+        accountType: normalizedAccountType,
         providerType: body?.type || 'success',
         providerMessage: body?.message || '',
         requestId: body?.request_id || body?.requestId || null,
@@ -1740,8 +2048,9 @@ app.post(['/api/auth/send-otp', '/api/send-otp'], otpSendRateLimit, async (req, 
 
 // Resend OTP via MSG91
 app.post('/api/auth/resend-otp', otpSendRateLimit, async (req, res) => {
-  const { phone, retryType } = req.body || {};
+  const { phone, retryType, accountType } = req.body || {};
   const mobile = normalizeIndianMobile(phone);
+  const normalizedAccountType = normalizeAuthAccountType(accountType);
   if (!mobile) {
     return res.status(400).json({ error: 'Valid Indian mobile number required' });
   }
@@ -1750,10 +2059,13 @@ app.post('/api/auth/resend-otp', otpSendRateLimit, async (req, res) => {
   if (!config) return;
 
   try {
-    const { response, body, url } = await resendMsg91Otp({
+    const { response, body, url } = await withMsg91Retry('resend-otp', () => resendMsg91Otp({
       authKey: config.authKey,
       mobile,
       retryType,
+    }), {
+      mobile,
+      accountType: normalizedAccountType,
     });
     if (response.ok && String(body?.type || '').toLowerCase() === 'success') {
       console.info('[MSG91] resend otp success', {
@@ -1766,6 +2078,7 @@ app.post('/api/auth/resend-otp', otpSendRateLimit, async (req, res) => {
       return res.json({
         success: true,
         mobile,
+        accountType: normalizedAccountType,
         providerType: body?.type || 'success',
         providerMessage: body?.message || '',
         requestId: body?.request_id || body?.requestId || null,
@@ -1793,8 +2106,9 @@ app.post('/api/auth/resend-otp', otpSendRateLimit, async (req, res) => {
 
 // Verify OTP and create session
 app.post(['/api/auth/verify-otp', '/api/verify-otp'], otpVerifyRateLimit, async (req, res) => {
-  const { phone, otp } = req.body || {};
+  const { phone, otp, accountType } = req.body || {};
   const mobile = normalizeIndianMobile(phone);
+  const normalizedAccountType = normalizeAuthAccountType(accountType);
   if (!mobile || !/^\d{4}$/.test(String(otp || '').trim())) {
     return res.status(400).json({ error: 'Valid mobile number and 4-digit OTP are required' });
   }
@@ -1803,10 +2117,13 @@ app.post(['/api/auth/verify-otp', '/api/verify-otp'], otpVerifyRateLimit, async 
   if (!config) return;
 
   try {
-    const { response, body, url } = await verifyMsg91Otp({
+    const { response, body, url } = await withMsg91Retry('verify-otp', () => verifyMsg91Otp({
       authKey: config.authKey,
       mobile,
       otp,
+    }), {
+      mobile,
+      accountType: normalizedAccountType,
     });
 
     if (!(response.ok && String(body?.type || '').toLowerCase() === 'success')) {
@@ -1824,31 +2141,40 @@ app.post(['/api/auth/verify-otp', '/api/verify-otp'], otpVerifyRateLimit, async 
       const client = await pool.connect();
       try {
         await client.query('BEGIN');
-        const existing = await findUserByNormalizedPhone(client, phoneDigits);
+        const existing = await findUserByNormalizedPhone(client, phoneDigits, normalizedAccountType);
         if (existing) {
           let normalizedExisting = existing;
           if (existing.phone !== phoneDigits) {
             try {
               const normalized = await client.query(
                 `UPDATE users
-                    SET phone = $1
+                    SET phone = $1,
+                        account_type = $3
                   WHERE id = $2
                   RETURNING *`,
-                [phoneDigits, existing.id]
+                [phoneDigits, existing.id, normalizedAccountType]
               );
               normalizedExisting = normalized.rows[0] || existing;
             } catch (error) {
               if (error?.code !== '23505') throw error;
-              const canonical = await client.query('SELECT * FROM users WHERE phone = $1 ORDER BY id ASC LIMIT 1', [phoneDigits]);
+              const canonical = await client.query(
+                `SELECT *
+                   FROM users
+                  WHERE phone = $1
+                    AND COALESCE(account_type, 'personal') = $2
+                  ORDER BY id ASC
+                  LIMIT 1`,
+                [phoneDigits, normalizedAccountType]
+              );
               normalizedExisting = canonical.rows[0] || existing;
             }
           }
           user = normalizedExisting;
         } else {
           const inserted = await client.query(
-            `INSERT INTO users (phone) VALUES ($1)
+            `INSERT INTO users (phone, account_type) VALUES ($1, $2)
              RETURNING *`,
-            [phoneDigits]
+            [phoneDigits, normalizedAccountType]
           );
           user = inserted.rows[0] || null;
         }
@@ -1862,8 +2188,9 @@ app.post(['/api/auth/verify-otp', '/api/verify-otp'], otpVerifyRateLimit, async 
       user = await normalizeExpiredBuyerAccess(user?.id, user);
     } else {
       user = {
-        id: `demo_${phoneDigits}`,
+        id: `demo_${normalizedAccountType}_${phoneDigits}`,
         phone: phoneDigits,
+        account_type: normalizedAccountType,
         name: 'Unknown',
         initials: 'UN',
         mode: 'seller',
@@ -1875,7 +2202,7 @@ app.post(['/api/auth/verify-otp', '/api/verify-otp'], otpVerifyRateLimit, async 
       };
     }
 
-    const token = jwt.sign({ id: user.id, phone: phoneDigits }, JWT_SECRET, { expiresIn: '90d' });
+    const token = jwt.sign({ id: user.id, phone: phoneDigits, accountType: normalizeAuthAccountType(user?.account_type || normalizedAccountType) }, JWT_SECRET, { expiresIn: '90d' });
     console.info('[MSG91] verify otp success', {
       status: response.status,
       url,
@@ -1927,8 +2254,9 @@ app.post('/api/profile/phone-change/initiate', authMiddleware, otpSendRateLimit,
 
   const client = await pool.connect();
   try {
-    const currentRow = await client.query('SELECT phone FROM users WHERE id = $1 LIMIT 1', [currentUserId]);
+    const currentRow = await client.query('SELECT phone, account_type FROM users WHERE id = $1 LIMIT 1', [currentUserId]);
     const currentPhoneDigits = normalizePhoneDigits(currentRow.rows[0]?.phone || '');
+    const currentAccountType = normalizeAuthAccountType(currentRow.rows[0]?.account_type || req.user?.accountType || 'personal');
     if (currentPhoneDigits && currentPhoneDigits === normalizedPhoneDigits) {
       await logSecurityAuditEvent({
         req,
@@ -1940,7 +2268,7 @@ app.post('/api/profile/phone-change/initiate', authMiddleware, otpSendRateLimit,
       return res.status(400).json({ error: 'New phone number must be different from current number' });
     }
 
-    const alreadyUsed = await isPhoneInUseByAnotherUser(client, normalizedPhoneDigits, currentUserId);
+    const alreadyUsed = await isPhoneInUseByAnotherUser(client, normalizedPhoneDigits, currentUserId, currentAccountType);
     if (alreadyUsed) {
       await logSecurityAuditEvent({
         req,
@@ -2066,6 +2394,9 @@ app.post('/api/profile/phone-change/confirm', authMiddleware, otpVerifyRateLimit
 
   const client = await pool.connect();
   try {
+    const currentUser = await client.query('SELECT account_type FROM users WHERE id = $1 LIMIT 1', [currentUserId]);
+    const currentAccountType = normalizeAuthAccountType(currentUser.rows[0]?.account_type || req.user?.accountType || 'personal');
+
     const pending = await client.query(
       `SELECT *
          FROM phone_change_requests
@@ -2116,10 +2447,13 @@ app.post('/api/profile/phone-change/confirm', authMiddleware, otpVerifyRateLimit
     }
 
     const mobile = `91${normalizedPhoneDigits}`;
-    const { response, body, url } = await verifyMsg91Otp({
+    const { response, body, url } = await withMsg91Retry('phone-change-verify-otp', () => verifyMsg91Otp({
       authKey: config.authKey,
       mobile,
       otp: normalizedOtp,
+    }), {
+      mobile,
+      accountType: currentAccountType,
     });
 
     if (!(response.ok && String(body?.type || '').toLowerCase() === 'success')) {
@@ -2196,7 +2530,7 @@ app.post('/api/profile/phone-change/confirm', authMiddleware, otpVerifyRateLimit
       return res.status(410).json({ error: 'Phone change OTP has expired. Please request a new OTP.' });
     }
 
-    const alreadyUsed = await isPhoneInUseByAnotherUser(client, normalizedPhoneDigits, currentUserId);
+    const alreadyUsed = await isPhoneInUseByAnotherUser(client, normalizedPhoneDigits, currentUserId, currentAccountType);
     if (alreadyUsed) {
       await client.query('ROLLBACK');
       await logSecurityAuditEvent({
@@ -2255,7 +2589,7 @@ app.post('/api/profile/phone-change/confirm', authMiddleware, otpVerifyRateLimit
     });
 
     user = await normalizeExpiredBuyerAccess(user?.id, user);
-    const token = jwt.sign({ id: user.id, phone: normalizedPhoneDigits }, JWT_SECRET, { expiresIn: '90d' });
+    const token = jwt.sign({ id: user.id, phone: normalizedPhoneDigits, accountType: normalizeAuthAccountType(user?.account_type || req.user?.accountType || 'personal') }, JWT_SECRET, { expiresIn: '90d' });
     return res.json({
       success: true,
       token,
@@ -2292,7 +2626,7 @@ app.post('/api/profile/phone-change/confirm', authMiddleware, otpVerifyRateLimit
 
 // Get profile
 app.get('/api/profile', authMiddleware, async (req, res) => {
-  if (!dbEnabled) return res.json({ id: req.user.id, phone: req.user.phone });
+  if (!dbEnabled) return res.json({ id: req.user.id, phone: req.user.phone, account_type: normalizeAuthAccountType(req.user?.accountType || 'personal') });
   const result = await pool.query('SELECT * FROM users WHERE id = $1', [req.user.id]);
   if (!result.rows[0]) return res.status(404).json({ error: 'User not found' });
   const row = await normalizeExpiredBuyerAccess(req.user.id, result.rows[0]);
@@ -2547,15 +2881,25 @@ app.post('/api/listings/:id/reserve', authMiddleware, listingMutationRateLimit, 
 
 app.post('/api/karma/community', authMiddleware, async (req, res) => {
   const sellerId = String(req.body?.sellerId || '').trim();
-  if (!sellerId) return res.status(400).json({ error: 'sellerId is required' });
+  const requestId = String(req.body?.requestId || req.body?.orderId || '').trim();
+  const listingId = String(req.body?.listingId || req.body?.itemId || '').trim();
+  const buyerId = String(req.body?.buyerId || req.user?.id || '').trim();
+  const note = String(req.body?.note || '').trim();
+  if (!requestId) {
+    return res.status(400).json({ error: 'requestId is required' });
+  }
+  if (!sellerId) {
+    return res.status(400).json({ error: 'sellerId is required' });
+  }
   try {
-    const listings = dbEnabled
-      ? await awardCommunityKarmaViaDb(sellerId)
-      : await awardCommunityKarmaViaSupabase(sellerId);
-    return res.json({ success: true, sellerId, listings });
+    const result = dbEnabled
+      ? await awardCommunityKarmaViaDb({ sellerId, buyerId, requestId, listingId, note })
+      : await awardCommunityKarmaViaSupabase({ sellerId, buyerId, requestId, listingId, note });
+    return res.json({ success: true, ...result });
   } catch (error) {
+    const status = Number(error?.status || 500);
     console.error('[KARMA] community award failed', error.message || error);
-    return res.status(500).json({ error: 'Could not award community karma' });
+    return res.status(status >= 400 && status < 600 ? status : 500).json({ error: error?.message || 'Could not award community karma' });
   }
 });
 

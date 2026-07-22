@@ -22,7 +22,7 @@ export default function OtpModal({ onClose, onVerify }) {
     setSubmitting(true);
     setError('');
     try {
-      await sendOtp(normalizedMobile);
+      await sendOtp(normalizedMobile, { accountType: 'personal' });
       setMobile(normalizedMobile);
       setStep('otp');
       setResent(false);
@@ -43,7 +43,7 @@ export default function OtpModal({ onClose, onVerify }) {
     setSubmitting(true);
     setError('');
     try {
-      await resendOtp(normalizedMobile, 'text');
+      await resendOtp(normalizedMobile, 'text', { accountType: 'personal' });
       setResent(true);
     } catch (nextError) {
       setError(nextError?.message || 'Could not resend OTP. Please try again.');
@@ -61,7 +61,7 @@ export default function OtpModal({ onClose, onVerify }) {
     setSubmitting(true);
     setError('');
     try {
-      const data = await verifyOtp(mobile, otp);
+      const data = await verifyOtp(mobile, otp, { accountType: 'personal' });
       if (!data?.token) {
         throw new Error('Login did not return a session token.');
       }

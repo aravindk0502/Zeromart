@@ -243,6 +243,29 @@ export default function HomePage({
     ));
   }, [businessItems, items]);
 
+  const justGoneProducts = useMemo(() => {
+    const normalized = [...businessItems, ...items].map((entry) => normalizeProductStock(entry));
+    const isGone = (entry) => {
+      const status = String(entry?.status || '').toLowerCase();
+      const available = Number(entry?.availableQuantity ?? entry?.requestState?.requestableStock ?? 0);
+      return status.includes('sold')
+        || status.includes('completed')
+        || status.includes('gone')
+        || status.includes('collected')
+        || available <= 0;
+    };
+    const seen = new Set();
+    return normalized
+      .filter((entry) => {
+        const key = String(entry?.id || '');
+        if (!key || seen.has(key) || !isGone(entry)) return false;
+        seen.add(key);
+        return true;
+      })
+      .sort((a, b) => (new Date(b.updatedAt || b.createdAt || 0).getTime() || 0) - (new Date(a.updatedAt || a.createdAt || 0).getTime() || 0))
+      .slice(0, 12);
+  }, [businessItems, items]);
+
   return (
     <div className="space-y-4">
       <section className="overflow-visible rounded-[1.5rem] border border-emerald-100 bg-white/95 shadow-[0_16px_55px_rgba(15,23,42,0.08)]">
@@ -369,7 +392,7 @@ export default function HomePage({
                   <h3 className="mt-3 line-clamp-2 text-lg font-extrabold text-slate-900">{item.title}</h3>
                   <div className="mt-2 flex items-end gap-2">
                     <span className="text-[26px] font-black leading-none text-amber-600 sm:text-[28px]">{getPriceLabel(item)}</span>
-                    <span className="mb-1 rounded-full bg-gradient-to-r from-amber-50 to-violet-50 px-2.5 py-1 text-[10px] font-extrabold uppercase tracking-[0.08em] text-violet-700">Free to collect</span>
+                    <span className="mb-1 rounded-full bg-gradient-to-r from-amber-50 to-violet-50 px-2.5 py-1 text-[10px] font-extrabold uppercase tracking-[0.08em] text-violet-700">FREE</span>
                   </div>
                   <div className="mt-2 flex flex-wrap gap-1.5 text-[11px] font-bold">
                     <span className="rounded-full bg-emerald-50 px-2.5 py-1 text-emerald-800">{item.requestState?.stockLabel || (stock.availableQuantity === 1 ? 'Only 1 left' : `${stock.availableQuantity} left`)}</span>
@@ -413,6 +436,36 @@ export default function HomePage({
           })}
         </div>
       </section>
+
+      {justGoneProducts.length > 0 && (
+        <section className="rounded-[1.5rem] border border-slate-200 bg-white p-4 shadow-[0_14px_42px_rgba(15,23,42,0.06)] sm:p-5">
+          <div className="mb-4 flex items-center gap-3">
+            <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-to-br from-slate-500 to-slate-700 text-white shadow-md">
+              <Users size={18} />
+            </span>
+            <div>
+              <p className="text-xs font-extrabold uppercase tracking-[0.12em] text-slate-500">Recently completed</p>
+              <h2 className="mt-0.5 text-lg font-extrabold text-slate-900">Just Gone</h2>
+            </div>
+          </div>
+          <div className="flex snap-x gap-3 overflow-x-auto pb-1">
+            {justGoneProducts.map((item) => {
+              const sellerName = getSellerName(item);
+              return (
+                <article key={`gone-${item.id}`} className="min-w-[245px] max-w-[245px] snap-start overflow-hidden rounded-2xl border border-slate-200 bg-slate-50">
+                  <img src={item.image} alt={item.title} loading="lazy" decoding="async" className="h-28 w-full object-cover opacity-80" />
+                  <div className="space-y-1.5 p-3">
+                    <p className="line-clamp-1 text-sm font-extrabold text-slate-900">{item.title}</p>
+                    <p className="line-clamp-1 text-xs font-semibold text-slate-500">Given by {sellerName}</p>
+                    <p className="text-[11px] text-slate-500">{item.category || item.condition || 'Community item'} · {item.distance || 'nearby'}</p>
+                    <span className="inline-flex rounded-full bg-slate-200 px-2.5 py-1 text-[10px] font-extrabold uppercase tracking-wide text-slate-700">Completed</span>
+                  </div>
+                </article>
+              );
+            })}
+          </div>
+        </section>
+      )}
 
       {hasMoreItems && (
         <div ref={loadMoreRef} className="flex justify-center py-2">

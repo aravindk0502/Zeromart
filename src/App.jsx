@@ -415,6 +415,23 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
   } : null);
   const karmaPopupEnabled = activeBuyer?.karmaPopupEnabled !== false;
   const activeAccountId = activeBuyer?.userId || activeBuyer?.businessId || activeBuyer?.mobile || activeBuyer?.name || '';
+  const activeAccountType = activeBuyer?.isBusinessAccount ? 'business' : 'personal';
+  const doesNotificationMatchActiveAccount = (notification) => {
+    const recipientId = notification?.recipientId
+      || notification?.recipientAccountId
+      || notification?.payload?.recipientAccountId
+      || '';
+    if (recipientId && accountKey(recipientId) !== accountKey(activeAccountId)) {
+      return false;
+    }
+    const rawType = notification?.recipientAccountType
+      || notification?.payload?.recipientAccountType
+      || '';
+    if (!rawType) return true;
+    const normalized = String(rawType).trim().toLowerCase();
+    const requiredType = normalized === 'business' || normalized === 'store' ? 'business' : 'personal';
+    return requiredType === activeAccountType;
+  };
   const commitNotifications = (updater) => {
     setNotifications((current) => {
       const next = typeof updater === 'function' ? updater(current) : updater;
@@ -426,7 +443,11 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
 
   const safeEmitNotificationEvent = async (payload) => {
     try {
-      await emitNotificationEvent(payload);
+      const actorAccountType = activeBuyer?.isBusinessAccount ? 'business' : 'personal';
+      await emitNotificationEvent({
+        ...payload,
+        actorAccountType,
+      });
     } catch (error) {
       console.warn('[notifications] event emit failed (non-blocking)', error?.message || error);
     }
@@ -440,6 +461,7 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
     try {
       await triggerNearbyListingAlerts({
         actorAccountId: activeAccountId,
+        actorAccountType: activeBuyer?.isBusinessAccount ? 'business' : 'personal',
         listingId: String(listing.id),
         title: listing.title || '',
         category: listing.category || '',
@@ -447,7 +469,7 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
         city: listing.city || listing.locationData?.city || '',
         latitude,
         longitude,
-        radiusKm: 2,
+        radiusKm: 5,
       });
     } catch (error) {
       console.warn('[notifications] nearby listing alert failed (non-blocking)', error?.message || error);
@@ -1260,6 +1282,7 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
     const nextUser = {
       userId: nextAccountId,
       profileId: serverUser.id || mobile,
+      accountType: serverUser.account_type === 'business' ? 'business' : 'personal',
       name: serverUser.name && serverUser.name !== 'Unknown' ? serverUser.name : 'Drizn User',
       mobile,
       karma: Number(serverUser.karma ?? savedKarma ?? 0),
@@ -2551,6 +2574,10 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
   };
 
   const handleNotificationOpen = (notification) => {
+    if (!doesNotificationMatchActiveAccount(notification)) {
+      setNotice('This notification belongs to a different account. Switch account to open it.');
+      return;
+    }
     setNotifications((prev) => prev.map((entry) => (entry.id === notification.id ? { ...entry, read: true } : entry)));
     const openPathFromPayload = typeof notification?.payload?.openPath === 'string'
       ? notification.payload.openPath
@@ -2648,9 +2675,7 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
   }, [activeAccountId, currentCoordinates, items, requestClock, selectedItem]);
   const visibleNotifications = useMemo(() => {
     const requestsById = new Map(getRequests().map((request) => [request.requestId, request]));
-    return notifications.filter((notification) => (
-      !notification.recipientId || accountKey(notification.recipientId) === accountKey(activeAccountId)
-    )).map((notification) => {
+    return notifications.filter((notification) => doesNotificationMatchActiveAccount(notification)).map((notification) => {
       if (notification.type !== 'request' || !notification.requestId) return notification;
       const request = requestsById.get(notification.requestId);
       if (!request || request.status === notification.requestStatus) return notification;
@@ -2682,7 +2707,7 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
       }
       return { ...notification, requestStatus: request.status };
     });
-  }, [activeAccountId, notifications]);
+  }, [activeAccountId, activeAccountType, notifications]);
 
   useEffect(() => {
     if (karmaPopupEnabled) return;
