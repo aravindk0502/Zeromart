@@ -1128,7 +1128,7 @@ async function sendPushToAccount({ recipientAccountId, eventType, title, body, d
 
 const buildOpenPath = ({ eventType, listingId, requestId, orderId }) => {
   const type = String(eventType || '');
-  if (type === 'new_request' || type === 'request_accepted' || type === 'request_declined') {
+  if (type === 'new_request' || type === 'request_accepted' || type === 'request_declined' || type === 'karma_required' || type === 'karma_received') {
     return requestId ? `/request/${encodeURIComponent(requestId)}` : '/';
   }
   if (type === 'store_reservation_received' || type === 'reservation_confirmed') {

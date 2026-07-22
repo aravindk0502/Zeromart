@@ -216,6 +216,45 @@ export default function NotificationsPage({
                   ) : null}
                 </div>
               )}
+              {selectedNotification.type === 'karma_required' && (
+                <div className="mt-4 space-y-3 rounded-2xl border border-white/80 bg-white/85 p-4 text-sm text-slate-700">
+                  <div className="flex items-center gap-3">
+                    {selectedNotification.sellerAvatar ? (
+                      <img src={selectedNotification.sellerAvatar} alt={selectedNotification.sellerName || 'Seller'} className="h-12 w-12 rounded-full object-cover" />
+                    ) : (
+                      <div className="flex h-12 w-12 items-center justify-center rounded-full bg-white text-violet-600 shadow-sm"><UserRound size={18} /></div>
+                    )}
+                    <div>
+                      <p className="text-xs font-bold uppercase tracking-wide text-slate-400">Send Good Karma</p>
+                      <p className="font-bold text-slate-900">{selectedNotification.sellerName || 'Seller'}</p>
+                      <p className="text-slate-500">{selectedNotification.productName || 'Collected item'}</p>
+                    </div>
+                  </div>
+                  {selectedNotification.collectionDate || selectedNotification.collectionTime ? <p className="flex items-center gap-2"><CalendarClock size={15} className="text-violet-600" />{selectedNotification.collectionDate || 'Collection date shared'}{selectedNotification.collectionTime ? ` · ${selectedNotification.collectionTime}` : ''}</p> : null}
+                  {selectedNotification.pickupAddress ? <p className="flex items-start gap-2"><MapPin size={15} className="mt-0.5 shrink-0 text-emerald-700" />{selectedNotification.pickupAddress}</p> : null}
+                  <p className="rounded-xl bg-amber-100 px-3 py-3 text-center font-bold text-amber-900">Rating pending · send 1 Good Karma to finish this exchange</p>
+                </div>
+              )}
+              {selectedNotification.type === 'karma_received' && (
+                <div className="mt-4 space-y-3 rounded-2xl border border-white/80 bg-white/85 p-4 text-sm text-slate-700">
+                  <div className="flex items-center gap-3">
+                    {selectedNotification.buyerAvatar ? (
+                      <img src={selectedNotification.buyerAvatar} alt={selectedNotification.buyerName || 'Buyer'} className="h-12 w-12 rounded-full object-cover" />
+                    ) : (
+                      <div className="flex h-12 w-12 items-center justify-center rounded-full bg-white text-violet-600 shadow-sm"><UserRound size={18} /></div>
+                    )}
+                    <div>
+                      <p className="text-xs font-bold uppercase tracking-wide text-slate-400">Good Karma received</p>
+                      <p className="font-bold text-slate-900">{selectedNotification.buyerName || 'Buyer'}</p>
+                      <p className="text-slate-500">for {selectedNotification.productName || 'your item'}</p>
+                    </div>
+                  </div>
+                  <div className="grid gap-2 rounded-xl bg-slate-50 p-3 sm:grid-cols-2">
+                    <p>Rating: <strong>{selectedNotification.karma || 1} Good Karma</strong></p>
+                    <p>Date: <strong>{selectedNotification.time}</strong></p>
+                  </div>
+                </div>
+              )}
               {businessNotificationTypes.includes(selectedNotification.type) && (
                 <div className="mt-4 space-y-3 rounded-2xl border border-white/80 bg-white/85 p-4 text-sm text-slate-700">
                   <div className="flex flex-wrap items-start justify-between gap-2">

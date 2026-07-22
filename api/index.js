@@ -1793,7 +1793,7 @@ function getLocationFromProfileRow(profile = {}) {
 
 function notificationOpenPath({ eventType = '', listingId = '', requestId = '', orderId = '' }) {
   const type = String(eventType || '').toLowerCase();
-  if (type === 'new_request' || type === 'request_accepted' || type === 'request_declined') {
+  if (type === 'new_request' || type === 'request_accepted' || type === 'request_declined' || type === 'karma_required' || type === 'karma_received') {
     return requestId ? `/request/${encodeURIComponent(requestId)}` : '/';
   }
   if (type === 'store_reservation_received' || type === 'reservation_confirmed') {

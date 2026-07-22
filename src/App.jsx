@@ -316,6 +316,44 @@ const leaderboardProfileKey = (profile = {}) => {
 
 const normalizeProfileText = (value) => String(value || '').trim().toLowerCase();
 const GENERIC_PROFILE_NAMES = new Set(['unknown', 'drizn user', 'you', 'seller', 'business store', 'drizn giver']);
+const NOTIFICATION_DETAIL_TYPES = new Set(['request', 'requestAccepted', 'requestDeclined', 'businessOrderUpdate', 'businessOrderReceived', 'karma_required', 'karma_received']);
+
+const isGenericProfileName = (value = '') => {
+  const normalized = normalizeProfileText(value);
+  return !normalized || GENERIC_PROFILE_NAMES.has(normalized);
+};
+
+const getProfileMetadata = (profile = {}) => (profile?.metadata && typeof profile.metadata === 'object' ? profile.metadata : {});
+
+const getResolvedProfileName = (profile = {}, fallback = '') => {
+  const metadata = getProfileMetadata(profile);
+  const candidates = [
+    profile.name,
+    profile.display_name,
+    profile.full_name,
+    profile.business_name,
+    metadata.displayName,
+    metadata.fullName,
+    metadata.businessName,
+    metadata.name,
+    fallback,
+  ];
+  const match = candidates.find((value) => !isGenericProfileName(value));
+  return String(match || fallback || 'Drizn User').trim() || 'Drizn User';
+};
+
+const getResolvedProfileImage = (profile = {}, fallback = '') => {
+  const metadata = getProfileMetadata(profile);
+  return String(
+    profile.profile_image
+    || profile.profile_image_url
+    || profile.avatar_url
+    || metadata.profileImage
+    || metadata.avatarUrl
+    || fallback
+    || ''
+  ).trim();
+};
 
 const collectProfileIdentifiers = (profile = {}) => {
   return new Set([
@@ -585,6 +623,8 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
       const requestId = entry.request_id || payload.requestId || '';
       const orderId = entry.order_id || payload.orderId || '';
       const dedupeKey = entry.dedupe_key || payload.dedupeKey || '';
+      const buyerAvatar = payload.buyerAvatar || payload.actorAvatar || '';
+      const sellerAvatar = payload.sellerAvatar || payload.recipientAvatar || '';
       const mapped = {
         id: canonicalNotificationId({ id: entry.id, dedupeKey, type, requestId, orderId }),
         type,
@@ -597,16 +637,22 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
         buyerId: payload.buyerId || entry.actor_account_id || payload.actorAccountId || '',
         sellerId: payload.sellerId || '',
         buyerName: payload.buyerName || payload.actorName || '',
+        buyerAvatar,
         buyerPhone: payload.buyerPhone || '',
         buyerLocation: payload.buyerLocation || '',
         sellerName: payload.sellerName || payload.recipientName || '',
+        sellerAvatar,
         sellerPhone: payload.sellerPhone || '',
+        businessName: payload.businessName || payload.sellerName || payload.recipientName || '',
         productName: payload.productName || '',
         quantity: Number(payload.quantity || 1),
+        collectionCode: payload.collectionCode || '',
         collectionDate: payload.collectionDate || '',
         collectionTime: payload.collectionTime || '',
         pickupAddress: payload.pickupAddress || '',
         optionalMessage: payload.optionalMessage || '',
+        orderStatus: payload.orderStatus || '',
+        karma: Number(payload.karma || payload.rating || payload.points || 1),
         mapsLink: payload.pickupAddress ? `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(payload.pickupAddress)}` : '',
         payload,
         createdAt: entry.created_at || '',
@@ -822,9 +868,9 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
           phone: user?.mobile || user?.phone || '',
         });
         if (cancelled || !profile || typeof profile !== 'object') return;
-        const metadata = profile.metadata && typeof profile.metadata === 'object' ? profile.metadata : {};
-        const nextName = profile.name || profile.display_name || profile.full_name || metadata.displayName || metadata.fullName || metadata.name || '';
-        const nextImage = profile.profile_image || profile.profile_image_url || profile.avatar_url || metadata.profileImage || metadata.avatarUrl || '';
+        const metadata = getProfileMetadata(profile);
+        const nextName = getResolvedProfileName(profile, user?.name || '');
+        const nextImage = getResolvedProfileImage(profile, user?.profileImage || '');
         const nextMobile = profile.normalized_phone || profile.phone || metadata.normalizedPhone || metadata.mobile || user?.mobile || '';
         const nextAccountType = profile.account_type || metadata.accountType || metadata.mode || user?.accountType || 'personal';
         const remoteKarmaPopupEnabled = typeof profile.karma_popup_enabled === 'boolean'
@@ -864,7 +910,73 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
     return () => {
       cancelled = true;
     };
-  }, [user?.mobile]);
+  }, [user?.mobile, user?.accountType]);
+
+  useEffect(() => {
+    if (!businessSession?.mobile || !isLoggedIn()) return;
+    let cancelled = false;
+
+    const resolveBusinessProfile = async () => {
+      try {
+        const profile = await fetchProfile({ accountType: 'business', phone: businessSession.mobile || '' });
+        if (cancelled || !profile || typeof profile !== 'object') return;
+        const metadata = getProfileMetadata(profile);
+        const nextName = getResolvedProfileName(profile, businessSession.businessName || businessSession.ownerName || 'Business Store');
+        const nextImage = getResolvedProfileImage(profile, businessSession.profileImage || businessSession.avatarUrl || '');
+        setBusinessSession((current) => {
+          if (!current) return current;
+          const merged = {
+            ...current,
+            id: String(profile.id || current.id || current.userId || current.mobile || ''),
+            userId: String(profile.id || current.userId || current.id || current.mobile || ''),
+            profileId: String(profile.id || current.profileId || current.userId || current.id || current.mobile || ''),
+            ownerName: profile.full_name || metadata.fullName || metadata.ownerName || current.ownerName || '',
+            businessName: nextName || current.businessName || current.ownerName || 'Business Store',
+            businessType: profile.business_type || metadata.businessType || current.businessType || '',
+            storeLocation: profile.store_location || metadata.storeLocation || current.storeLocation || '',
+            address: profile.address || metadata.address || current.address || '',
+            registration: profile.registration || metadata.registration || current.registration || '',
+            email: profile.email || metadata.email || current.email || '',
+            city: profile.city || metadata.city || current.city || '',
+            description: profile.description || metadata.description || current.description || '',
+            openingHours: profile.opening_hours || metadata.openingHours || current.openingHours || '',
+            coverImage: profile.cover_image_url || metadata.coverImage || current.coverImage || '',
+            notificationPreferences: profile.notification_preferences || metadata.notificationPreferences || current.notificationPreferences || {},
+            karmaPopupEnabled: typeof profile.karma_popup_enabled === 'boolean'
+              ? profile.karma_popup_enabled
+              : (metadata.karmaPopupEnabled ?? current.karmaPopupEnabled ?? true),
+            locationData: profile.profile_location || metadata.locationData || current.locationData || null,
+            karma: Number(profile.karma ?? profile.karma_points ?? current.karma ?? 0) || 0,
+            profileImage: nextImage || current.profileImage || '',
+            avatarUrl: nextImage || current.avatarUrl || '',
+          };
+          saveBusinessSession(merged);
+          saveBusinessAccounts([
+            merged,
+            ...getBusinessAccounts().filter((entry) => entry.id !== merged.id && entry.mobile !== merged.mobile),
+          ]);
+          localStorage.setItem('zeromart-user', JSON.stringify({
+            ...merged,
+            isBusinessAccount: true,
+            businessId: merged.id,
+            userId: merged.userId,
+            profileId: merged.profileId,
+            name: merged.businessName || merged.ownerName || 'Business Store',
+            profileImage: merged.profileImage || merged.avatarUrl || '',
+          }));
+          return merged;
+        });
+      } catch (error) {
+        if (cancelled) return;
+        console.warn('[business-profile] non-blocking profile sync failed', error?.message || error);
+      }
+    };
+
+    resolveBusinessProfile();
+    return () => {
+      cancelled = true;
+    };
+  }, [businessSession?.mobile]);
 
   // Merge server-side listings into the local live cache so every user sees the same marketplace.
   useEffect(() => {
@@ -1163,7 +1275,7 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
     const match = path.match(/^\/request\/([^/]+)/);
     if (!match) return;
     const requestId = decodeURIComponent(match[1]);
-    const requestNotification = notifications.find((entry) => entry.requestId === requestId && entry.type === 'request');
+    const requestNotification = notifications.find((entry) => String(entry.requestId) === String(requestId));
     const request = getRequests().find((entry) => entry.requestId === requestId);
     if (!request && !requestNotification) {
       setNotice('This collection request could not be found or is no longer available.');
@@ -1179,10 +1291,39 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
       setNotice('This request link belongs to the seller. Log in with the seller account to continue.');
       return;
     }
+    localStorage.removeItem('zeromart-pending-request-route');
+    setActiveView('notifications');
     if (requestNotification) {
-      localStorage.removeItem('zeromart-pending-request-route');
-      setActiveView('notifications');
       setSelectedNotification(requestNotification);
+      setNotice('');
+      return;
+    }
+    if (request) {
+      setSelectedNotification({
+        id: `request-${requestId}`,
+        type: request.status === 'completed' ? 'karma_received' : (request.status === 'karma_pending' || request.status === 'handed_over' ? 'karma_required' : 'request'),
+        requestId,
+        itemId: request.productId || '',
+        title: request.status === 'completed' ? 'You received Good Karma' : 'Collection request details',
+        body: request.status === 'completed'
+          ? `${request.buyerName || 'A buyer'} sent Good Karma for ${request.productName || 'your item'}.`
+          : `${request.buyerName || 'A buyer'} requested ${request.productName || 'this item'}.`,
+        buyerId: request.buyerId || '',
+        sellerId: request.sellerId || '',
+        buyerName: request.buyerName || '',
+        buyerPhone: request.buyerPhone || '',
+        buyerLocation: request.buyerLocation || '',
+        sellerName: request.sellerName || '',
+        sellerPhone: request.sellerPhone || '',
+        productName: request.productName || '',
+        quantity: Number(request.quantity || 1),
+        collectionDate: request.collectionDate || '',
+        collectionTime: request.collectionTime || '',
+        pickupAddress: request.pickupAddress || '',
+        requestStatus: request.status || 'pending',
+        read: true,
+        time: request.createdAt ? new Date(request.createdAt).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' }) : 'Just now',
+      });
       setNotice('');
     }
   }, [path, activeAccountId, activeBuyer, notifications]);
@@ -1318,16 +1459,32 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
     setShowOtpModal(true);
   };
 
-  const handleLogin = (authResult) => {
+  const handleLogin = async (authResult) => {
     const mobile = typeof authResult === 'string' ? authResult : String(authResult?.mobile || authResult?.user?.phone || '');
     const serverUser = typeof authResult === 'object' ? authResult?.user || {} : {};
     const savedKarma = getKarmaLedger()[accountKey(mobile)];
     const nextAccountId = serverUser.id || mobile;
+    const accountType = serverUser.account_type === 'business' ? 'business' : 'personal';
+    let persistedProfile = null;
+    try {
+      persistedProfile = await fetchProfile({ accountType, phone: mobile });
+    } catch {
+      persistedProfile = null;
+    }
+    const profileMetadata = getProfileMetadata(persistedProfile || {});
+    const resolvedName = getResolvedProfileName(
+      persistedProfile || {},
+      serverUser.name && serverUser.name !== 'Unknown' ? serverUser.name : ''
+    );
+    const resolvedImage = getResolvedProfileImage(
+      persistedProfile || {},
+      serverUser.profile_image || serverUser.profile_image_url || serverUser.avatar_url || serverUser.profileImage || ''
+    );
     const nextUser = {
       userId: nextAccountId,
       profileId: serverUser.id || mobile,
-      accountType: serverUser.account_type === 'business' ? 'business' : 'personal',
-      name: serverUser.name && serverUser.name !== 'Unknown' ? serverUser.name : 'Drizn User',
+      accountType,
+      name: resolvedName || 'Drizn User',
       mobile,
       karma: Number(serverUser.karma ?? savedKarma ?? 0),
       listed: 0,
@@ -1335,15 +1492,15 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
       activeListings: 0,
       givenAway: 0,
       isBuyer: Boolean(serverUser.is_buyer),
-      profileImage: serverUser.profile_image || serverUser.profile_image_url || serverUser.avatar_url || serverUser.profileImage || '',
-      bio: serverUser.bio || '',
-      locationLink: serverUser.location_link || serverUser.locationLink || '',
-      websiteLink: serverUser.website_link || serverUser.websiteLink || '',
-      instagramLink: serverUser.instagram_link || serverUser.instagramLink || '',
+      profileImage: resolvedImage,
+      bio: persistedProfile?.bio || profileMetadata.bio || serverUser.bio || '',
+      locationLink: persistedProfile?.location_link || profileMetadata.locationLink || serverUser.location_link || serverUser.locationLink || '',
+      websiteLink: persistedProfile?.website_link || profileMetadata.websiteLink || serverUser.website_link || serverUser.websiteLink || '',
+      instagramLink: persistedProfile?.instagram_link || profileMetadata.instagramLink || serverUser.instagram_link || serverUser.instagramLink || '',
       location: locationEngine.location,
-      buyerAccessExpiresAt: serverUser.buyer_access_expires_at || '',
-      buyerAccessActivatedAt: serverUser.buyer_access_activated_at || '',
-      karmaPopupEnabled: serverUser.karma_popup_enabled !== false,
+      buyerAccessExpiresAt: persistedProfile?.buyer_access_expires_at || serverUser.buyer_access_expires_at || '',
+      buyerAccessActivatedAt: persistedProfile?.buyer_access_activated_at || serverUser.buyer_access_activated_at || '',
+      karmaPopupEnabled: persistedProfile?.karma_popup_enabled !== false && serverUser.karma_popup_enabled !== false,
     };
     setUser(nextUser);
     localStorage.setItem('zeromart-user', JSON.stringify(nextUser));
@@ -1635,10 +1792,12 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
       payload: {
         buyerId: activeAccountId,
         buyerName: historyEntry.buyerName,
+        buyerAvatar: activeBuyer?.profileImage || '',
         buyerPhone: historyEntry.buyerPhone,
         buyerLocation: requestRecord.buyerLocation,
         sellerId: requestNotification.recipientId,
         sellerName: historyEntry.sellerName,
+        sellerAvatar: requestedItem?.sellerProfile?.avatarUrl || requestedItem?.sellerProfileImage || requestedItem?.avatarUrl || '',
         sellerPhone: requestRecord.sellerPhone,
         productName: historyEntry.title,
         quantity,
@@ -1809,6 +1968,11 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
       payload: {
         collectionCode,
         quantity: reservedQuantity,
+        businessName: requestedItem.sellerName || requestedItem.storeName || '',
+        sellerName: requestedItem.sellerName || requestedItem.storeName || '',
+        sellerPhone: requestedItem.ownerMobile || requestedItem.sellerPhone || '',
+        pickupAddress: requestedItem.locationData?.fullAddress || requestedItem.location || '',
+        collectionTime: collectionWindow,
       },
     });
     safeEmitNotificationEvent({
@@ -1822,9 +1986,15 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
       dedupeKey: `store_reservation_received:${orderId}`,
       payload: {
         buyerName: activeBuyer.name,
+        buyerAvatar: activeBuyer.profileImage || '',
         buyerPhone: activeBuyer.mobile,
         quantity: reservedQuantity,
         collectionCode,
+        businessName: requestedItem.sellerName || requestedItem.storeName || '',
+        sellerName: requestedItem.sellerName || requestedItem.storeName || '',
+        sellerPhone: requestedItem.ownerMobile || requestedItem.sellerPhone || '',
+        pickupAddress: requestedItem.locationData?.fullAddress || requestedItem.location || '',
+        collectionTime: collectionWindow,
       },
     });
   };
@@ -2001,8 +2171,10 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
         payload: {
           buyerId: notification.buyerId,
           buyerName: notification.buyerName,
+          buyerAvatar: notification.buyerAvatar || '',
           sellerId: notification.recipientId,
           sellerName: notification.sellerName,
+          sellerAvatar: notification.sellerAvatar || '',
           productName: notification.productName || 'the item',
           sellerPhone: confirmation.sellerPhone || notification.sellerPhone || '',
           pickupAddress: confirmation.pickupAddress || '',
@@ -2667,16 +2839,19 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
       }
     }
 
-    if (['request', 'requestAccepted', 'requestDeclined', 'businessOrderUpdate', 'businessOrderReceived', 'karma_required', 'karma_received', 'nearby_listing'].includes(notification.type) && targetItem) {
-      if (targetItem) {
-        setSelectedItem(targetItem);
-        if ((actionFromPath === 'request' && !targetItem.isBusinessProduct) || (actionFromPath === 'reserve' && targetItem.isBusinessProduct)) {
-          const requestState = getProductRequestState(targetItem, activeAccountId, requestClock);
-          if (requestState.canRequest) setQuantityItem(targetItem);
-        }
-        setSelectedNotification(notification);
-        return;
+    if (NOTIFICATION_DETAIL_TYPES.has(notification.type)) {
+      if (targetItem && ((actionFromPath === 'request' && !targetItem.isBusinessProduct) || (actionFromPath === 'reserve' && targetItem.isBusinessProduct))) {
+        const requestState = getProductRequestState(targetItem, activeAccountId, requestClock);
+        if (requestState.canRequest) setQuantityItem(targetItem);
       }
+      setActiveView('notifications');
+      setSelectedNotification(notification);
+      return;
+    }
+    if (notification.type === 'nearby_listing' && targetItem) {
+      setSelectedItem(targetItem);
+      setSelectedNotification(null);
+      return;
     }
     if (notification.type === 'product' && notification.itemId) {
       const targetItem = items.find((item) => item.id === notification.itemId);
