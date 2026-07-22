@@ -277,8 +277,8 @@ export default function HomePage({
           {loadingFeed && nearbyProducts.length === 0 ? (
             [...Array(6)].map((_, index) => (
               <article key={`skeleton-${index}`} className="overflow-hidden rounded-[1.5rem] border border-slate-200 bg-white shadow-[0_14px_45px_rgba(15,23,42,0.06)]">
-                <div className="h-40 w-full animate-pulse bg-slate-200" />
-                <div className="space-y-3 p-4">
+                <div className="h-40 w-full animate-pulse bg-slate-200 xl:h-32" />
+                <div className="space-y-3 p-4 xl:space-y-2 xl:p-3">
                   <div className="h-5 w-3/4 animate-pulse rounded bg-slate-200" />
                   <div className="h-3 w-1/2 animate-pulse rounded bg-slate-200" />
                   <div className="h-3 w-full animate-pulse rounded bg-slate-200" />
@@ -314,7 +314,7 @@ export default function HomePage({
                 className={`group flex h-full min-w-0 cursor-pointer flex-col overflow-hidden rounded-[1.5rem] border bg-white ring-1 shadow-[0_14px_45px_rgba(15,23,42,0.08)] transition-all duration-200 hover:-translate-y-1 hover:shadow-[0_22px_60px_rgba(15,23,42,0.12)] focus:outline-none focus:ring-4 ${isBusiness ? 'border-emerald-200 ring-emerald-100/90 focus:ring-emerald-100' : 'border-amber-200/90 ring-amber-100/90 focus:ring-violet-100'}`}
               >
                 <div className="relative">
-                  <img src={getOptimizedProductImageUrl(item.image)} alt={item.title} loading={index < 2 ? 'eager' : 'lazy'} fetchPriority={index < 2 ? 'high' : 'auto'} decoding="async" className="h-40 w-full object-cover transition duration-500 group-hover:scale-[1.03]" />
+                  <img src={getOptimizedProductImageUrl(item.image)} alt={item.title} loading={index < 2 ? 'eager' : 'lazy'} fetchPriority={index < 2 ? 'high' : 'auto'} decoding="async" className="h-40 w-full object-cover transition duration-500 group-hover:scale-[1.03] xl:h-32" />
                   {isBusiness && (
                     <div className="absolute inset-x-0 top-0 flex items-start justify-between gap-2 p-3">
                       <span className="inline-flex items-center gap-1 rounded-full border border-white/60 bg-white/90 px-2.5 py-1 text-[10px] font-extrabold text-emerald-700 shadow-sm backdrop-blur">
@@ -347,18 +347,18 @@ export default function HomePage({
                   </div>
                 </div>
 
-                <div className="flex flex-1 flex-col p-4">
-                  {availability.timingLabel && <p className="mb-2 truncate text-[11px] font-semibold text-slate-500">{availability.timingLabel}</p>}
-                  {availability.statusLabel && <p className="mb-2 text-[11px] font-bold text-rose-600">{availability.statusLabel}</p>}
-                  <div className="flex flex-wrap items-start gap-3">
-                    <div className="flex min-w-0 flex-1 items-center gap-3">
+                <div className="flex flex-1 flex-col p-4 xl:p-3">
+                  {availability.timingLabel && <p className="mb-2 truncate text-[11px] font-semibold text-slate-500 xl:mb-1">{availability.timingLabel}</p>}
+                  {availability.statusLabel && <p className="mb-2 text-[11px] font-bold text-rose-600 xl:mb-1">{availability.statusLabel}</p>}
+                  <div className="flex flex-wrap items-start gap-3 xl:gap-2">
+                    <div className="flex min-w-0 flex-1 items-center gap-3 xl:gap-2">
                       <button
                         type="button"
                         onClick={(event) => {
                           event.stopPropagation();
                           onOpenSellerProfile?.(item);
                         }}
-                        className={`flex h-11 w-11 shrink-0 items-center justify-center overflow-hidden rounded-xl text-sm font-extrabold text-white shadow-lg ${isBusiness ? 'bg-gradient-to-br from-emerald-600 to-emerald-800 shadow-emerald-700/20' : 'bg-gradient-to-br from-amber-500 to-violet-600 shadow-violet-500/20'}`}
+                        className={`flex h-11 w-11 shrink-0 items-center justify-center overflow-hidden rounded-xl text-sm font-extrabold text-white shadow-lg xl:h-9 xl:w-9 ${isBusiness ? 'bg-gradient-to-br from-emerald-600 to-emerald-800 shadow-emerald-700/20' : 'bg-gradient-to-br from-amber-500 to-violet-600 shadow-violet-500/20'}`}
                         aria-label={`Open ${sellerName} profile`}
                       >
                         <img
@@ -381,7 +381,7 @@ export default function HomePage({
                         >
                           {sellerName}
                         </button>
-                        <p className="mt-0.5 text-[11px] font-semibold uppercase tracking-[0.1em] text-slate-400">
+                        <p className="mt-0.5 text-[11px] font-semibold uppercase tracking-[0.1em] text-slate-400 xl:text-[10px] xl:leading-4">
                           {isBusiness ? 'Local business partner' : 'Community listing'}
                         </p>
                       </div>
@@ -395,23 +395,23 @@ export default function HomePage({
                     </div>
                   </div>
 
-                  <h3 className="mt-3 line-clamp-2 text-lg font-extrabold text-slate-900">{item.title}</h3>
-                  <div className="mt-2 flex items-end gap-2">
+                  <h3 className="mt-3 line-clamp-2 text-lg font-extrabold text-slate-900 xl:mt-2 xl:leading-6">{item.title}</h3>
+                  <div className="mt-2 flex items-end gap-2 xl:mt-1">
                     <span className="text-[26px] font-black leading-none text-amber-600 sm:text-[28px]">{getPriceLabel(item)}</span>
                     <span className="mb-1 rounded-full bg-gradient-to-r from-amber-50 to-violet-50 px-2.5 py-1 text-[10px] font-extrabold uppercase tracking-[0.08em] text-violet-700">FREE</span>
                   </div>
-                  <div className="mt-2 flex flex-wrap gap-1.5 text-[11px] font-bold">
+                  <div className="mt-2 flex flex-wrap gap-1.5 text-[11px] font-bold xl:mt-1.5">
                     <span className="rounded-full bg-emerald-50 px-2.5 py-1 text-emerald-800">{item.requestState?.stockLabel || (stock.availableQuantity === 1 ? 'Only 1 left' : `${stock.availableQuantity} left`)}</span>
                     {expiryBadge.statusLabel && !expiryBadge.nearExpiry && <span className={`rounded-full px-2.5 py-1 ${expiryBadge.statusClassName}`}>{expiryBadge.statusLabel}</span>}
                   </div>
-                  <div className="mt-3">
+                  <div className="mt-3 xl:mt-2">
                     <p className="min-w-0 text-sm text-slate-500">{item.condition || item.category || 'Available'} · {item.distance || 'nearby'}</p>
                     {expiryBadge?.formattedExpiry && (
-                      <p className="mt-1 text-xs font-semibold text-slate-500">Expires: {expiryBadge.formattedExpiry}</p>
+                      <p className="mt-1 text-xs font-semibold text-slate-500 xl:mt-0.5">Expires: {expiryBadge.formattedExpiry}</p>
                     )}
                   </div>
-                  <div className="mt-auto flex flex-wrap items-center gap-2 border-t border-slate-100 pt-3">
-                    <span className={`inline-flex max-w-full items-center gap-1.5 rounded-full px-3 py-2 text-xs font-bold ${isBusiness ? 'bg-emerald-50 text-emerald-800' : 'bg-gradient-to-r from-amber-50 to-violet-50 text-amber-700'}`}>
+                  <div className="mt-auto flex flex-wrap items-center gap-2 border-t border-slate-100 pt-3 xl:pt-2">
+                    <span className={`inline-flex max-w-full items-center gap-1.5 rounded-full px-3 py-2 text-xs font-bold xl:py-1.5 ${isBusiness ? 'bg-emerald-50 text-emerald-800' : 'bg-gradient-to-r from-amber-50 to-violet-50 text-amber-700'}`}>
                       <Star size={13} fill="currentColor" />
                       <span className="truncate">{item.sellerKarma || 0} {isBusiness ? 'Store Karma' : 'karma'}</span>
                     </span>
@@ -421,7 +421,7 @@ export default function HomePage({
                         event.stopPropagation();
                         isOwnListing ? onEditItem?.(item) : onBuyItem?.(stock);
                       }}
-                      className={`w-full shrink-0 rounded-full px-4 py-2 text-sm font-bold transition ${
+                      className={`w-full shrink-0 rounded-full px-4 py-2 text-sm font-bold transition xl:py-1.5 ${
                         unavailable
                           ? 'cursor-not-allowed border border-slate-300 bg-slate-200 text-slate-800 shadow-none'
                           : isBusiness
