@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Award, Bell, Bot, Building2, Flame, Gem, Heart, Home, LocateFixed, MapPin, Medal, Plus, Search, ShieldCheck, SlidersHorizontal, Sparkles, Trophy, User } from 'lucide-react';
+import { Award, Bell, Bot, Building2, ClipboardList, Flame, Gem, Heart, Home, LocateFixed, MapPin, Medal, Plus, Search, ShieldCheck, SlidersHorizontal, Sparkles, Trophy, User } from 'lucide-react';
 import HomePage, { ProductRail } from './pages/HomePage';
 import SectionPage from './pages/SectionPage';
 import NotificationsPage from './pages/NotificationsPage';
@@ -92,8 +92,8 @@ const platformSearchKeywords = 'drizn drizn ai good things nearby karma good kar
 const isProductionRuntime = import.meta.env.PROD;
 const FCM_TOKEN_STORAGE_KEY = 'drizn-fcm-token';
 const ACTIVE_REQUEST_STATUSES = ['pending', 'accepted', 'awaiting_collection', 'handed_over', 'karma_pending'];
-const REMOTE_SYNC_INTERVAL_MS = 3000;
-const REMOTE_LISTING_SYNC_INTERVAL_MS = 2500;
+const REMOTE_SYNC_INTERVAL_MS = 20000;
+const REMOTE_LISTING_SYNC_INTERVAL_MS = 20000;
 
 const isRequestActiveForLock = (request, now = Date.now()) => {
   const status = String(request?.status || '').toLowerCase();
@@ -112,6 +112,13 @@ const getHeaderLocationLabel = (location, fallback = 'Choose location') => {
   const area = location.area || location.subLocality || location.locality || location.street;
   const city = location.city || location.district;
   return [...new Set([area, city].filter(Boolean))].join(', ') || formatShortAddress(location) || fallback;
+};
+
+const getCleanLocationLabel = (location, fallback = 'Select location') => {
+  const label = getHeaderLocationLabel(location, fallback);
+  const normalized = String(label || '').trim();
+  if (!normalized || /undefined|null/i.test(normalized)) return fallback;
+  return normalized;
 };
 
 const mergeListingsById = (...catalogs) => {
@@ -229,6 +236,10 @@ const normalizeNotificationType = (value) => {
   if (type === 'new_request') return 'request';
   if (type === 'request_accepted') return 'requestAccepted';
   if (type === 'request_declined') return 'requestDeclined';
+  if (type === 'store_reservation_received') return 'businessOrderReceived';
+  if (type === 'reservation_confirmed') return 'businessOrderUpdate';
+  if (type === 'order_status_update') return 'businessOrderUpdate';
+  if (type === 'nearby_listing') return 'nearby_listing';
   return type || 'platform';
 };
 
@@ -347,7 +358,7 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
   const [locationLabel, setLocationLabel] = useState(() => (
     locationEngine.status === 'locating'
       ? 'Detecting location…'
-      : getHeaderLocationLabel(locationEngine.location, locationEngine.label || 'Choose location')
+      : getCleanLocationLabel(locationEngine.location, locationEngine.label || 'Select location')
   ));
   const [searchInput, setSearchInput] = useState('');
   const [searchQuery, setSearchQuery] = useState('');
@@ -388,6 +399,7 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
   const [karmaTarget, setKarmaTarget] = useState(null);
   const [karmaReceivedToast, setKarmaReceivedToast] = useState(null);
   const [karmaReceivedQueue, setKarmaReceivedQueue] = useState([]);
+  const [listingsHydrated, setListingsHydrated] = useState(() => loadMarketplaceItems().length > 0);
   const [selectedNotification, setSelectedNotification] = useState(null);
   const [notifications, setNotifications] = useState(loadNotifications);
   const [leaderboardRoster, setLeaderboardRoster] = useState(loadLeaderboardRoster);
@@ -414,7 +426,9 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
     karmaPopupEnabled: businessSession.karmaPopupEnabled !== false,
   } : null);
   const karmaPopupEnabled = activeBuyer?.karmaPopupEnabled !== false;
-  const activeAccountId = activeBuyer?.userId || activeBuyer?.businessId || activeBuyer?.mobile || activeBuyer?.name || '';
+  const activeAccountId = businessSession
+    ? (businessSession.id || businessSession.userId || businessSession.mobile || businessSession.businessName || '')
+    : (activeBuyer?.userId || activeBuyer?.businessId || activeBuyer?.mobile || activeBuyer?.name || '');
   const activeAccountType = activeBuyer?.isBusinessAccount ? 'business' : 'personal';
   const doesNotificationMatchActiveAccount = (notification) => {
     const recipientId = notification?.recipientId
@@ -630,6 +644,7 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
     let cancelled = false;
 
     const syncRemoteOrders = async () => {
+      if (typeof document !== 'undefined' && document.visibilityState !== 'visible') return;
       try {
         const rows = await fetchOrders();
         if (cancelled || !Array.isArray(rows)) return;
@@ -834,30 +849,35 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
       .then((listings) => {
         if (!mounted || !Array.isArray(listings)) return;
         setItems(normalizeListingsForMarketplace(listings));
+        setListingsHydrated(true);
         setNotice((current) => (current === 'Live listings are temporarily unavailable' ? '' : current));
       })
       .catch(() => {
         if (!mounted) return;
         const cached = loadMarketplaceItems();
         setItems(cached);
+        setListingsHydrated(cached.length > 0);
         setNotice(cached.length ? '' : 'Live listings are temporarily unavailable');
       });
 
-    refreshListings({ force: true });
+    refreshListings({ force: false });
+    window.setTimeout(() => {
+      if (mounted) refreshListings({ force: true });
+    }, 800);
     const unsubscribe = subscribeToListingChanges(() => refreshListings({ force: true }));
     const refreshWhenVisible = () => {
-      if (document.visibilityState === 'visible') refreshListings({ force: true });
+      if (document.visibilityState === 'visible') refreshListings({ force: false });
     };
     const refreshOnLocalWrite = () => {
       invalidateListingCache();
       refreshListings({ force: true });
     };
-    const refreshOnFocus = () => refreshListings({ force: true });
+    const refreshOnFocus = () => refreshListings({ force: false });
     window.addEventListener('focus', refreshOnFocus);
     document.addEventListener('visibilitychange', refreshWhenVisible);
     window.addEventListener('drizn_listings_updated', refreshOnLocalWrite);
     const periodicRefresh = window.setInterval(() => {
-      if (document.visibilityState === 'visible') refreshListings({ force: true });
+      if (document.visibilityState === 'visible') refreshListings({ force: false });
     }, REMOTE_LISTING_SYNC_INTERVAL_MS);
 
     return () => {
@@ -1097,7 +1117,7 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
     setLocationLabel(
       locationEngine.status === 'locating' && !locationEngine.location
         ? 'Detecting location…'
-        : getHeaderLocationLabel(locationEngine.location, locationEngine.label || 'Choose location')
+        : getCleanLocationLabel(locationEngine.location, locationEngine.label || 'Select location')
     );
     setCurrentCoordinates(locationEngine.location);
   }, [locationEngine.label, locationEngine.location, locationEngine.status]);
@@ -3159,10 +3179,10 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
                 </button>
               </div>
               {(businessSession ? [
-                { key: 'profile', label: 'Profile', icon: User, action: () => navigate('/business/profile') },
-                { key: 'business-dashboard', label: 'Dashboard', icon: Building2, action: () => navigate('/business/dashboard') },
-                { key: 'favorites', label: 'Favorites', icon: Heart, action: () => handleNav('favorites') },
+                { key: 'home', label: 'Home', icon: Home, action: () => handleNav('home') },
+                { key: 'business-list-item', label: 'List Item', icon: Plus, action: () => navigate('/business/inventory') },
                 { key: 'notifications', label: 'Alerts', icon: Bell, action: () => handleNav('notifications') },
+                { key: 'business-dashboard', label: 'Dashboard', icon: Building2, action: () => navigate('/business/dashboard') },
               ] : [
                 { key: 'profile', label: 'Profile', icon: User, action: () => (user ? handleNav('profile') : requireLogin('profile')) },
                 { key: 'sell', label: 'List item', icon: Plus, action: handleOpenListing },
@@ -3587,6 +3607,7 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
                 hasMoreItems={hasMoreDiscoveryItems}
                 loadMoreLabel={DISCOVERY_STAGES[discoveryStageIndex + 1]?.label || ''}
                 onLoadMore={() => setDiscoveryStageIndex((index) => Math.min(DISCOVERY_STAGES.length - 1, index + 1))}
+                loadingFeed={!listingsHydrated}
               />
             )}
             {activeView === 'section' && (
@@ -3693,12 +3714,11 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
       </div>
 
       <nav className={`${showListingSheet ? 'hidden' : 'fixed'} inset-x-0 bottom-0 z-40 border-t border-amber-100 bg-white/90 px-3 pb-[calc(0.75rem+env(safe-area-inset-bottom))] pt-4 backdrop-blur lg:hidden`}>
-        <div className="relative mx-auto grid h-[72px] max-w-[390px] grid-cols-[1fr_1fr_72px_1fr_1fr] items-center rounded-full bg-gradient-to-r from-amber-50 to-violet-50 px-2 py-1 shadow-[0_12px_38px_rgba(15,23,42,0.1)]">
+        <div className={`relative mx-auto grid h-[72px] max-w-[390px] items-center rounded-full bg-gradient-to-r from-amber-50 to-violet-50 px-2 py-1 shadow-[0_12px_38px_rgba(15,23,42,0.1)] ${businessSession ? 'grid-cols-4' : 'grid-cols-[1fr_1fr_72px_1fr_1fr]'}`}>
           {(businessSession ? [
-            navItems[0],
-            navItems[1],
-            null,
-            navItems[2],
+            { key: 'home', label: 'Home', icon: Home },
+            { key: 'business-list-item', label: 'List Item', icon: Plus },
+            { key: 'notifications', label: 'Alerts', icon: Bell },
             { key: 'business-dashboard', label: 'Dashboard', icon: Building2 },
           ] : bottomNavItems).map((item) => {
             if (!item) return <div key="create-spacer" className="h-full min-w-0" aria-hidden="true" />;
@@ -3707,6 +3727,10 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
             const handleBottomNav = () => {
               if (item.key === 'business-dashboard') {
                 navigate('/business/dashboard');
+                return;
+              }
+              if (item.key === 'business-list-item') {
+                navigate('/business/inventory');
                 return;
               }
               if (businessSession && item.key === 'profile') {
@@ -3734,10 +3758,12 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
               </button>
             );
           })}
-          <button onClick={handleOpenListing} className="absolute left-1/2 top-0 z-50 flex h-16 w-16 -translate-x-1/2 -translate-y-1/2 flex-col items-center justify-center rounded-full bg-gradient-to-br from-amber-500 to-violet-600 text-white shadow-lg shadow-violet-600/25 ring-4 ring-white" aria-label="List item">
-            <Plus size={23} strokeWidth={2.2} />
-            <span className="mt-0.5 text-[9px] font-extrabold leading-none">List Item</span>
-          </button>
+          {!businessSession && (
+            <button onClick={handleOpenListing} className="absolute left-1/2 top-0 z-50 flex h-16 w-16 -translate-x-1/2 -translate-y-1/2 flex-col items-center justify-center rounded-full bg-gradient-to-br from-amber-500 to-violet-600 text-white shadow-lg shadow-violet-600/25 ring-4 ring-white" aria-label="List item">
+              <Plus size={23} strokeWidth={2.2} />
+              <span className="mt-0.5 text-[9px] font-extrabold leading-none">List Item</span>
+            </button>
+          )}
         </div>
       </nav>
 

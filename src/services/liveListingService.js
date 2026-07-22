@@ -14,7 +14,7 @@ import {
 } from './transactionService';
 
 const isProductionRuntime = import.meta.env.PROD;
-const LISTING_CACHE_TTL_MS = isProductionRuntime ? 0 : 12_000;
+const LISTING_CACHE_TTL_MS = isProductionRuntime ? 15_000 : 12_000;
 
 let cachedListings = null;
 let cachedAtMs = 0;

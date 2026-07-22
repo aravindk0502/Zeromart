@@ -20,6 +20,7 @@ import {
   applyExpiryRules, clearBusinessSession, daysUntilExpiry, getBusinessAccounts,
   getBusinessOrders, getBusinessProducts, getBusinessPurchases, getBusinessRules, getBusinessSession,
   saveBusinessAccounts, saveBusinessOrders, saveBusinessProducts, saveBusinessRules, saveBusinessSession,
+  DEFAULT_BUSINESS_RULES,
   toMarketplaceItem, updateBusinessPurchaseStatus, updateCustomerOrderStatus,
 } from '../lib/businessStore';
 import {
@@ -51,14 +52,21 @@ const PAGE_HELP = {
   profile: 'Update your store identity and geotag here. Your order history also appears on this page.',
 };
 
+const readInitialBusinessRules = () => {
+  try {
+    const saved = JSON.parse(localStorage.getItem('zeromart-business-rules') || 'null');
+    return Array.isArray(saved) ? saved : DEFAULT_BUSINESS_RULES;
+  } catch {
+    return DEFAULT_BUSINESS_RULES;
+  }
+};
+
 export default function BusinessPortal({ path, navigate }) {
   const [account, setAccount] = useState(getBusinessSession);
   const [products, setProducts] = useState(() => {
-    const updated = applyExpiryRules(getBusinessProducts(), getBusinessRules());
-    saveBusinessProducts(updated);
-    return updated;
+    return applyExpiryRules(getBusinessProducts(), readInitialBusinessRules());
   });
-  const [rules, setRules] = useState(getBusinessRules);
+  const [rules, setRules] = useState(() => readInitialBusinessRules());
   const [orders, setOrders] = useState(getBusinessOrders);
   const [mobileNav, setMobileNav] = useState(false);
   const [inventoryMode, setInventoryMode] = useState('manual');
@@ -111,12 +119,11 @@ export default function BusinessPortal({ path, navigate }) {
   }, [account?.id]);
 
   useEffect(() => {
-    if (!account) return undefined;
-    if (account.karmaPopupEnabled === false) {
-      setKarmaReceivedToast(null);
-      setKarmaReceivedQueue([]);
-      return undefined;
-    }
+    saveBusinessProducts(products);
+  }, []);
+
+  useEffect(() => {
+    if (!account || account.karmaPopupEnabled === false) return undefined;
 
     const matchesRecipient = (notification) => {
       const recipient = String(notification?.recipientId || notification?.payload?.recipientId || '').trim();
@@ -181,6 +188,13 @@ export default function BusinessPortal({ path, navigate }) {
       window.removeEventListener('zeromart-transactions-change', maybeShowKarmaToast);
     };
   }, [account, karmaReceivedToast?.id]);
+
+  useEffect(() => {
+    if (account?.karmaPopupEnabled === false) {
+      setKarmaReceivedToast(null);
+      setKarmaReceivedQueue([]);
+    }
+  }, [account?.karmaPopupEnabled]);
 
   useEffect(() => {
     if (karmaReceivedToast || !karmaReceivedQueue.length) return;
