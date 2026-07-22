@@ -3724,6 +3724,7 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
             if (!item) return <div key="create-spacer" className="h-full min-w-0" aria-hidden="true" />;
             const Icon = item.icon;
             const isActive = activeView === item.key;
+            const isPrimaryBusinessAction = businessSession && item.key === 'business-list-item';
             const handleBottomNav = () => {
               if (item.key === 'business-dashboard') {
                 navigate('/business/dashboard');
@@ -3740,9 +3741,20 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
               handleNav(item.key);
             };
             return (
-              <button key={item.key} onClick={handleBottomNav} className={`relative mx-auto flex h-[58px] w-full max-w-[74px] min-w-0 flex-col items-center justify-center rounded-full px-1 text-[10px] font-semibold leading-none sm:text-[11px] ${isActive ? 'bg-gradient-to-r from-amber-500 to-violet-600 text-white shadow' : 'text-slate-600'}`}>
+              <button
+                key={item.key}
+                onClick={handleBottomNav}
+                className={`relative mx-auto flex min-w-0 flex-col items-center justify-center rounded-full px-1 text-[10px] font-semibold leading-none sm:text-[11px] ${
+                  isPrimaryBusinessAction
+                    ? 'h-[74px] w-[74px] -translate-y-5 justify-start bg-gradient-to-br from-amber-400 via-orange-500 to-violet-600 text-white shadow-[0_18px_38px_rgba(124,58,237,0.35)] ring-4 ring-white/95'
+                    : `h-[58px] w-full max-w-[74px] ${isActive ? 'bg-gradient-to-r from-amber-500 to-violet-600 text-white shadow' : 'text-slate-600'}`
+                }`}
+              >
+                {isPrimaryBusinessAction && (
+                  <span className="absolute inset-[6px] rounded-full border border-white/25 bg-white/10" aria-hidden="true" />
+                )}
                 <span className="relative">
-                  <Icon size={19} strokeWidth={2.2} />
+                  <Icon size={isPrimaryBusinessAction ? 28 : 19} strokeWidth={2.2} />
                   {item.key === 'notifications' && unreadNotificationCount > 0 && (
                     <span className="absolute -right-3 -top-3 inline-flex min-w-5 items-center justify-center rounded-full bg-rose-500 px-1 py-1 text-[9px] font-extrabold leading-none text-white shadow ring-2 ring-white">
                       {unreadNotificationCount > 99 ? '99+' : unreadNotificationCount}
@@ -3754,7 +3766,7 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
                     </span>
                   )}
                 </span>
-                <span className="mt-1.5 max-w-full truncate">{item.label}</span>
+                <span className={`mt-1.5 max-w-full truncate ${isPrimaryBusinessAction ? 'text-[11px] font-extrabold tracking-[0.12em]' : ''}`}>{item.label}</span>
               </button>
             );
           })}
