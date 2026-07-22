@@ -804,11 +804,16 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
 
     const resolveProfileValue = async () => {
       try {
-        const profile = await fetchProfile();
+        const profile = await fetchProfile({
+          accountType: user?.accountType || user?.account_type || 'personal',
+          phone: user?.mobile || user?.phone || '',
+        });
         if (cancelled || !profile || typeof profile !== 'object') return;
         const metadata = profile.metadata && typeof profile.metadata === 'object' ? profile.metadata : {};
-        const nextName = profile.name || profile.display_name || profile.full_name || metadata.displayName || metadata.fullName || '';
-        const nextImage = profile.profile_image || profile.avatar_url || metadata.profileImage || metadata.avatarUrl || '';
+        const nextName = profile.name || profile.display_name || profile.full_name || metadata.displayName || metadata.fullName || metadata.name || '';
+        const nextImage = profile.profile_image || profile.profile_image_url || profile.avatar_url || metadata.profileImage || metadata.avatarUrl || '';
+        const nextMobile = profile.normalized_phone || profile.phone || metadata.normalizedPhone || metadata.mobile || user?.mobile || '';
+        const nextAccountType = profile.account_type || metadata.accountType || metadata.mode || user?.accountType || 'personal';
         const remoteKarmaPopupEnabled = typeof profile.karma_popup_enabled === 'boolean'
           ? profile.karma_popup_enabled
           : (typeof metadata.karmaPopupEnabled === 'boolean' ? metadata.karmaPopupEnabled : undefined);
@@ -818,10 +823,17 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
             ...current,
             name: nextName || current.name,
             profileImage: nextImage || current.profileImage,
+            bio: profile.bio || metadata.bio || current.bio || '',
+            locationLink: profile.location_link || metadata.locationLink || current.locationLink || '',
+            websiteLink: profile.website_link || metadata.websiteLink || current.websiteLink || '',
+            instagramLink: profile.instagram_link || metadata.instagramLink || current.instagramLink || '',
+            accountType: nextAccountType,
+            mobile: nextMobile || current.mobile,
             isBuyer: typeof profile.is_buyer === 'boolean' ? profile.is_buyer : current.isBuyer,
             buyerAccessExpiresAt: profile.buyer_access_expires_at || current.buyerAccessExpiresAt || '',
             buyerAccessActivatedAt: profile.buyer_access_activated_at || current.buyerAccessActivatedAt || '',
             userId: current.userId || profile.id || current.mobile,
+            profileId: current.profileId || profile.id || current.userId || current.mobile,
             karmaPopupEnabled: typeof remoteKarmaPopupEnabled === 'boolean'
               ? remoteKarmaPopupEnabled
               : (current.karmaPopupEnabled !== false),
@@ -1311,7 +1323,11 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
       activeListings: 0,
       givenAway: 0,
       isBuyer: Boolean(serverUser.is_buyer),
-      profileImage: '',
+      profileImage: serverUser.profile_image || serverUser.profile_image_url || serverUser.avatar_url || serverUser.profileImage || '',
+      bio: serverUser.bio || '',
+      locationLink: serverUser.location_link || serverUser.locationLink || '',
+      websiteLink: serverUser.website_link || serverUser.websiteLink || '',
+      instagramLink: serverUser.instagram_link || serverUser.instagramLink || '',
       location: locationEngine.location,
       buyerAccessExpiresAt: serverUser.buyer_access_expires_at || '',
       buyerAccessActivatedAt: serverUser.buyer_access_activated_at || '',
@@ -2068,21 +2084,24 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
       }
       return nextFavorites;
     });
-    setUser(nextUser);
     try {
       const remoteProfile = await updateProfile({
         ...nextUser,
         profileImage: nextUser.profileImage || '',
         profile_image: nextUser.profileImage || '',
+      }, {
+        accountType: nextUser.accountType || 'personal',
+        phone: nextUser.mobile || '',
       });
       const metadata = remoteProfile?.metadata && typeof remoteProfile.metadata === 'object' ? remoteProfile.metadata : {};
       const remoteImage = remoteProfile?.profile_image
+        || remoteProfile?.profile_image_url
         || remoteProfile?.avatar_url
         || metadata.profileImage
         || metadata.avatarUrl
         || nextUser.profileImage
         || '';
-      const remoteName = remoteProfile?.name || remoteProfile?.display_name || metadata.displayName || nextUser.name;
+      const remoteName = remoteProfile?.name || remoteProfile?.display_name || metadata.displayName || metadata.fullName || nextUser.name;
       setUser((current) => {
         if (!current) return current;
         const merged = {
@@ -2090,6 +2109,11 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
           ...nextUser,
           name: remoteName || current.name,
           profileImage: remoteImage,
+          bio: remoteProfile?.bio || metadata.bio || current.bio || '',
+          locationLink: remoteProfile?.location_link || metadata.locationLink || current.locationLink || '',
+          websiteLink: remoteProfile?.website_link || metadata.websiteLink || current.websiteLink || '',
+          instagramLink: remoteProfile?.instagram_link || metadata.instagramLink || current.instagramLink || '',
+          accountType: remoteProfile?.account_type || metadata.accountType || current.accountType || 'personal',
         };
         localStorage.setItem('zeromart-user', JSON.stringify(merged));
         return merged;
@@ -2099,12 +2123,11 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
       if (Array.isArray(listings)) {
         setItems(normalizeListingsForMarketplace(listings));
       }
+      setNotice('Profile updated successfully');
+      setTimeout(() => { setNotice(''); }, 4000);
     } catch {
-      // Non-blocking local save fallback.
+      setNotice('Profile update failed. Please try again.');
     }
-    setNotice('Profile updated successfully');
-    // clear transient profile update notice after a short time
-    setTimeout(() => { setNotice(''); }, 4000);
   };
 
   const handleListingSubmit = async (formData) => {

@@ -22,6 +22,17 @@ const normalizeAuthAccountType = (value = '') => {
   return type === 'business' || type === 'store' ? 'business' : 'personal';
 };
 
+const normalizeProfilePhone = (value = '') => String(value || '').replace(/\D/g, '').slice(-10);
+
+const buildProfileContextHeaders = (options = {}) => {
+  const headers = {};
+  const accountType = normalizeAuthAccountType(options.accountType || options.account_type || '');
+  const normalizedPhone = normalizeProfilePhone(options.phone || options.mobile || options.normalizedPhone || options.normalized_phone || '');
+  if (accountType) headers['x-account-type'] = accountType;
+  if (normalizedPhone) headers['x-normalized-phone'] = normalizedPhone;
+  return headers;
+};
+
 const apiUrl = (path, base = BASE) => `${String(base || '').replace(/\/$/, '')}${path}`;
 
 function getToken() { return localStorage.getItem('zm_token'); }
@@ -301,13 +312,18 @@ export async function confirmPhoneChange(newPhone, otp) {
 }
 
 // ── Profile ───────────────────────────────────────────────────────────────────
-export async function fetchProfile() {
+export async function fetchProfile(options = {}) {
   return requestAcrossBases('/api/profile', {
     method: 'GET',
     auth: true,
+    headers: buildProfileContextHeaders(options),
   }, getAuthBases());
 }
-export const updateProfile = (data)  => put('/api/profile', data);
+export const updateProfile = (data, options = {}) => put('/api/profile', {
+  ...data,
+  accountType: options.accountType || data?.accountType || data?.account_type || 'personal',
+  normalizedPhone: options.phone || options.mobile || data?.normalizedPhone || data?.normalized_phone || '',
+}, true);
 
 // ── Products ──────────────────────────────────────────────────────────────────
 export const fetchProducts = () => get('/api/products');

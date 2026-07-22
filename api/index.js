@@ -256,6 +256,161 @@ function getAuthUserId(req) {
   }
 }
 
+function normalizeProfileAccountType(value = '') {
+  const type = String(value || '').trim().toLowerCase();
+  return type === 'business' || type === 'store' ? 'business' : 'personal';
+}
+
+function normalizeProfilePhone(value = '') {
+  return String(value || '').replace(/\D/g, '').slice(-10);
+}
+
+function firstDefined(...values) {
+  for (const value of values) {
+    if (value === undefined || value === null) continue;
+    if (typeof value === 'string' && !value.trim()) continue;
+    return value;
+  }
+  return undefined;
+}
+
+function getAuthProfileContext(req) {
+  const header = req.headers?.authorization || req.headers?.Authorization || '';
+  const token = String(header).replace(/^Bearer\s+/i, '').trim();
+  const headerAccountType = normalizeProfileAccountType(req.headers?.['x-account-type'] || req.headers?.['x-accounttype']);
+  const headerPhone = normalizeProfilePhone(req.headers?.['x-normalized-phone'] || req.headers?.['x-account-phone']);
+
+  if (!token) {
+    return {
+      userId: 'guest',
+      accountType: headerAccountType,
+      normalizedPhone: headerPhone,
+      accountKey: headerPhone ? `${headerPhone}:${headerAccountType}` : `guest:${headerAccountType}`,
+      payload: {},
+    };
+  }
+
+  try {
+    const payload = jwt.verify(token, JWT_SECRET);
+    const accountType = normalizeProfileAccountType(
+      headerAccountType
+      || payload.account_type
+      || payload.accountType
+      || payload.mode
+      || payload.profile_type
+    );
+    const normalizedPhone = normalizeProfilePhone(
+      headerPhone
+      || payload.normalized_phone
+      || payload.phone
+      || payload.mobile
+      || payload.sub
+      || payload.id
+      || ''
+    );
+    const userId = String(
+      payload.sub
+      || payload.id
+      || payload.user_id
+      || payload.account_id
+      || payload.profile_id
+      || payload.phone
+      || payload.mobile
+      || 'guest'
+    ).trim() || 'guest';
+    return {
+      userId,
+      accountType,
+      normalizedPhone,
+      accountKey: normalizedPhone ? `${normalizedPhone}:${accountType}` : `${userId}:${accountType}`,
+      payload,
+    };
+  } catch {
+    return {
+      userId: 'guest',
+      accountType: headerAccountType,
+      normalizedPhone: headerPhone,
+      accountKey: headerPhone ? `${headerPhone}:${headerAccountType}` : `guest:${headerAccountType}`,
+      payload: {},
+    };
+  }
+}
+
+async function fetchProfileRowByIdentity({ userId = '', accountType = 'personal', normalizedPhone = '' } = {}) {
+  if (userId && userId !== 'guest') {
+    const rowsById = await supabaseFetch(`/profiles?id=eq.${encodeURIComponent(userId)}&select=*&limit=1`).catch(() => []);
+    if (rowsById?.[0]) return rowsById[0];
+  }
+
+  if (normalizedPhone) {
+    const rowsByIdentity = await supabaseFetch(`/profiles?normalized_phone=eq.${encodeURIComponent(normalizedPhone)}&account_type=eq.${encodeURIComponent(accountType)}&select=*&limit=1`).catch(() => []);
+    if (rowsByIdentity?.[0]) return rowsByIdentity[0];
+  }
+
+  return null;
+}
+
+function mergeProfilePayload(existing = {}, body = {}, context = {}) {
+  const existingMetadata = parseJsonValue(existing.metadata, {});
+  const bodyMetadata = body && typeof body === 'object' ? parseJsonValue(body.metadata, {}) : {};
+  const nextProfileImage = firstDefined(
+    body.profileImage,
+    body.profile_image,
+    body.avatarUrl,
+    body.avatar_url,
+    bodyMetadata.profileImage,
+    bodyMetadata.avatarUrl,
+    existing.profile_image,
+    existing.avatar_url,
+    existingMetadata.profileImage,
+    existingMetadata.avatarUrl,
+  ) || '';
+  const nextName = cleanSellerName(
+    firstDefined(body.name, body.fullName, body.displayName, body.businessName, existing.name, existing.display_name, existingMetadata.displayName, existingMetadata.fullName, DEFAULT_SELLER_NAME),
+    DEFAULT_SELLER_NAME,
+  );
+  const nextPhone = normalizeProfilePhone(
+    firstDefined(body.normalizedPhone, body.normalized_phone, body.mobile, body.phone, existing.normalized_phone, existing.phone, context.normalizedPhone, context.payload?.phone, context.payload?.mobile)
+  );
+  const nextAccountType = normalizeProfileAccountType(
+    firstDefined(body.accountType, body.account_type, body.mode, existing.account_type, existing.mode, context.accountType)
+  );
+  const nextLocationData = firstDefined(body.locationData, body.profileLocation, body.profile_location, existing.profile_location, existingMetadata.locationData, existingMetadata.profileLocation) || {};
+  const nextMetadata = {
+    ...existingMetadata,
+    ...(bodyMetadata && typeof bodyMetadata === 'object' ? bodyMetadata : {}),
+    ...(body && typeof body === 'object' ? body : {}),
+    accountType: nextAccountType,
+    normalizedPhone: nextPhone,
+    profileImage: nextProfileImage,
+    avatarUrl: nextProfileImage,
+    displayName: nextName,
+    fullName: firstDefined(body.fullName, body.ownerName, existingMetadata.fullName, existingMetadata.ownerName, nextName),
+    businessName: firstDefined(body.businessName, existingMetadata.businessName, existing.business_name, body.name, nextName),
+  };
+
+  return {
+    id: String(existing.id || context.userId || '').trim() || context.userId || 'guest',
+    account_key: context.accountKey,
+    phone: nextPhone || existing.phone || '',
+    mobile: nextPhone || existing.mobile || '',
+    normalized_phone: nextPhone || existing.normalized_phone || '',
+    account_type: nextAccountType,
+    name: nextName,
+    display_name: firstDefined(body.displayName, body.businessName, body.fullName, existing.display_name, nextName) || nextName,
+    avatar_url: nextProfileImage,
+    profile_image: nextProfileImage,
+    profile_image_url: nextProfileImage,
+    bio: firstDefined(body.bio, existing.bio, existingMetadata.bio) || '',
+    location_link: firstDefined(body.locationLink, body.location_link, existing.location_link, existingMetadata.locationLink) || '',
+    website_link: firstDefined(body.websiteLink, body.website_link, existing.website_link, existingMetadata.websiteLink) || '',
+    instagram_link: firstDefined(body.instagramLink, body.instagram_link, existing.instagram_link, existingMetadata.instagramLink) || '',
+    profile_location: nextLocationData,
+    metadata: nextMetadata,
+    updated_at: nowIso(),
+  };
+}
+
 async function supabaseFetch(path, options = {}) {
   if (!SUPABASE_URL || !SUPABASE_KEY) {
     const error = new Error('Supabase not configured');
@@ -1304,36 +1459,43 @@ async function handleUpload(req, res) {
 }
 
 async function handleProfile(req, res) {
-  const userId = getAuthUserId(req);
+  const context = getAuthProfileContext(req);
+  const userId = context.userId;
   if (req.method === 'GET') {
     try {
-      const rows = await supabaseFetch(`/profiles?id=eq.${encodeURIComponent(userId)}&select=*&limit=1`);
-      return sendJson(res, 200, rows?.[0] || { id: userId, name: DEFAULT_SELLER_NAME });
+      const profile = await fetchProfileRowByIdentity(context);
+      return sendJson(res, 200, profile || {
+        id: userId,
+        account_type: context.accountType,
+        normalized_phone: context.normalizedPhone,
+        name: DEFAULT_SELLER_NAME,
+      });
     } catch (error) {
-      if (error.status === 404) return sendJson(res, 200, { id: userId, name: DEFAULT_SELLER_NAME });
-      return sendJson(res, 200, { id: userId, name: DEFAULT_SELLER_NAME });
+      if (error.status === 404) {
+        return sendJson(res, 200, {
+          id: userId,
+          account_type: context.accountType,
+          normalized_phone: context.normalizedPhone,
+          name: DEFAULT_SELLER_NAME,
+        });
+      }
+      return sendJson(res, 500, { error: 'Profile lookup failed', message: error.message || 'Unknown error' });
     }
   }
 
   if (req.method === 'PUT' || req.method === 'POST') {
     const body = await readRequestJson(req);
-    const nextProfileImage = body.profileImage || body.profile_image || body.avatarUrl || body.avatar_url || '';
+    const existingProfile = await fetchProfileRowByIdentity({
+      userId,
+      accountType: normalizeProfileAccountType(body.accountType || body.account_type || body.mode || context.accountType),
+      normalizedPhone: normalizeProfilePhone(body.normalizedPhone || body.normalized_phone || body.mobile || body.phone || context.normalizedPhone),
+    }).catch(() => null);
+    const mergedProfile = mergeProfilePayload(existingProfile || {}, body, context);
     const payload = {
-      id: userId,
-      name: cleanSellerName(body.name, body.fullName, body.displayName, DEFAULT_SELLER_NAME),
-      mobile: body.mobile || body.phone || '',
-      profile_image: nextProfileImage,
-      avatar_url: nextProfileImage,
-      bio: body.bio || '',
-      location_link: body.locationLink || body.location_link || '',
-      website_link: body.websiteLink || body.website_link || '',
-      instagram_link: body.instagramLink || body.instagram_link || '',
-      metadata: {
-        ...(body && typeof body === 'object' ? body : {}),
-        profileImage: nextProfileImage,
-        avatarUrl: nextProfileImage,
-      },
-      updated_at: new Date().toISOString(),
+      ...mergedProfile,
+      id: String(existingProfile?.id || userId).trim() || userId,
+      account_type: mergedProfile.account_type || context.accountType,
+      normalized_phone: mergedProfile.normalized_phone || context.normalizedPhone,
     };
     try {
       const rows = await supabaseFetch('/profiles?on_conflict=id&select=*', {
@@ -1341,9 +1503,13 @@ async function handleProfile(req, res) {
         headers: { Prefer: 'resolution=merge-duplicates,return=representation' },
         body: JSON.stringify(payload),
       });
-      return sendJson(res, 200, rows?.[0] || { success: true, ...payload });
-    } catch {
-      return sendJson(res, 200, { success: true, ...payload });
+      const persistedProfile = rows?.[0];
+      if (!persistedProfile) {
+        return sendJson(res, 500, { error: 'Profile update failed', message: 'No profile row was returned after save.' });
+      }
+      return sendJson(res, 200, persistedProfile);
+    } catch (error) {
+      return sendJson(res, error.status || 500, { error: 'Profile update failed', message: error.message || 'Unknown error' });
     }
   }
 

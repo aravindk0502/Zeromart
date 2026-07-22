@@ -75,32 +75,42 @@ export default function BusinessAuthModal({ open = true, onClose, onSuccess, emb
           locationData: form.locationData || null,
           accountType: 'business',
           mode: 'business',
+        }, {
+          accountType: 'business',
+          phone: form.mobile,
         });
       }
 
       let remoteProfile = null;
       try {
-        remoteProfile = await fetchProfile();
+        remoteProfile = await fetchProfile({ accountType: 'business', phone: form.mobile });
       } catch {
         remoteProfile = null;
       }
 
       const profileMetadata = (remoteProfile && typeof remoteProfile.metadata === 'object') ? remoteProfile.metadata : {};
       const accountId = String(existing?.id || authUser?.id || remoteProfile?.id || `business-${Date.now()}`);
-      const profileImage = remoteProfile?.profile_image || profileMetadata.profileImage || existing?.profileImage || existing?.avatarUrl || '';
+      const profileImage = remoteProfile?.profile_image
+        || remoteProfile?.profile_image_url
+        || remoteProfile?.avatar_url
+        || profileMetadata.profileImage
+        || profileMetadata.avatarUrl
+        || existing?.profileImage
+        || existing?.avatarUrl
+        || '';
 
       const account = {
         id: accountId,
         userId: String(authUser?.id || remoteProfile?.id || accountId),
         profileId: String(authUser?.id || remoteProfile?.id || accountId),
         mobile: form.mobile,
-        ownerName: form.ownerName || existing?.ownerName || profileMetadata.fullName || authUser?.name || 'Owner',
-        businessName: form.businessName || existing?.businessName || profileMetadata.businessName || remoteProfile?.name || authUser?.name || 'Business Store',
-        businessType: form.businessType || existing?.businessType || profileMetadata.businessType || 'Supermarket',
-        storeLocation: form.storeLocation || existing?.storeLocation || profileMetadata.storeLocation || locationLabel(form.locationData || existing?.locationData || null),
-        address: form.address || existing?.address || profileMetadata.address || '',
-        registration: form.registration || existing?.registration || profileMetadata.registration || '',
-        locationData: form.locationData || existing?.locationData || profileMetadata.locationData || null,
+        ownerName: remoteProfile?.full_name || profileMetadata.fullName || form.ownerName || existing?.ownerName || authUser?.name || 'Owner',
+        businessName: remoteProfile?.business_name || profileMetadata.businessName || form.businessName || existing?.businessName || remoteProfile?.name || authUser?.name || 'Business Store',
+        businessType: remoteProfile?.business_type || profileMetadata.businessType || form.businessType || existing?.businessType || 'Supermarket',
+        storeLocation: remoteProfile?.store_location || profileMetadata.storeLocation || form.storeLocation || existing?.storeLocation || locationLabel(form.locationData || existing?.locationData || null),
+        address: remoteProfile?.address || profileMetadata.address || form.address || existing?.address || '',
+        registration: remoteProfile?.registration || profileMetadata.registration || form.registration || existing?.registration || '',
+        locationData: remoteProfile?.location_data || profileMetadata.locationData || form.locationData || existing?.locationData || null,
         karma: Number(authUser?.karma ?? remoteProfile?.karma_points ?? remoteProfile?.karma ?? existing?.karma ?? 0) || 0,
         verified: true,
         createdAt: existing?.createdAt || new Date().toISOString(),

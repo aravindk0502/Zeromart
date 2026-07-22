@@ -928,10 +928,8 @@ function BusinessProfile({ account, updateAccount }) {
         avatarUrl: profileImageUrl,
         karmaPopupEnabled: form.karmaPopupEnabled !== false,
       };
-      updateAccount(nextAccount);
-
       if (isLoggedIn()) {
-        await updateProfile({
+        const persistedProfile = await updateProfile({
           name: nextAccount.businessName || nextAccount.ownerName || 'Business Store',
           fullName: nextAccount.ownerName || '',
           businessName: nextAccount.businessName || '',
@@ -947,7 +945,17 @@ function BusinessProfile({ account, updateAccount }) {
           mode: 'business',
           verified: true,
           karmaPopupEnabled: nextAccount.karmaPopupEnabled !== false,
+        }, {
+          accountType: 'business',
+          phone: nextAccount.mobile || account.mobile || '',
         });
+        updateAccount({
+          ...nextAccount,
+          profileImage: persistedProfile?.profile_image || persistedProfile?.avatar_url || profileImageUrl,
+          avatarUrl: persistedProfile?.avatar_url || persistedProfile?.profile_image || profileImageUrl,
+        });
+      } else {
+        updateAccount(nextAccount);
       }
 
       setForm(nextAccount);
