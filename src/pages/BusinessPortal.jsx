@@ -1,10 +1,16 @@
 import { useEffect, useRef, useState } from 'react';
 import {
   ArrowLeft, BarChart3, Boxes, Check, ChevronRight, CircleDollarSign, ClipboardList,
-  Home, Info, LogOut, MapPin, Menu, PackagePlus, Plus, Settings2, ShieldCheck,
-  Sparkles, Store, Trash2, TrendingUp, Upload, UserRound, X,
+  Info, LogOut, MapPin, PackagePlus, Plus, Settings2, ShieldCheck,
+  Sparkles, Trash2, TrendingUp, Upload, UserRound, X,
 } from 'lucide-react';
 import BusinessAuthModal from '../components/BusinessAuthModal';
+import {
+  BottomNavigation,
+  BUSINESS_BOTTOM_NAV_ITEMS,
+  BUSINESS_NAV_ITEMS,
+  openBusinessAlerts,
+} from '../components/BusinessNavigation';
 import CollectionPass, { getCollectionPassState } from '../components/CollectionPass';
 import LocationMap from '../components/LocationMap';
 import LocationPicker from '../components/LocationPicker';
@@ -28,15 +34,6 @@ import {
   saveListingToBackend,
 } from '../services/liveListingService';
 import { isLoggedIn, updateProfile, uploadImage } from '../lib/api';
-
-const links = [
-  { path: '/business/dashboard', label: 'Business Dashboard', icon: Home },
-  { path: '/business/inventory', label: 'Inventory', icon: Boxes },
-  { path: '/business/rules', label: 'Rules', icon: Settings2 },
-  { path: '/business/orders', label: 'Orders', icon: ClipboardList },
-  { path: '/business/analytics', label: 'Analytics', icon: BarChart3 },
-  { path: '/business/profile', label: 'Profile', icon: UserRound },
-];
 
 const emptyProduct = {
   name: '', category: 'Food', quantity: 1, mrp: 0, sellingPrice: 0, expiryDate: '', expiryTime: '',
@@ -68,7 +65,7 @@ export default function BusinessPortal({ path, navigate }) {
   });
   const [rules, setRules] = useState(() => readInitialBusinessRules());
   const [orders, setOrders] = useState(getBusinessOrders);
-  const [mobileNav, setMobileNav] = useState(false);
+  const [unreadNotificationCount, setUnreadNotificationCount] = useState(0);
   const [inventoryMode, setInventoryMode] = useState('manual');
   const [helpToast, setHelpToast] = useState(null);
   const [karmaReceivedToast, setKarmaReceivedToast] = useState(null);
@@ -255,6 +252,32 @@ export default function BusinessPortal({ path, navigate }) {
 
   const page = path.split('/').filter(Boolean)[1] || 'dashboard';
   useEffect(() => {
+    const updateUnreadCount = () => {
+      let notifications = [];
+      try {
+        notifications = JSON.parse(localStorage.getItem('zeromart-notifications') || '[]');
+      } catch {
+        notifications = [];
+      }
+      const accountIds = [account?.id, account?.userId, account?.profileId, account?.mobile]
+        .filter(Boolean)
+        .map((value) => String(value).trim().toLowerCase());
+      setUnreadNotificationCount(notifications.filter((notification) => {
+        if (!notification || notification.read) return false;
+        const recipientId = notification.recipientId
+          || notification.recipientAccountId
+          || notification.payload?.recipientAccountId
+          || '';
+        if (recipientId && !accountIds.includes(String(recipientId).trim().toLowerCase())) return false;
+        const recipientType = String(notification.recipientAccountType || notification.payload?.recipientAccountType || '').trim().toLowerCase();
+        return !recipientType || recipientType === 'business' || recipientType === 'store';
+      }).length);
+    };
+    updateUnreadCount();
+    window.addEventListener('storage', updateUnreadCount);
+    return () => window.removeEventListener('storage', updateUnreadCount);
+  }, [account?.id, account?.mobile, account?.profileId, account?.userId]);
+  useEffect(() => {
     if (account) showHelp(PAGE_HELP[page]);
     return () => window.clearTimeout(helpTimer.current);
   }, [page, account?.id]);
@@ -373,21 +396,26 @@ export default function BusinessPortal({ path, navigate }) {
       onBlurCapture={leaveControl}
       onChangeCapture={hideControlHelp}
     >
-      <aside className={`fixed inset-y-0 left-0 z-50 w-72 border-r border-emerald-100 bg-white p-5 shadow-xl transition-transform lg:translate-x-0 ${mobileNav ? 'translate-x-0' : '-translate-x-full'}`}>
+      <aside className="fixed inset-y-0 left-0 z-50 hidden w-72 border-r border-emerald-100 bg-white p-5 shadow-xl lg:block">
         <div className="flex items-center justify-between">
           <button onClick={() => navigate('/')} className="flex items-center gap-3 text-left">
             <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-emerald-600 text-white shadow-lg shadow-emerald-600/20"><Sparkles size={22} /></div>
             <div><p className="text-lg font-extrabold">Drizn</p><p className="text-xs font-semibold text-emerald-700">Business workspace</p></div>
           </button>
-          <button onClick={() => setMobileNav(false)} className="rounded-lg p-2 text-slate-500 lg:hidden"><X size={20} /></button>
         </div>
         <div className="mt-6 rounded-2xl bg-emerald-50 p-4">
           <div className="flex items-center gap-3"><div className="flex h-10 w-10 items-center justify-center overflow-hidden rounded-full bg-white font-bold text-emerald-700">{(account.profileImage || account.avatarUrl) ? <img src={account.profileImage || account.avatarUrl} alt="Business" className="h-full w-full object-cover" /> : initials(account.businessName)}</div><div className="min-w-0"><p className="truncate text-sm font-bold">{account.businessName}</p><p className="truncate text-xs text-slate-500">{account.businessType}</p></div></div>
         </div>
         <nav className="mt-5 space-y-1">
-          <NavButton icon={Home} label="Home" active={false} onClick={() => navigate('/')} />
-          <NavButton icon={Store} label="Marketplace" active={false} onClick={() => navigate('/')} />
-          {links.map((link) => <NavButton key={link.path} icon={link.icon} label={link.label} active={path === link.path} onClick={() => { navigate(link.path); setMobileNav(false); }} />)}
+          {BUSINESS_NAV_ITEMS.map((item) => (
+            <NavButton
+              key={item.key}
+              icon={item.icon}
+              label={item.label}
+              active={path === item.path}
+              onClick={() => item.key === 'notifications' ? openBusinessAlerts(navigate) : navigate(item.path)}
+            />
+          ))}
         </nav>
         <button onClick={logout} className="absolute bottom-5 left-5 right-5 flex items-center gap-3 rounded-xl border border-rose-100 bg-rose-50 px-4 py-3 text-sm font-bold text-rose-700"><LogOut size={18} /> Logout</button>
       </aside>
@@ -396,7 +424,6 @@ export default function BusinessPortal({ path, navigate }) {
         <header className="sticky top-0 z-30 border-b border-emerald-100 bg-white/90 px-4 py-3 backdrop-blur sm:px-6">
           <div className="mx-auto flex max-w-7xl items-center justify-between gap-3">
             <div className="flex min-w-0 items-center gap-2 sm:gap-3">
-              <button onClick={() => setMobileNav(true)} className="rounded-xl border border-slate-200 p-2.5 lg:hidden" aria-label="Open navigation"><Menu size={20} /></button>
               <button onClick={goBack} className="inline-flex shrink-0 items-center gap-2 rounded-xl border border-emerald-100 bg-emerald-50 px-3 py-2.5 text-sm font-bold text-emerald-800 transition hover:bg-emerald-100">
                 <ArrowLeft size={17} />
                 <span className="hidden sm:inline">Back</span>
@@ -406,7 +433,7 @@ export default function BusinessPortal({ path, navigate }) {
             <div className="flex items-center gap-2 rounded-full border border-emerald-100 bg-emerald-50 px-3 py-2"><ShieldCheck size={16} className="text-emerald-600" /><span className="hidden text-sm font-bold sm:inline">Verified</span><span className="rounded-full bg-white px-2 py-1 text-xs font-bold text-emerald-700">{account.karma} karma</span></div>
           </div>
         </header>
-        <main className="mx-auto max-w-7xl p-4 pb-12 sm:p-6">
+        <main className="mx-auto max-w-7xl p-4 pb-32 sm:p-6 sm:pb-32 lg:pb-12">
           {karmaReceivedToast && (
             <div className="mb-4 rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-900 shadow-sm">
               <div className="flex items-start justify-between gap-3">
@@ -443,6 +470,13 @@ export default function BusinessPortal({ path, navigate }) {
         window.clearTimeout(helpTimer.current);
         setHelpToast(null);
       }} />
+      <BottomNavigation
+        items={BUSINESS_BOTTOM_NAV_ITEMS}
+        activeKey={page === 'inventory' ? 'business-list-item' : `business-${page}`}
+        onSelect={(item) => item.key === 'notifications' ? openBusinessAlerts(navigate) : navigate(item.path)}
+        primaryAction={() => navigate('/business/inventory')}
+        unreadNotificationCount={unreadNotificationCount}
+      />
     </div>
   );
 }

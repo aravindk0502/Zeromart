@@ -61,6 +61,11 @@ import {
 } from './services/liveListingService';
 import { listenForForegroundMessages, requestPushPermission } from './lib/firebaseMessaging';
 import { isListingOwnedByUser } from './utils/listingOwnership';
+import {
+  BottomNavigation,
+  BUSINESS_BOTTOM_NAV_ITEMS,
+  BUSINESS_NAV_ITEMS,
+} from './components/BusinessNavigation';
 
 const navItems = [
   { key: 'home', label: 'Home', icon: Home },
@@ -347,7 +352,11 @@ const doesItemMatchProfile = (item = {}, profile = {}) => {
 
 export default function App({ path = '/', navigate = (nextPath) => { window.location.href = nextPath; } }) {
   const locationEngine = useLocationEngine();
-  const [activeView, setActiveView] = useState('home');
+  const [activeView, setActiveView] = useState(() => {
+    const requestedView = sessionStorage.getItem('zeromart-business-navigation-view');
+    sessionStorage.removeItem('zeromart-business-navigation-view');
+    return requestedView === 'notifications' ? 'notifications' : 'home';
+  });
   const [sectionView, setSectionView] = useState('explore');
   const [user, setUser] = useState(null);
   const [businessSession, setBusinessSession] = useState(getBusinessSession);
@@ -3188,25 +3197,8 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
             </div>
             <p className="text-sm font-semibold text-slate-950">Good Things. Nearby.</p>
             <nav className="mt-8 space-y-2">
-              <div>
-                <button
-                  onClick={() => handleNav('home')}
-                  className={`flex w-full min-w-0 items-center gap-3 rounded-2xl px-4 py-3 text-left text-sm font-semibold transition ${
-                    activeView === 'home'
-                      ? 'bg-gradient-to-r from-amber-500 to-violet-600 text-white shadow-lg shadow-violet-500/20'
-                      : 'border border-amber-100 bg-white/70 text-slate-600 hover:-translate-y-0.5 hover:bg-amber-50'
-                  }`}
-                >
-                  <Home size={18} />
-                  <span>Home</span>
-                </button>
-              </div>
-              {(businessSession ? [
+              {(businessSession ? BUSINESS_NAV_ITEMS : [
                 { key: 'home', label: 'Home', icon: Home, action: () => handleNav('home') },
-                { key: 'business-list-item', label: 'List Item', icon: Plus, action: () => navigate('/business/inventory') },
-                { key: 'notifications', label: 'Alerts', icon: Bell, action: () => handleNav('notifications') },
-                { key: 'business-dashboard', label: 'Dashboard', icon: Building2, action: () => navigate('/business/dashboard') },
-              ] : [
                 { key: 'profile', label: 'Profile', icon: User, action: () => (user ? handleNav('profile') : requireLogin('profile')) },
                 { key: 'sell', label: 'List item', icon: Plus, action: handleOpenListing },
                 { key: 'favorites', label: 'Favorites', icon: Heart, action: () => handleNav('favorites') },
@@ -3214,10 +3206,15 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
               ]).map((item) => {
                 const Icon = item.icon;
                 const isActive = activeView === item.key || (item.key === 'sell' && showListingSheet);
+                const action = item.action || (() => {
+                  if (item.key === 'notifications') return handleNav('notifications');
+                  if (item.path === '/') return handleNav('home');
+                  return navigate(item.path);
+                });
                 return (
                   <button
                     key={item.key}
-                    onClick={item.action}
+                    onClick={action}
                     className={`relative flex w-full items-center gap-3 rounded-2xl px-4 py-3 text-left text-sm font-semibold transition ${
                       isActive
                         ? 'bg-gradient-to-r from-amber-500 to-violet-600 text-white shadow-lg shadow-violet-500/20'
@@ -3736,67 +3733,19 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
         </main>
       </div>
 
-      <nav className={`${showListingSheet ? 'hidden' : 'fixed'} inset-x-0 bottom-0 z-40 border-t border-amber-100 bg-white/90 px-3 pb-[calc(0.75rem+env(safe-area-inset-bottom))] pt-4 backdrop-blur lg:hidden`}>
-        <div className="relative mx-auto grid h-[72px] max-w-[390px] grid-cols-[1fr_1fr_72px_1fr_1fr] items-center rounded-full bg-gradient-to-r from-amber-50 to-violet-50 px-2 py-1 shadow-[0_12px_38px_rgba(15,23,42,0.1)]">
-          {(businessSession ? [
-            { key: 'home', label: 'Home', icon: Home },
-            { key: 'notifications', label: 'Alerts', icon: Bell },
-            null,
-            { key: 'business-dashboard', label: 'Dashboard', icon: Building2 },
-            null,
-          ] : bottomNavItems).map((item, index) => {
-            if (!item) return <div key={`spacer-${index}`} className="h-full min-w-0" aria-hidden="true" />;
-            const Icon = item.icon;
-            const isActive = activeView === item.key;
-            const handleBottomNav = () => {
-              if (item.key === 'business-dashboard') {
-                navigate('/business/dashboard');
-                return;
-              }
-              if (businessSession && item.key === 'profile') {
-                navigate('/business/profile');
-                return;
-              }
-              handleNav(item.key);
-            };
-            return (
-              <button
-                key={item.key}
-                onClick={handleBottomNav}
-                className={`relative mx-auto flex min-w-0 flex-col items-center justify-center rounded-full px-1 text-[10px] font-semibold leading-none sm:text-[11px] ${
-                  isActive ? 'bg-gradient-to-r from-amber-500 to-violet-600 text-white shadow' : 'text-slate-600'
-                }`}
-              >
-                <span className="relative">
-                  <Icon size={19} strokeWidth={2.2} />
-                  {item.key === 'notifications' && unreadNotificationCount > 0 && (
-                    <span className="absolute -right-3 -top-3 inline-flex min-w-5 items-center justify-center rounded-full bg-rose-500 px-1 py-1 text-[9px] font-extrabold leading-none text-white shadow ring-2 ring-white">
-                      {unreadNotificationCount > 99 ? '99+' : unreadNotificationCount}
-                    </span>
-                  )}
-                  {item.key === 'favorites' && favoriteBadgeCount > 0 && (
-                    <span className="absolute -right-3 -top-3 inline-flex min-w-5 items-center justify-center rounded-full bg-rose-500 px-1 py-1 text-[9px] font-extrabold leading-none text-white shadow ring-2 ring-white">
-                      {favoriteBadgeCount > 99 ? '99+' : favoriteBadgeCount}
-                    </span>
-                  )}
-                </span>
-                <span className="mt-1.5 max-w-full truncate">{item.label}</span>
-              </button>
-            );
-          })}
-          {businessSession ? (
-            <button onClick={() => navigate('/business/inventory')} className="absolute left-1/2 top-0 z-50 flex h-16 w-16 -translate-x-1/2 -translate-y-1/2 flex-col items-center justify-center rounded-full bg-gradient-to-br from-amber-500 to-violet-600 text-white shadow-lg shadow-violet-600/25 ring-4 ring-white" aria-label="List item">
-              <Plus size={23} strokeWidth={2.2} />
-              <span className="mt-0.5 text-[9px] font-extrabold leading-none">List Item</span>
-            </button>
-          ) : (
-            <button onClick={handleOpenListing} className="absolute left-1/2 top-0 z-50 flex h-16 w-16 -translate-x-1/2 -translate-y-1/2 flex-col items-center justify-center rounded-full bg-gradient-to-br from-amber-500 to-violet-600 text-white shadow-lg shadow-violet-600/25 ring-4 ring-white" aria-label="List item">
-              <Plus size={23} strokeWidth={2.2} />
-              <span className="mt-0.5 text-[9px] font-extrabold leading-none">List Item</span>
-            </button>
-          )}
-        </div>
-      </nav>
+      <BottomNavigation
+        hidden={showListingSheet}
+        items={businessSession ? BUSINESS_BOTTOM_NAV_ITEMS : bottomNavItems}
+        activeKey={activeView}
+        onSelect={(item) => {
+          if (item.key === 'notifications') return handleNav('notifications');
+          if (item.path && item.path !== '/') return navigate(item.path);
+          return handleNav(item.key);
+        }}
+        primaryAction={businessSession ? () => navigate('/business/inventory') : handleOpenListing}
+        unreadNotificationCount={unreadNotificationCount}
+        favoriteBadgeCount={favoriteBadgeCount}
+      />
 
       {!showListingSheet && (
         <button onClick={() => setShowBotAssistant(true)} className="fixed bottom-24 right-4 z-50 flex h-14 w-14 items-center justify-center rounded-full bg-gradient-to-br from-amber-500 to-violet-600 text-white shadow-lg shadow-violet-600/25 lg:bottom-6 lg:right-6">
