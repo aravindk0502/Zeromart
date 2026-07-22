@@ -3737,24 +3737,20 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
       </div>
 
       <nav className={`${showListingSheet ? 'hidden' : 'fixed'} inset-x-0 bottom-0 z-40 border-t border-amber-100 bg-white/90 px-3 pb-[calc(0.75rem+env(safe-area-inset-bottom))] pt-4 backdrop-blur lg:hidden`}>
-        <div className={`relative mx-auto grid h-[72px] max-w-[390px] items-center rounded-full bg-gradient-to-r from-amber-50 to-violet-50 px-2 py-1 shadow-[0_12px_38px_rgba(15,23,42,0.1)] ${businessSession ? 'grid-cols-4' : 'grid-cols-[1fr_1fr_72px_1fr_1fr]'}`}>
+        <div className="relative mx-auto grid h-[72px] max-w-[390px] grid-cols-[1fr_1fr_72px_1fr_1fr] items-center rounded-full bg-gradient-to-r from-amber-50 to-violet-50 px-2 py-1 shadow-[0_12px_38px_rgba(15,23,42,0.1)]">
           {(businessSession ? [
             { key: 'home', label: 'Home', icon: Home },
-            { key: 'business-list-item', label: 'List Item', icon: Plus },
             { key: 'notifications', label: 'Alerts', icon: Bell },
+            null,
             { key: 'business-dashboard', label: 'Dashboard', icon: Building2 },
-          ] : bottomNavItems).map((item) => {
-            if (!item) return <div key="create-spacer" className="h-full min-w-0" aria-hidden="true" />;
+            null,
+          ] : bottomNavItems).map((item, index) => {
+            if (!item) return <div key={`spacer-${index}`} className="h-full min-w-0" aria-hidden="true" />;
             const Icon = item.icon;
             const isActive = activeView === item.key;
-            const isPrimaryBusinessAction = businessSession && item.key === 'business-list-item';
             const handleBottomNav = () => {
               if (item.key === 'business-dashboard') {
                 navigate('/business/dashboard');
-                return;
-              }
-              if (item.key === 'business-list-item') {
-                navigate('/business/inventory');
                 return;
               }
               if (businessSession && item.key === 'profile') {
@@ -3768,16 +3764,11 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
                 key={item.key}
                 onClick={handleBottomNav}
                 className={`relative mx-auto flex min-w-0 flex-col items-center justify-center rounded-full px-1 text-[10px] font-semibold leading-none sm:text-[11px] ${
-                  isPrimaryBusinessAction
-                    ? 'h-[74px] w-[74px] -translate-y-5 justify-start bg-gradient-to-br from-amber-400 via-orange-500 to-violet-600 text-white shadow-[0_18px_38px_rgba(124,58,237,0.35)] ring-4 ring-white/95'
-                    : `h-[58px] w-full max-w-[74px] ${isActive ? 'bg-gradient-to-r from-amber-500 to-violet-600 text-white shadow' : 'text-slate-600'}`
+                  isActive ? 'bg-gradient-to-r from-amber-500 to-violet-600 text-white shadow' : 'text-slate-600'
                 }`}
               >
-                {isPrimaryBusinessAction && (
-                  <span className="absolute inset-[6px] rounded-full border border-white/25 bg-white/10" aria-hidden="true" />
-                )}
                 <span className="relative">
-                  <Icon size={isPrimaryBusinessAction ? 28 : 19} strokeWidth={2.2} />
+                  <Icon size={19} strokeWidth={2.2} />
                   {item.key === 'notifications' && unreadNotificationCount > 0 && (
                     <span className="absolute -right-3 -top-3 inline-flex min-w-5 items-center justify-center rounded-full bg-rose-500 px-1 py-1 text-[9px] font-extrabold leading-none text-white shadow ring-2 ring-white">
                       {unreadNotificationCount > 99 ? '99+' : unreadNotificationCount}
@@ -3789,11 +3780,16 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
                     </span>
                   )}
                 </span>
-                <span className={`mt-1.5 max-w-full truncate ${isPrimaryBusinessAction ? 'text-[11px] font-extrabold tracking-[0.12em]' : ''}`}>{item.label}</span>
+                <span className="mt-1.5 max-w-full truncate">{item.label}</span>
               </button>
             );
           })}
-          {!businessSession && (
+          {businessSession ? (
+            <button onClick={() => navigate('/business/inventory')} className="absolute left-1/2 top-0 z-50 flex h-16 w-16 -translate-x-1/2 -translate-y-1/2 flex-col items-center justify-center rounded-full bg-gradient-to-br from-amber-500 to-violet-600 text-white shadow-lg shadow-violet-600/25 ring-4 ring-white" aria-label="List item">
+              <Plus size={23} strokeWidth={2.2} />
+              <span className="mt-0.5 text-[9px] font-extrabold leading-none">List Item</span>
+            </button>
+          ) : (
             <button onClick={handleOpenListing} className="absolute left-1/2 top-0 z-50 flex h-16 w-16 -translate-x-1/2 -translate-y-1/2 flex-col items-center justify-center rounded-full bg-gradient-to-br from-amber-500 to-violet-600 text-white shadow-lg shadow-violet-600/25 ring-4 ring-white" aria-label="List item">
               <Plus size={23} strokeWidth={2.2} />
               <span className="mt-0.5 text-[9px] font-extrabold leading-none">List Item</span>
