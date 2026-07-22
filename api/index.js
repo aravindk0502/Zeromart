@@ -103,8 +103,25 @@ function isAuthProxyRetryableError(error) {
   return /timed out|timeout|aborted|network|fetch failed|socket|econnreset|econnrefused|enotfound|eai_again/.test(message);
 }
 
+function resolveSafeAuthProxyBaseUrl(req) {
+  const candidate = String(AUTH_PROXY_BASE_URL || '').trim().replace(/\/+$/, '');
+  if (!candidate) return '';
+  try {
+    const target = new URL(candidate);
+    const requestHost = String(req.headers?.host || '').trim().toLowerCase();
+    const targetHost = String(target.host || '').trim().toLowerCase();
+    if (requestHost && targetHost && requestHost === targetHost) {
+      return 'https://web-production-74e61.up.railway.app';
+    }
+  } catch {
+    return '';
+  }
+  return candidate;
+}
+
 async function forwardAuthRequest(req, res, urlPath) {
-  if (!AUTH_PROXY_BASE_URL) {
+  const upstreamBaseUrl = resolveSafeAuthProxyBaseUrl(req);
+  if (!upstreamBaseUrl) {
     return sendJson(res, 503, {
       error: 'Auth service unavailable',
       code: 'AUTH_PROXY_NOT_CONFIGURED',
@@ -120,10 +137,9 @@ async function forwardAuthRequest(req, res, urlPath) {
   let lastError = null;
 
   for (let attempt = 1; attempt <= AUTH_PROXY_MAX_ATTEMPTS; attempt += 1) {
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), AUTH_PROXY_TIMEOUT_MS);
     try {
-      const response = await fetch(`${AUTH_PROXY_BASE_URL}${urlPath}`, {
+      const controller = new AbortController();
+      const fetchPromise = fetch(`${upstreamBaseUrl}${urlPath}`, {
         method,
         headers: {
           'Content-Type': 'application/json',
@@ -132,6 +148,15 @@ async function forwardAuthRequest(req, res, urlPath) {
         ...(body ? { body: JSON.stringify(body) } : {}),
         signal: controller.signal,
       });
+      const timeoutPromise = new Promise((_, reject) => {
+        setTimeout(() => {
+          controller.abort();
+          const timeoutError = new Error('Auth request timed out');
+          timeoutError.status = 504;
+          reject(timeoutError);
+        }, AUTH_PROXY_TIMEOUT_MS);
+      });
+      const response = await Promise.race([fetchPromise, timeoutPromise]);
 
       const raw = await response.text();
       let parsed;
@@ -161,8 +186,6 @@ async function forwardAuthRequest(req, res, urlPath) {
       if (attempt < AUTH_PROXY_MAX_ATTEMPTS && isAuthProxyRetryableError(normalizedError)) {
         continue;
       }
-    } finally {
-      clearTimeout(timeoutId);
     }
   }
 
