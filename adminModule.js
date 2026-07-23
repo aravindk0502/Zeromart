@@ -155,6 +155,19 @@ function parseDashboardDateRange(query = {}) {
   };
 }
 
+function parsePagination(query = {}, defaultLimit = 25, maxLimit = 100) {
+  const limit = Math.min(maxLimit, Math.max(1, Number(query.limit || defaultLimit) || defaultLimit));
+  const page = Math.max(1, Number(query.page || 1) || 1);
+  const offset = (page - 1) * limit;
+  return { limit, page, offset };
+}
+
+function normalizeUserAdminStatus(input = '') {
+  const status = String(input || '').trim().toLowerCase();
+  if (status === 'active' || status === 'suspended' || status === 'blocked') return status;
+  return '';
+}
+
 export function registerAdminModule({ app, getPool, isDbEnabled, createRateLimiter, getClientIp }) {
   const router = express.Router();
 
@@ -318,12 +331,30 @@ export function registerAdminModule({ app, getPool, isDbEnabled, createRateLimit
         created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
       );
 
+      CREATE TABLE IF NOT EXISTS admin_user_status (
+        user_id         TEXT PRIMARY KEY,
+        status          TEXT NOT NULL DEFAULT 'active',
+        reason          TEXT,
+        updated_by      TEXT REFERENCES admin_accounts(id) ON DELETE SET NULL,
+        updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+      );
+
+      CREATE TABLE IF NOT EXISTS admin_user_notes (
+        id              TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
+        user_id         TEXT NOT NULL,
+        admin_id        TEXT REFERENCES admin_accounts(id) ON DELETE SET NULL,
+        note            TEXT NOT NULL,
+        created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+      );
+
       CREATE INDEX IF NOT EXISTS admin_accounts_role_idx ON admin_accounts(role);
       CREATE INDEX IF NOT EXISTS admin_accounts_status_idx ON admin_accounts(status);
       CREATE INDEX IF NOT EXISTS admin_sessions_admin_idx ON admin_sessions(admin_id);
       CREATE INDEX IF NOT EXISTS admin_sessions_expires_idx ON admin_sessions(expires_at DESC);
       CREATE INDEX IF NOT EXISTS admin_audit_logs_admin_idx ON admin_audit_logs(admin_id);
       CREATE INDEX IF NOT EXISTS admin_audit_logs_created_idx ON admin_audit_logs(created_at DESC);
+      CREATE INDEX IF NOT EXISTS admin_user_status_status_idx ON admin_user_status(status);
+      CREATE INDEX IF NOT EXISTS admin_user_notes_user_idx ON admin_user_notes(user_id, created_at DESC);
     `);
 
     for (const role of ROLE_ORDER) {
@@ -619,6 +650,475 @@ export function registerAdminModule({ app, getPool, isDbEnabled, createRateLimit
         accountType: row.account_type,
         createdAt: row.created_at,
       })),
+    });
+  });
+
+  async function resolveUserIdentity(rawUserRef = '') {
+    const userRef = String(rawUserRef || '').trim();
+    if (!userRef) return null;
+
+    const result = await getPool().query(
+      `SELECT id::text AS user_id,
+              id,
+              phone,
+              name,
+              COALESCE(NULLIF(account_type, ''), 'personal') AS account_type,
+              created_at
+         FROM users
+        WHERE id::text = $1 OR phone = $1
+        LIMIT 1`,
+      [userRef],
+    );
+
+    return result.rows[0] || null;
+  }
+
+  async function buildUserDetailPayload(user) {
+    const userId = String(user?.user_id || '');
+    const userPhone = String(user?.phone || '');
+    const safeLikePhone = userPhone ? `%${userPhone}%` : '';
+
+    const [
+      statusResult,
+      profileResult,
+      listingsResult,
+      requestsResult,
+      ordersResult,
+      favouritesResult,
+      notificationsResult,
+      karmaResult,
+      paymentsResult,
+      loginHistoryResult,
+      reportsResult,
+      notesResult,
+      activityTimelineResult,
+    ] = await Promise.all([
+      getPool().query(
+        `SELECT user_id, status, reason, updated_by, updated_at
+           FROM admin_user_status
+          WHERE user_id = $1
+          LIMIT 1`,
+        [userId],
+      ),
+      getPool().query(
+        `SELECT id, phone, name, account_type, karma, location_data, created_at, updated_at
+           FROM profiles
+          WHERE phone = $1
+          LIMIT 1`,
+        [userPhone],
+      ),
+      getPool().query(
+        `SELECT id, title, category, status, quantity, available_quantity, created_at, expiry_date, location, city
+           FROM listings
+          WHERE seller_id = $1 OR COALESCE(metadata->>'ownerMobile', '') = $2
+          ORDER BY created_at DESC
+          LIMIT 80`,
+        [userId, userPhone],
+      ),
+      getPool().query(
+        `SELECT id, listing_id, seller_id, status, quantity, created_at, updated_at
+           FROM requests
+          WHERE buyer_id = $1
+          ORDER BY created_at DESC
+          LIMIT 120`,
+        [userId],
+      ),
+      getPool().query(
+        `SELECT id, product_id, product_title, status, status_label, type, created_at
+           FROM orders
+          WHERE buyer_id::text = $1
+          ORDER BY created_at DESC
+          LIMIT 120`,
+        [userId],
+      ),
+      getPool().query(
+        `SELECT f.product_id, p.title, p.category, p.created_at
+           FROM favourites f
+      LEFT JOIN products p ON p.id = f.product_id
+          WHERE f.user_id::text = $1
+          ORDER BY p.created_at DESC
+          LIMIT 80`,
+        [userId],
+      ),
+      getPool().query(
+        `SELECT id, title, body, channel, status, created_at
+           FROM app_notifications
+          WHERE recipient_account_id = $1 OR ($2 <> '' AND recipient_account_id ILIKE $3)
+          ORDER BY created_at DESC
+          LIMIT 120`,
+        [userId, userPhone, safeLikePhone],
+      ),
+      getPool().query(
+        `SELECT id, giver_id, receiver_id, listing_id, order_id, request_id, points, note, created_at
+           FROM karma_events
+          WHERE receiver_id = $1
+          ORDER BY created_at DESC
+          LIMIT 200`,
+        [userId],
+      ),
+      getPool().query(
+        `SELECT id, plan_code, amount_paise, currency, razorpay_order_id, razorpay_payment_id,
+                signature_verified, status, metadata, created_at, updated_at
+           FROM buyer_access_payments
+          WHERE user_id::text = $1
+          ORDER BY created_at DESC
+          LIMIT 120`,
+        [userId],
+      ),
+      getPool().query(
+        `SELECT id, event_type, status, phone_last4, ip_address, metadata, created_at
+           FROM security_audit_events
+          WHERE user_id::text = $1 OR ($2 <> '' AND phone_last4 = RIGHT($2, 4))
+          ORDER BY created_at DESC
+          LIMIT 120`,
+        [userId, userPhone],
+      ),
+      getPool().query(
+        `SELECT id, event_type, status, metadata, created_at
+           FROM security_audit_events
+          WHERE (user_id::text = $1 OR ($2 <> '' AND phone_last4 = RIGHT($2, 4)))
+            AND status IN ('warning', 'error')
+          ORDER BY created_at DESC
+          LIMIT 60`,
+        [userId, userPhone],
+      ),
+      getPool().query(
+        `SELECT n.id, n.user_id, n.note, n.created_at,
+                a.id AS admin_id, a.display_name AS admin_name, a.role AS admin_role
+           FROM admin_user_notes n
+      LEFT JOIN admin_accounts a ON a.id = n.admin_id
+          WHERE n.user_id = $1
+          ORDER BY n.created_at DESC
+          LIMIT 120`,
+        [userId],
+      ),
+      getPool().query(
+        `SELECT * FROM (
+           SELECT 'listing_created' AS event_type, id AS entity_id, status, created_at, jsonb_build_object('title', title) AS payload
+             FROM listings
+            WHERE seller_id = $1 OR COALESCE(metadata->>'ownerMobile', '') = $2
+           UNION ALL
+           SELECT 'request_created' AS event_type, id AS entity_id, status, created_at, jsonb_build_object('listingId', listing_id) AS payload
+             FROM requests
+            WHERE buyer_id = $1
+           UNION ALL
+           SELECT 'order_event' AS event_type, id AS entity_id, status, created_at, jsonb_build_object('productTitle', product_title) AS payload
+             FROM orders
+            WHERE buyer_id::text = $1
+           UNION ALL
+           SELECT 'payment_event' AS event_type, id AS entity_id, status, created_at, jsonb_build_object('amountPaise', amount_paise) AS payload
+             FROM buyer_access_payments
+            WHERE user_id::text = $1
+           UNION ALL
+           SELECT event_type, id AS entity_id, status, created_at, metadata AS payload
+             FROM security_audit_events
+            WHERE user_id::text = $1 OR ($2 <> '' AND phone_last4 = RIGHT($2, 4))
+         ) timeline
+         ORDER BY created_at DESC
+         LIMIT 300`,
+        [userId, userPhone],
+      ),
+    ]);
+
+    const statusRow = statusResult.rows[0] || null;
+    const profileRow = profileResult.rows[0] || null;
+    const loginHistory = loginHistoryResult.rows;
+    const lastLogin = loginHistory.find((entry) => String(entry.event_type || '').toLowerCase().includes('login')) || null;
+    const locationData = profileRow?.location_data || {};
+    const primaryCity = String(locationData?.city || locationData?.locality || '').trim();
+
+    const acceptedRequests = requestsResult.rows.filter((item) => String(item.status || '').toLowerCase() === 'accepted').length;
+    const declinedRequests = requestsResult.rows.filter((item) => String(item.status || '').toLowerCase() === 'declined').length;
+    const collectedRequests = requestsResult.rows.filter((item) => ['completed', 'collected', 'fulfilled'].includes(String(item.status || '').toLowerCase())).length;
+    const totalAmountPaidPaise = paymentsResult.rows
+      .filter((item) => ['captured', 'paid', 'success'].includes(String(item.status || '').toLowerCase()))
+      .reduce((acc, item) => acc + Number(item.amount_paise || 0), 0);
+
+    const paymentStatus = paymentsResult.rows[0]?.status || 'none';
+
+    return {
+      profile: {
+        userId,
+        name: user.name,
+        phone: user.phone,
+        email: null,
+        accountType: user.account_type,
+        signupAt: user.created_at,
+        lastLoginAt: lastLogin?.created_at || null,
+        lastActiveAt: activityTimelineResult.rows[0]?.created_at || user.created_at,
+        sessionDuration: null,
+        city: primaryCity,
+        locality: String(locationData?.locality || '').trim(),
+        locationData,
+        profilePicture: String(
+          locationData?.profileImage
+            || locationData?.profile_image
+            || locationData?.profileImageUrl
+            || locationData?.avatar
+            || '',
+        ),
+        karma: Number(profileRow?.karma || 0),
+        listingsCount: listingsResult.rows.length,
+        productsRequested: requestsResult.rows.length,
+        productsCollected: collectedRequests,
+        purchasePaymentHistoryCount: paymentsResult.rows.length,
+        paymentStatus,
+        totalAmountPaidPaise,
+        accountStatus: statusRow?.status || 'active',
+        statusReason: statusRow?.reason || '',
+        deviceSessionInfo: loginHistory[0]?.metadata || null,
+      },
+      loginHistory,
+      activityTimeline: activityTimelineResult.rows,
+      listings: listingsResult.rows,
+      requests: {
+        rows: requestsResult.rows,
+        acceptedCount: acceptedRequests,
+        declinedCount: declinedRequests,
+        collectedCount: collectedRequests,
+      },
+      orders: ordersResult.rows,
+      favourites: favouritesResult.rows,
+      notifications: notificationsResult.rows,
+      karmaHistory: karmaResult.rows,
+      payments: paymentsResult.rows,
+      reports: reportsResult.rows,
+      supportNotes: notesResult.rows,
+    };
+  }
+
+  router.get('/users', requirePermission('users:read'), async (req, res) => {
+    const { limit, page, offset } = parsePagination(req.query || {}, 25, 100);
+    const searchRaw = String(req.query.search || '').trim();
+    const accountType = String(req.query.accountType || '').trim().toLowerCase();
+    const cityFilter = String(req.query.city || '').trim().toLowerCase();
+    const statusFilter = normalizeUserAdminStatus(req.query.status || '');
+
+    const searchLike = searchRaw ? `%${searchRaw}%` : '';
+    const cityLike = cityFilter ? `%${cityFilter}%` : '';
+
+    const whereClause = `
+      WHERE ($1 = '' OR u.name ILIKE $2 OR u.phone ILIKE $2 OR u.id::text = $1)
+        AND ($3 = '' OR LOWER(COALESCE(u.account_type, 'personal')) = $3)
+        AND ($4 = '' OR LOWER(COALESCE(us.status, 'active')) = $4)
+        AND (
+          $5 = ''
+          OR LOWER(COALESCE(p.location_data->>'city', '')) LIKE $6
+          OR LOWER(COALESCE(p.location_data->>'locality', '')) LIKE $6
+        )
+    `;
+
+    const listResult = await getPool().query(
+      `SELECT
+         u.id::text AS user_id,
+         u.name,
+         u.phone,
+         NULL::text AS email,
+         COALESCE(NULLIF(u.account_type, ''), 'personal') AS account_type,
+         u.created_at,
+         COALESCE(us.status, 'active') AS account_status,
+         us.reason AS status_reason,
+         p.karma,
+         p.location_data,
+         COALESCE(p.location_data->>'city', '') AS city,
+         COALESCE(p.location_data->>'locality', '') AS locality,
+         COALESCE(p.location_data->>'profileImage', p.location_data->>'profile_image', p.location_data->>'profileImageUrl', p.location_data->>'avatar', '') AS profile_picture,
+         COALESCE(lc.listings_count, 0) AS listings_count,
+         COALESCE(rc.requests_count, 0) AS products_requested,
+         COALESCE(rc.collected_count, 0) AS products_collected,
+         COALESCE(pc.payment_count, 0) AS payment_count,
+         COALESCE(pc.total_paid_paise, 0) AS total_amount_paid_paise,
+         COALESCE(pc.last_payment_status, 'none') AS payment_status,
+         login.last_login_at,
+         activity.last_active_at,
+         activity.last_activity_metadata
+       FROM users u
+  LEFT JOIN profiles p ON p.phone = u.phone
+  LEFT JOIN admin_user_status us ON us.user_id = u.id::text
+  LEFT JOIN LATERAL (
+       SELECT COUNT(*)::bigint AS listings_count
+         FROM listings l
+        WHERE l.seller_id = u.id::text OR COALESCE(l.metadata->>'ownerMobile', '') = u.phone
+     ) lc ON true
+  LEFT JOIN LATERAL (
+       SELECT
+         COUNT(*)::bigint AS requests_count,
+         COUNT(*) FILTER (WHERE LOWER(COALESCE(r.status, '')) IN ('completed', 'collected', 'fulfilled'))::bigint AS collected_count
+         FROM requests r
+        WHERE r.buyer_id = u.id::text
+     ) rc ON true
+  LEFT JOIN LATERAL (
+       SELECT
+         COUNT(*)::bigint AS payment_count,
+         COALESCE(SUM(CASE WHEN LOWER(COALESCE(bp.status, '')) IN ('captured', 'paid', 'success') THEN bp.amount_paise ELSE 0 END), 0)::bigint AS total_paid_paise,
+         (ARRAY_AGG(bp.status ORDER BY bp.created_at DESC))[1] AS last_payment_status
+         FROM buyer_access_payments bp
+        WHERE bp.user_id::text = u.id::text
+     ) pc ON true
+  LEFT JOIN LATERAL (
+       SELECT se.created_at AS last_login_at
+         FROM security_audit_events se
+        WHERE se.user_id::text = u.id::text
+           OR (u.phone <> '' AND se.phone_last4 = RIGHT(u.phone, 4))
+        ORDER BY se.created_at DESC
+        LIMIT 1
+     ) login ON true
+  LEFT JOIN LATERAL (
+       SELECT timeline.created_at AS last_active_at, timeline.metadata AS last_activity_metadata
+         FROM (
+           SELECT created_at, metadata FROM security_audit_events se WHERE se.user_id::text = u.id::text
+           UNION ALL
+           SELECT created_at, metadata FROM listings l WHERE l.seller_id = u.id::text OR COALESCE(l.metadata->>'ownerMobile', '') = u.phone
+           UNION ALL
+           SELECT created_at, details AS metadata FROM requests r WHERE r.buyer_id = u.id::text
+           UNION ALL
+           SELECT created_at, metadata FROM buyer_access_payments bp WHERE bp.user_id::text = u.id::text
+         ) timeline
+        ORDER BY timeline.created_at DESC
+        LIMIT 1
+     ) activity ON true
+      ${whereClause}
+      ORDER BY u.created_at DESC
+      LIMIT $7 OFFSET $8`,
+      [searchRaw, searchLike, accountType, statusFilter, cityFilter, cityLike, limit, offset],
+    );
+
+    const countResult = await getPool().query(
+      `SELECT COUNT(*)::bigint AS total
+         FROM users u
+    LEFT JOIN profiles p ON p.phone = u.phone
+    LEFT JOIN admin_user_status us ON us.user_id = u.id::text
+        ${whereClause}`,
+      [searchRaw, searchLike, accountType, statusFilter, cityFilter, cityLike],
+    );
+
+    return res.status(200).json({
+      success: true,
+      rows: listResult.rows.map((row) => ({
+        userId: row.user_id,
+        name: row.name,
+        phone: row.phone,
+        email: row.email,
+        accountType: row.account_type,
+        signupAt: row.created_at,
+        lastLoginAt: row.last_login_at,
+        lastActiveAt: row.last_active_at,
+        sessionDuration: null,
+        city: row.city,
+        locality: row.locality,
+        locationData: row.location_data || {},
+        profilePicture: row.profile_picture || '',
+        karma: Number(row.karma || 0),
+        listingsCount: Number(row.listings_count || 0),
+        productsRequested: Number(row.products_requested || 0),
+        productsCollected: Number(row.products_collected || 0),
+        purchasePaymentHistoryCount: Number(row.payment_count || 0),
+        paymentStatus: row.payment_status || 'none',
+        totalAmountPaidPaise: Number(row.total_amount_paid_paise || 0),
+        accountStatus: row.account_status || 'active',
+        statusReason: row.status_reason || '',
+        deviceSessionInfo: row.last_activity_metadata || null,
+      })),
+      pagination: {
+        page,
+        limit,
+        total: Number(countResult.rows[0]?.total || 0),
+      },
+    });
+  });
+
+  router.get('/users/:userId', requirePermission('users:read'), async (req, res) => {
+    const user = await resolveUserIdentity(req.params.userId);
+    if (!user) return res.status(404).json({ error: 'User not found.' });
+
+    const detail = await buildUserDetailPayload(user);
+    return res.status(200).json({ success: true, ...detail });
+  });
+
+  router.put('/users/:userId/status', sensitiveWriteLimiter, requireSuperAdmin, async (req, res) => {
+    const user = await resolveUserIdentity(req.params.userId);
+    if (!user) return res.status(404).json({ error: 'User not found.' });
+
+    const nextStatus = normalizeUserAdminStatus(req.body?.status || '');
+    const reason = String(req.body?.reason || '').trim().slice(0, 240);
+    if (!nextStatus) {
+      return res.status(400).json({ error: 'Valid status is required (active, suspended, blocked).' });
+    }
+
+    await getPool().query(
+      `INSERT INTO admin_user_status (user_id, status, reason, updated_by, updated_at)
+       VALUES ($1,$2,$3,$4,now())
+       ON CONFLICT (user_id) DO UPDATE SET
+         status = EXCLUDED.status,
+         reason = EXCLUDED.reason,
+         updated_by = EXCLUDED.updated_by,
+         updated_at = now()`,
+      [user.user_id, nextStatus, reason, req.admin.id],
+    );
+
+    await writeAuditLog({
+      adminId: req.admin.id,
+      action: 'admin_user_status_updated',
+      targetType: 'user',
+      targetId: user.user_id,
+      metadata: { status: nextStatus, reason },
+      req,
+    });
+
+    return res.status(200).json({
+      success: true,
+      userId: user.user_id,
+      accountStatus: nextStatus,
+      reason,
+    });
+  });
+
+  router.post('/users/:userId/notes', sensitiveWriteLimiter, requirePermission('users:note'), async (req, res) => {
+    const user = await resolveUserIdentity(req.params.userId);
+    if (!user) return res.status(404).json({ error: 'User not found.' });
+
+    const note = String(req.body?.note || '').trim();
+    if (!note) return res.status(400).json({ error: 'Note is required.' });
+    if (note.length > 2000) return res.status(400).json({ error: 'Note is too long.' });
+
+    const created = await getPool().query(
+      `INSERT INTO admin_user_notes (user_id, admin_id, note)
+       VALUES ($1,$2,$3)
+       RETURNING id, user_id, note, created_at`,
+      [user.user_id, req.admin.id, note],
+    );
+
+    await writeAuditLog({
+      adminId: req.admin.id,
+      action: 'admin_user_note_added',
+      targetType: 'user',
+      targetId: user.user_id,
+      metadata: { noteLength: note.length },
+      req,
+    });
+
+    return res.status(201).json({ success: true, note: created.rows[0] });
+  });
+
+  router.get('/users/:userId/export', requirePermission('users:read'), async (req, res) => {
+    const user = await resolveUserIdentity(req.params.userId);
+    if (!user) return res.status(404).json({ error: 'User not found.' });
+
+    const detail = await buildUserDetailPayload(user);
+    await writeAuditLog({
+      adminId: req.admin.id,
+      action: 'admin_user_exported',
+      targetType: 'user',
+      targetId: user.user_id,
+      metadata: { format: 'json' },
+      req,
+    });
+
+    return res.status(200).json({
+      success: true,
+      exportedAt: new Date().toISOString(),
+      userId: user.user_id,
+      data: detail,
     });
   });
 

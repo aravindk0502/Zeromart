@@ -36,7 +36,7 @@ export default function Root() {
         : normalizedPath === '/admin/login'
           ? <AdminLoginPage navigate={navigate} />
         : normalizedPath.startsWith('/admin')
-          ? <AdminDashboardPage navigate={navigate} />
+          ? <AdminDashboardPage navigate={navigate} path={path} />
         : isStaticRoute
           ? <StaticContentRouter path={path} navigate={navigate} />
           : <App path={path} navigate={navigate} />}
