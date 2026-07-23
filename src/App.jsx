@@ -38,6 +38,7 @@ import {
   clearToken,
   emitNotificationEvent,
   fetchProfile,
+  fetchBuyerAccessStatus,
   fetchOrders,
   fetchListingById,
   fetchNotificationHistory,
@@ -101,6 +102,8 @@ const FCM_TOKEN_STORAGE_KEY = 'drizn-fcm-token';
 const ACTIVE_REQUEST_STATUSES = ['pending', 'accepted', 'awaiting_collection', 'handed_over', 'karma_pending'];
 const REMOTE_SYNC_INTERVAL_MS = 20000;
 const REMOTE_LISTING_SYNC_INTERVAL_MS = 20000;
+const PERSONAL_USER_CACHE_KEY = 'zeromart-user-personal';
+const BUSINESS_USER_CACHE_KEY = 'zeromart-user-business';
 
 const isRequestActiveForLock = (request, now = Date.now()) => {
   const status = String(request?.status || '').toLowerCase();
@@ -728,11 +731,38 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
   useEffect(() => {
     if (!activeBuyer) return;
     const ownedItems = items.filter((item) => isListingOwnedByUser(item, activeBuyer));
-    if (!ownedItems.length) return;
     const nextKarma = ownedItems.reduce((highest, item) => Math.max(highest, Number(item.sellerKarma || 0)), 0);
+    const listed = ownedItems.length;
+    const activeListings = ownedItems.filter((item) => {
+      const status = String(item.status || '').toLowerCase();
+      return !['completed', 'sold', 'sold_out', 'sold-out', 'expired', 'removed', 'hidden', 'inactive', 'deleted'].includes(status);
+    }).length;
+    const accountRequests = getRequests();
+    const collected = accountRequests.filter((request) => (
+      accountKey(request.buyerId) === accountKey(activeAccountId)
+      && ['completed', 'collected', 'handed_over', 'karma_pending'].includes(String(request.status || '').toLowerCase())
+    )).length;
+    const givenAway = accountRequests.filter((request) => (
+      accountKey(request.sellerId) === accountKey(activeAccountId)
+      && ['completed', 'collected', 'handed_over', 'karma_pending'].includes(String(request.status || '').toLowerCase())
+    )).length;
+
     if (businessSession) {
-      if (Number(businessSession.karma || 0) === nextKarma) return;
-      const nextSession = { ...businessSession, karma: nextKarma };
+      if (
+        Number(businessSession.karma || 0) === nextKarma
+        && Number(businessSession.listed || 0) === listed
+        && Number(businessSession.activeListings || 0) === activeListings
+        && Number(businessSession.collected || 0) === collected
+        && Number(businessSession.givenAway || 0) === givenAway
+      ) return;
+      const nextSession = {
+        ...businessSession,
+        karma: nextKarma,
+        listed,
+        activeListings,
+        collected,
+        givenAway,
+      };
       setBusinessSession(nextSession);
       saveBusinessSession(nextSession);
       saveBusinessAccounts([
@@ -741,14 +771,28 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
       ]);
       return;
     }
-    if (Number(user?.karma || 0) === nextKarma) return;
+    if (
+      Number(user?.karma || 0) === nextKarma
+      && Number(user?.listed || 0) === listed
+      && Number(user?.activeListings || 0) === activeListings
+      && Number(user?.collected || 0) === collected
+      && Number(user?.givenAway || 0) === givenAway
+    ) return;
     setUser((current) => {
       if (!current) return current;
-      const nextUser = { ...current, karma: nextKarma };
+      const nextUser = {
+        ...current,
+        karma: nextKarma,
+        listed,
+        activeListings,
+        collected,
+        givenAway,
+      };
       localStorage.setItem('zeromart-user', JSON.stringify(nextUser));
+      localStorage.setItem(PERSONAL_USER_CACHE_KEY, JSON.stringify(nextUser));
       return nextUser;
     });
-  }, [activeBuyer, businessSession, items, user]);
+  }, [activeAccountId, activeBuyer, businessSession, items, user]);
 
   useEffect(() => {
     const fromItems = new Map();
@@ -838,11 +882,11 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
   }, []);
 
   useEffect(() => {
-    const savedUser = localStorage.getItem('zeromart-user');
+    const savedUser = localStorage.getItem(PERSONAL_USER_CACHE_KEY) || localStorage.getItem('zeromart-user');
     if (!savedUser) return;
     try {
       const parsedUser = JSON.parse(savedUser);
-      if (parsedUser && typeof parsedUser === 'object') {
+      if (parsedUser && typeof parsedUser === 'object' && !parsedUser.isBusinessAccount) {
         setUser((current) => ({
           ...parsedUser,
           ...current,
@@ -853,6 +897,7 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
         }));
       }
     } catch {
+      localStorage.removeItem(PERSONAL_USER_CACHE_KEY);
       localStorage.removeItem('zeromart-user');
     }
   }, []);
@@ -898,6 +943,7 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
               : (current.karmaPopupEnabled !== false),
           };
           localStorage.setItem('zeromart-user', JSON.stringify(merged));
+          localStorage.setItem(PERSONAL_USER_CACHE_KEY, JSON.stringify(merged));
           return merged;
         });
       } catch (error) {
@@ -949,13 +995,16 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
             karma: Number(profile.karma ?? profile.karma_points ?? current.karma ?? 0) || 0,
             profileImage: nextImage || current.profileImage || '',
             avatarUrl: nextImage || current.avatarUrl || '',
+            isBuyer: typeof profile.is_buyer === 'boolean' ? profile.is_buyer : Boolean(current.isBuyer),
+            buyerAccessExpiresAt: profile.buyer_access_expires_at || current.buyerAccessExpiresAt || '',
+            buyerAccessActivatedAt: profile.buyer_access_activated_at || current.buyerAccessActivatedAt || '',
           };
           saveBusinessSession(merged);
           saveBusinessAccounts([
             merged,
             ...getBusinessAccounts().filter((entry) => entry.id !== merged.id && entry.mobile !== merged.mobile),
           ]);
-          localStorage.setItem('zeromart-user', JSON.stringify({
+          const businessCache = {
             ...merged,
             isBusinessAccount: true,
             businessId: merged.id,
@@ -963,7 +1012,9 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
             profileId: merged.profileId,
             name: merged.businessName || merged.ownerName || 'Business Store',
             profileImage: merged.profileImage || merged.avatarUrl || '',
-          }));
+          };
+          localStorage.setItem('zeromart-user', JSON.stringify(businessCache));
+          localStorage.setItem(BUSINESS_USER_CACHE_KEY, JSON.stringify(businessCache));
           return merged;
         });
       } catch (error) {
@@ -1471,14 +1522,25 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
     } catch {
       persistedProfile = null;
     }
+    let cachedPersonal = null;
+    try {
+      const parsed = JSON.parse(localStorage.getItem(PERSONAL_USER_CACHE_KEY) || 'null');
+      if (parsed && String(parsed.mobile || '').trim() === String(mobile || '').trim()) {
+        cachedPersonal = parsed;
+      }
+    } catch {
+      cachedPersonal = null;
+    }
     const profileMetadata = getProfileMetadata(persistedProfile || {});
     const resolvedName = getResolvedProfileName(
       persistedProfile || {},
-      serverUser.name && serverUser.name !== 'Unknown' ? serverUser.name : ''
+      serverUser.name && serverUser.name !== 'Unknown'
+        ? serverUser.name
+        : (cachedPersonal?.name || '')
     );
     const resolvedImage = getResolvedProfileImage(
       persistedProfile || {},
-      serverUser.profile_image || serverUser.profile_image_url || serverUser.avatar_url || serverUser.profileImage || ''
+      serverUser.profile_image || serverUser.profile_image_url || serverUser.avatar_url || serverUser.profileImage || cachedPersonal?.profileImage || ''
     );
     const nextUser = {
       userId: nextAccountId,
@@ -1491,7 +1553,7 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
       collected: 0,
       activeListings: 0,
       givenAway: 0,
-      isBuyer: Boolean(serverUser.is_buyer),
+      isBuyer: typeof persistedProfile?.is_buyer === 'boolean' ? persistedProfile.is_buyer : Boolean(serverUser.is_buyer),
       profileImage: resolvedImage,
       bio: persistedProfile?.bio || profileMetadata.bio || serverUser.bio || '',
       locationLink: persistedProfile?.location_link || profileMetadata.locationLink || serverUser.location_link || serverUser.locationLink || '',
@@ -1504,9 +1566,28 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
     };
     setUser(nextUser);
     localStorage.setItem('zeromart-user', JSON.stringify(nextUser));
+    localStorage.setItem(PERSONAL_USER_CACHE_KEY, JSON.stringify(nextUser));
     setShowOtpModal(false);
     setNotice('Welcome! You can list for free and buy anything for ₹0 with a ₹29 yearly platform fee for buyer access.');
     requestPushAccessForAccount(nextAccountId);
+    fetchBuyerAccessStatus()
+      .then((status) => {
+        setUser((current) => {
+          if (!current) return current;
+          const synced = {
+            ...current,
+            isBuyer: Boolean(status?.active || status?.isBuyer || status?.is_buyer || current.isBuyer),
+            buyerAccessExpiresAt: status?.buyerAccessExpiresAt || status?.accessExpiresAt || status?.buyer_access_expires_at || current.buyerAccessExpiresAt || '',
+            buyerAccessActivatedAt: status?.buyerAccessActivatedAt || status?.activatedAt || status?.buyer_access_activated_at || current.buyerAccessActivatedAt || '',
+          };
+          localStorage.setItem('zeromart-user', JSON.stringify(synced));
+          localStorage.setItem(PERSONAL_USER_CACHE_KEY, JSON.stringify(synced));
+          return synced;
+        });
+      })
+      .catch(() => {
+        // Keep login non-blocking when buyer-access status endpoint is unavailable.
+      });
     fetchFavourites()
       .then((rows) => {
         if (!Array.isArray(rows)) return;
@@ -1566,7 +1647,18 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
     setFavorites([]);
     setOrderHistory([]);
     setNotifications([]);
-    localStorage.removeItem('zeromart-user');
+    clearToken('personal');
+    localStorage.removeItem(PERSONAL_USER_CACHE_KEY);
+    const currentUserRaw = localStorage.getItem('zeromart-user');
+    let currentUser = null;
+    try {
+      currentUser = currentUserRaw ? JSON.parse(currentUserRaw) : null;
+    } catch {
+      currentUser = null;
+    }
+    if (!currentUser?.isBusinessAccount) {
+      localStorage.removeItem('zeromart-user');
+    }
     setActiveView('home');
     setNotice('You are logged out. Sign up / Login to request items, list items, and keep your karma.');
   };
@@ -2276,10 +2368,17 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
       return nextFavorites;
     });
     try {
+      let profileImageToPersist = nextUser.profileImage || '';
+      if (profileImageToPersist.startsWith('data:')) {
+        const blob = await fetch(profileImageToPersist).then((response) => response.blob());
+        const imageExt = String(blob.type || 'image/jpeg').split('/')[1] || 'jpg';
+        const file = new File([blob], `profile-${Date.now()}.${imageExt}`, { type: blob.type || 'image/jpeg' });
+        profileImageToPersist = await uploadImage(file);
+      }
       const remoteProfile = await updateProfile({
         ...nextUser,
-        profileImage: nextUser.profileImage || '',
-        profile_image: nextUser.profileImage || '',
+        profileImage: profileImageToPersist,
+        profile_image: profileImageToPersist,
       }, {
         accountType: nextUser.accountType || 'personal',
         phone: nextUser.mobile || '',
@@ -2290,16 +2389,17 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
         || remoteProfile?.avatar_url
         || metadata.profileImage
         || metadata.avatarUrl
-        || nextUser.profileImage
+        || profileImageToPersist
         || '';
-      const remoteName = remoteProfile?.name || remoteProfile?.display_name || metadata.displayName || metadata.fullName || nextUser.name;
+      const remoteName = getResolvedProfileName(remoteProfile || {}, nextUser.name || currentUser.name || '');
+      const resolvedRemoteImage = getResolvedProfileImage(remoteProfile || {}, remoteImage || currentUser.profileImage || '');
       setUser((current) => {
         if (!current) return current;
         const merged = {
           ...current,
           ...nextUser,
           name: remoteName || current.name,
-          profileImage: remoteImage,
+          profileImage: resolvedRemoteImage,
           bio: remoteProfile?.bio || metadata.bio || current.bio || '',
           locationLink: remoteProfile?.location_link || metadata.locationLink || current.locationLink || '',
           websiteLink: remoteProfile?.website_link || metadata.websiteLink || current.websiteLink || '',
@@ -2307,14 +2407,18 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
           accountType: remoteProfile?.account_type || metadata.accountType || current.accountType || 'personal',
         };
         localStorage.setItem('zeromart-user', JSON.stringify(merged));
+        localStorage.setItem(PERSONAL_USER_CACHE_KEY, JSON.stringify(merged));
         return merged;
       });
       invalidateListingCache();
-      const listings = await syncListingsFromBackend({ force: true }).catch(() => null);
-      if (Array.isArray(listings)) {
-        setItems(normalizeListingsForMarketplace(listings));
-      }
       setNotice('Profile updated successfully');
+      syncListingsFromBackend({ force: true })
+        .then((listings) => {
+          if (Array.isArray(listings)) setItems(normalizeListingsForMarketplace(listings));
+        })
+        .catch(() => {
+          // Keep profile save fast even when listing refresh is delayed.
+        });
       setTimeout(() => { setNotice(''); }, 4000);
     } catch {
       setNotice('Profile update failed. Please try again.');
@@ -2535,18 +2639,71 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
         nextBusinessSession,
         ...getBusinessAccounts().filter((account) => account.id !== nextBusinessSession.id),
       ]);
+      localStorage.setItem(BUSINESS_USER_CACHE_KEY, JSON.stringify({
+        ...nextBusinessSession,
+        isBusinessAccount: true,
+        businessId: nextBusinessSession.id,
+        name: nextBusinessSession.businessName || nextBusinessSession.ownerName || 'Business Store',
+        profileImage: nextBusinessSession.profileImage || nextBusinessSession.avatarUrl || '',
+      }));
     } else {
-      setUser((prev) => (prev ? {
-        ...prev,
-        isBuyer: true,
-        buyerAccessExpiresAt,
-        buyerAccessActivatedAt,
-      } : prev));
+      setUser((prev) => {
+        if (!prev) return prev;
+        const merged = {
+          ...prev,
+          isBuyer: true,
+          buyerAccessExpiresAt,
+          buyerAccessActivatedAt,
+        };
+        localStorage.setItem('zeromart-user', JSON.stringify(merged));
+        localStorage.setItem(PERSONAL_USER_CACHE_KEY, JSON.stringify(merged));
+        return merged;
+      });
     }
 
     setShowBuyerPaySheet(false);
     setNotice('Buyer access activated for 1 year.');
     setShowBuyerAccessSuccessCard(true);
+
+    fetchBuyerAccessStatus()
+      .then((status) => {
+        const nextIsBuyer = Boolean(status?.active || status?.isBuyer || status?.is_buyer || true);
+        const nextExpiresAt = status?.buyerAccessExpiresAt || status?.accessExpiresAt || status?.buyer_access_expires_at || buyerAccessExpiresAt;
+        const nextActivatedAt = status?.buyerAccessActivatedAt || status?.activatedAt || status?.buyer_access_activated_at || buyerAccessActivatedAt;
+        if (businessSession) {
+          setBusinessSession((current) => {
+            if (!current) return current;
+            const merged = {
+              ...current,
+              isBuyer: nextIsBuyer,
+              buyerAccessExpiresAt: nextExpiresAt,
+              buyerAccessActivatedAt: nextActivatedAt,
+            };
+            saveBusinessSession(merged);
+            saveBusinessAccounts([
+              merged,
+              ...getBusinessAccounts().filter((account) => account.id !== merged.id),
+            ]);
+            return merged;
+          });
+          return;
+        }
+        setUser((current) => {
+          if (!current) return current;
+          const merged = {
+            ...current,
+            isBuyer: nextIsBuyer,
+            buyerAccessExpiresAt: nextExpiresAt,
+            buyerAccessActivatedAt: nextActivatedAt,
+          };
+          localStorage.setItem('zeromart-user', JSON.stringify(merged));
+          localStorage.setItem(PERSONAL_USER_CACHE_KEY, JSON.stringify(merged));
+          return merged;
+        });
+      })
+      .catch(() => {
+        // Keep successful unlock flow non-blocking when status refresh is unavailable.
+      });
 
     const pendingRequest = buyerAccessPendingRequestRef.current;
     if (pendingRequest) {
@@ -4118,7 +4275,17 @@ export default function App({ path = '/', navigate = (nextPath) => { window.loca
         open={showBusinessAuth}
         onClose={() => setShowBusinessAuth(false)}
         onSuccess={(account) => {
-          localStorage.removeItem('zeromart-user');
+          const businessSnapshot = {
+            ...account,
+            isBusinessAccount: true,
+            businessId: account?.id,
+            userId: account?.userId || account?.id,
+            profileId: account?.profileId || account?.id,
+            name: account?.businessName || account?.ownerName || 'Business Store',
+            profileImage: account?.profileImage || account?.avatarUrl || '',
+          };
+          localStorage.setItem('zeromart-user', JSON.stringify(businessSnapshot));
+          localStorage.setItem(BUSINESS_USER_CACHE_KEY, JSON.stringify(businessSnapshot));
           setUser(null);
           setBusinessSession(account);
           setShowBusinessAuth(false);

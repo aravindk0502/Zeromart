@@ -72,7 +72,10 @@ export default function PhoneChangeModal({
     setNotice('');
     try {
       const result = await confirmPhoneChange(phoneDigits, otpValue);
-      if (result?.token) setToken(result.token);
+      if (result?.token) {
+        const accountType = result?.user?.account_type || result?.user?.accountType || 'personal';
+        setToken(result.token, accountType);
+      }
       onSuccess?.(result);
       setStep('phone');
       setNewPhone('');

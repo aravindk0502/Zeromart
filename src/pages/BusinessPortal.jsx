@@ -155,6 +155,9 @@ export default function BusinessPortal({ path, navigate }) {
           coverImage: profile.cover_image_url || metadata.coverImage || account.coverImage || '',
           verified: profile.verified ?? metadata.verified ?? account.verified,
           karma: Number(profile.karma ?? profile.karma_points ?? account.karma ?? 0) || 0,
+          isBuyer: typeof profile.is_buyer === 'boolean' ? profile.is_buyer : Boolean(account.isBuyer),
+          buyerAccessExpiresAt: profile.buyer_access_expires_at || account.buyerAccessExpiresAt || '',
+          buyerAccessActivatedAt: profile.buyer_access_activated_at || account.buyerAccessActivatedAt || '',
           karmaPopupEnabled: profile.karma_popup_enabled ?? metadata.karmaPopupEnabled ?? account.karmaPopupEnabled ?? true,
           notificationPreferences: profile.notification_preferences || metadata.notificationPreferences || account.notificationPreferences || {},
         };
@@ -408,8 +411,29 @@ export default function BusinessPortal({ path, navigate }) {
   };
   const logout = () => {
     clearBusinessSession();
-    clearToken();
-    localStorage.removeItem('zeromart-user');
+    clearToken('business');
+    const currentUserRaw = localStorage.getItem('zeromart-user');
+    const cachedPersonalRaw = localStorage.getItem('zeromart-user-personal');
+    let currentUser = null;
+    let cachedPersonal = null;
+    try {
+      currentUser = currentUserRaw ? JSON.parse(currentUserRaw) : null;
+    } catch {
+      currentUser = null;
+    }
+    try {
+      cachedPersonal = cachedPersonalRaw ? JSON.parse(cachedPersonalRaw) : null;
+    } catch {
+      cachedPersonal = null;
+    }
+    if (currentUser?.isBusinessAccount) {
+      if (cachedPersonal && typeof cachedPersonal === 'object') {
+        localStorage.setItem('zeromart-user', JSON.stringify(cachedPersonal));
+      } else {
+        localStorage.removeItem('zeromart-user');
+      }
+    }
+    localStorage.removeItem('zeromart-user-business');
     setAccount(null);
     navigate('/');
   };
@@ -418,6 +442,17 @@ export default function BusinessPortal({ path, navigate }) {
     saveBusinessSession(nextAccount);
     const accounts = getBusinessAccounts();
     saveBusinessAccounts([nextAccount, ...accounts.filter((entry) => entry.id !== nextAccount.id)]);
+    const businessSnapshot = {
+      ...nextAccount,
+      isBusinessAccount: true,
+      businessId: nextAccount.id,
+      userId: nextAccount.userId || nextAccount.id,
+      profileId: nextAccount.profileId || nextAccount.id,
+      name: nextAccount.businessName || nextAccount.ownerName || 'Business Store',
+      profileImage: nextAccount.profileImage || nextAccount.avatarUrl || '',
+    };
+    localStorage.setItem('zeromart-user-business', JSON.stringify(businessSnapshot));
+    localStorage.setItem('zeromart-user', JSON.stringify(businessSnapshot));
     syncBusinessLiveListings(applyExpiryRules(getBusinessProducts(), getBusinessRules()));
   };
 
@@ -491,6 +526,7 @@ export default function BusinessPortal({ path, navigate }) {
               <div className="min-w-0"><p className="truncate text-xs font-bold uppercase tracking-[0.14em] text-emerald-700">Business console</p><h1 className="truncate text-lg font-extrabold">{titleFor(page)}</h1></div>
             </div>
             <div className="flex items-center gap-2">
+              <button type="button" onClick={logout} className="rounded-full border border-rose-100 bg-rose-50 p-2.5 text-rose-700 lg:hidden" aria-label="Logout business account"><LogOut size={18} /></button>
               <button type="button" onClick={() => navigate('/business/profile')} className="rounded-full border border-emerald-100 bg-emerald-50 p-2.5 text-emerald-700 lg:hidden" aria-label="Open Business Profile"><UserRound size={18} /></button>
               <div className="flex items-center gap-2 rounded-full border border-emerald-100 bg-emerald-50 px-3 py-2"><ShieldCheck size={16} className="text-emerald-600" /><span className="hidden text-sm font-bold sm:inline">Verified</span><span className="rounded-full bg-white px-2 py-1 text-xs font-bold text-emerald-700">{account.karma} karma</span></div>
             </div>
@@ -1021,20 +1057,24 @@ function BusinessProfile({ account, updateAccount }) {
     setProfileError('');
     setProfileNotice('');
     try {
-      let profileImageUrl = form.profileImage || form.avatarUrl || '';
-      if (profileImageUrl.startsWith('data:')) {
-        const blob = await fetch(profileImageUrl).then((response) => response.blob());
-        const imageExt = String(blob.type || 'image/jpeg').split('/')[1] || 'jpg';
-        const file = new File([blob], `business-profile-${Date.now()}.${imageExt}`, { type: blob.type || 'image/jpeg' });
-        profileImageUrl = await uploadImage(file);
-      }
-      let coverImageUrl = form.coverImage || '';
-      if (coverImageUrl.startsWith('data:')) {
-        const blob = await fetch(coverImageUrl).then((response) => response.blob());
-        const imageExt = String(blob.type || 'image/jpeg').split('/')[1] || 'jpg';
-        const file = new File([blob], `business-cover-${Date.now()}.${imageExt}`, { type: blob.type || 'image/jpeg' });
-        coverImageUrl = await uploadImage(file);
-      }
+      const profileImageInput = form.profileImage || form.avatarUrl || '';
+      const coverImageInput = form.coverImage || '';
+      const [profileImageUrl, coverImageUrl] = await Promise.all([
+        (async () => {
+          if (!profileImageInput.startsWith('data:')) return profileImageInput;
+          const blob = await fetch(profileImageInput).then((response) => response.blob());
+          const imageExt = String(blob.type || 'image/jpeg').split('/')[1] || 'jpg';
+          const file = new File([blob], `business-profile-${Date.now()}.${imageExt}`, { type: blob.type || 'image/jpeg' });
+          return uploadImage(file);
+        })(),
+        (async () => {
+          if (!coverImageInput.startsWith('data:')) return coverImageInput;
+          const blob = await fetch(coverImageInput).then((response) => response.blob());
+          const imageExt = String(blob.type || 'image/jpeg').split('/')[1] || 'jpg';
+          const file = new File([blob], `business-cover-${Date.now()}.${imageExt}`, { type: blob.type || 'image/jpeg' });
+          return uploadImage(file);
+        })(),
+      ]);
 
       const nextAccount = {
         ...form,

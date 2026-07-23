@@ -56,7 +56,7 @@ export default function BusinessAuthModal({ open = true, onClose, onSuccess, emb
       if (!authResult?.token) {
         throw new Error('Login failed. Token missing in verification response.');
       }
-      setToken(authResult.token);
+      setToken(authResult.token, 'business');
 
       const accounts = getBusinessAccounts();
       const existing = accounts.find((entry) => entry.mobile === form.mobile);
@@ -129,7 +129,7 @@ export default function BusinessAuthModal({ open = true, onClose, onSuccess, emb
 
       saveBusinessAccounts([account, ...accounts.filter((entry) => entry.mobile !== form.mobile)]);
       saveBusinessSession(account);
-      localStorage.setItem('zeromart-user', JSON.stringify({
+      const persistedBusinessUser = {
         ...authUser,
         ...account,
         isBusinessAccount: true,
@@ -138,7 +138,9 @@ export default function BusinessAuthModal({ open = true, onClose, onSuccess, emb
         profileId: account.profileId,
         name: account.businessName || account.ownerName || authUser?.name || 'Business Store',
         profileImage: account.profileImage || account.avatarUrl || '',
-      }));
+      };
+      localStorage.setItem('zeromart-user', JSON.stringify(persistedBusinessUser));
+      localStorage.setItem('zeromart-user-business', JSON.stringify(persistedBusinessUser));
 
       onSuccess?.(account);
     } catch (nextError) {

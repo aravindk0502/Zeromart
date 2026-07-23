@@ -16,6 +16,12 @@ const PROD_PAYMENT_API_FALLBACK = 'https://web-production-74e61.up.railway.app';
 const BUYER_ACCESS_CREATE_ORDER_TIMEOUT_MS = 15000;
 const OTP_REQUEST_TIMEOUT_MS = 30000;
 const AUTH_REQUEST_MAX_ATTEMPTS = 2;
+const TOKEN_KEYS = {
+  legacy: 'zm_token',
+  personal: 'zm_token_personal',
+  business: 'zm_token_business',
+};
+const ACTIVE_ACCOUNT_TYPE_KEY = 'zm_active_account_type';
 
 const normalizeAuthAccountType = (value = '') => {
   const type = String(value || '').trim().toLowerCase();
@@ -35,13 +41,57 @@ const buildProfileContextHeaders = (options = {}) => {
 
 const apiUrl = (path, base = BASE) => `${String(base || '').replace(/\/$/, '')}${path}`;
 
-function getToken() { return localStorage.getItem('zm_token'); }
-export function setToken(t) { localStorage.setItem('zm_token', t); }
-export function clearToken() { localStorage.removeItem('zm_token'); }
-export function isLoggedIn() { return !!getToken(); }
+const getActiveAccountType = () => normalizeAuthAccountType(localStorage.getItem(ACTIVE_ACCOUNT_TYPE_KEY) || 'personal');
 
-function authHeaders() {
-  const t = getToken();
+function readTokenByType(accountType = 'personal') {
+  const normalized = normalizeAuthAccountType(accountType);
+  return localStorage.getItem(TOKEN_KEYS[normalized]);
+}
+
+function getToken(accountType = '') {
+  const requestedType = String(accountType || '').trim();
+  if (requestedType) return readTokenByType(requestedType);
+  const activeType = getActiveAccountType();
+  return readTokenByType(activeType)
+    || readTokenByType(activeType === 'business' ? 'personal' : 'business')
+    || localStorage.getItem(TOKEN_KEYS.legacy);
+}
+
+export function setToken(token, accountType = 'personal') {
+  const normalized = normalizeAuthAccountType(accountType);
+  localStorage.setItem(TOKEN_KEYS[normalized], token);
+  localStorage.setItem(TOKEN_KEYS.legacy, token);
+  localStorage.setItem(ACTIVE_ACCOUNT_TYPE_KEY, normalized);
+}
+
+export function clearToken(accountType = '') {
+  const normalized = String(accountType || '').trim();
+  if (!normalized) {
+    localStorage.removeItem(TOKEN_KEYS.legacy);
+    localStorage.removeItem(TOKEN_KEYS.personal);
+    localStorage.removeItem(TOKEN_KEYS.business);
+    localStorage.removeItem(ACTIVE_ACCOUNT_TYPE_KEY);
+    return;
+  }
+
+  const scopedType = normalizeAuthAccountType(normalized);
+  localStorage.removeItem(TOKEN_KEYS[scopedType]);
+  const fallbackType = scopedType === 'business' ? 'personal' : 'business';
+  const fallbackToken = localStorage.getItem(TOKEN_KEYS[fallbackType]);
+  if (fallbackToken) {
+    localStorage.setItem(TOKEN_KEYS.legacy, fallbackToken);
+    localStorage.setItem(ACTIVE_ACCOUNT_TYPE_KEY, fallbackType);
+  } else {
+    localStorage.removeItem(TOKEN_KEYS.legacy);
+    localStorage.removeItem(ACTIVE_ACCOUNT_TYPE_KEY);
+  }
+}
+
+export function isLoggedIn(accountType = '') { return !!getToken(accountType); }
+
+function authHeaders(contextHeaders = {}) {
+  const requestedType = contextHeaders['x-account-type'] || contextHeaders['X-Account-Type'] || '';
+  const t = getToken(requestedType);
   return t ? { Authorization: `Bearer ${t}` } : {};
 }
 
@@ -154,7 +204,7 @@ async function requestJson(path, options = {}) {
         headers: {
           ...(body !== undefined ? { 'Content-Type': 'application/json' } : {}),
           ...(isGet ? { 'Cache-Control': 'no-store', Pragma: 'no-cache' } : {}),
-          ...(auth ? authHeaders() : {}),
+          ...(auth ? authHeaders(headers) : {}),
           ...headers,
         },
         cache: isGet ? 'no-store' : 'default',

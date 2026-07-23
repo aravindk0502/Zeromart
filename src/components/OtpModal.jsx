@@ -65,7 +65,7 @@ export default function OtpModal({ onClose, onVerify }) {
       if (!data?.token) {
         throw new Error('Login did not return a session token.');
       }
-      setToken(data.token);
+      setToken(data.token, 'personal');
       onVerify({ mobile, token: data.token, user: data.user || null });
     } catch (nextError) {
       setError(nextError?.message || 'Could not verify OTP. Please try again.');
