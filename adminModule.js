@@ -1101,10 +1101,22 @@ export function registerAdminModule({ app, getPool, isDbEnabled, createRateLimit
         [fromIso, toIso],
       ),
       getPool().query(
-        `SELECT GREATEST(
-           (SELECT COUNT(*)::bigint FROM users WHERE LOWER(COALESCE(account_type, '')) = 'business'),
-           (SELECT COUNT(*)::bigint FROM profiles WHERE LOWER(COALESCE(account_type, '')) IN ('business', 'store'))
-         ) AS count`,
+        `WITH listing_refs AS (
+          SELECT DISTINCT COALESCE(NULLIF(l.business_id, ''), NULLIF(l.seller_id, '')) AS business_ref,
+                    REGEXP_REPLACE(COALESCE(l.metadata->>'ownerMobile', ''), '\\D', '', 'g') AS owner_phone
+           FROM listings l
+          WHERE LOWER(COALESCE(l.seller_type, '')) = 'business'
+            OR l.business_id IS NOT NULL
+            OR l.store_name IS NOT NULL
+        )
+        SELECT COUNT(DISTINCT u.id)::bigint AS count
+          FROM users u
+      LEFT JOIN listing_refs lr
+           ON lr.business_ref = u.id::text
+           OR (lr.owner_phone <> '' AND lr.owner_phone = REGEXP_REPLACE(COALESCE(u.phone, ''), '\\D', '', 'g'))
+         WHERE LOWER(COALESCE(u.account_type, '')) = 'business'
+           OR lr.business_ref IS NOT NULL
+           OR lr.owner_phone IS NOT NULL`,
       ),
       getPool().query('SELECT COUNT(*)::bigint AS count FROM listings'),
       getPool().query(
