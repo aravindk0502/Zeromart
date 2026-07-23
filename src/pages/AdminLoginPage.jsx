@@ -21,7 +21,7 @@ const normalizePhone = (value = '') => String(value || '').replace(/\D/g, '').sl
 
 async function requestJson(path, options = {}) {
   const base = apiBase();
-  const response = await fetch(`${base}${path}`, {
+  const buildRequestOptions = () => ({
     method: options.method || 'GET',
     headers: {
       ...(options.body ? { 'Content-Type': 'application/json' } : {}),
@@ -29,6 +29,25 @@ async function requestJson(path, options = {}) {
     },
     ...(options.body ? { body: JSON.stringify(options.body) } : {}),
   });
+
+  let response;
+  try {
+    response = await fetch(`${base}${path}`, buildRequestOptions());
+  } catch (networkError) {
+    if (base !== 'https://www.drizn.com') {
+      try {
+        response = await fetch(`https://www.drizn.com${path}`, buildRequestOptions());
+      } catch {
+        const fallbackError = new Error('Network error while contacting admin API. Open https://www.drizn.com/admin/login and retry.');
+        fallbackError.status = 0;
+        throw fallbackError;
+      }
+    } else {
+      const fallbackError = new Error('Network error while contacting admin API. Open https://www.drizn.com/admin/login and retry.');
+      fallbackError.status = 0;
+      throw fallbackError;
+    }
+  }
 
   const raw = await response.text();
   let data = {};
