@@ -1782,23 +1782,52 @@ export function registerAdminModule({ app, getPool, isDbEnabled, createRateLimit
     const searchLike = searchRaw ? `%${searchRaw}%` : '';
     const cityLike = cityRaw ? `%${cityRaw}%` : '';
     const baseRowsResult = await getPool().query(
-      `WITH listing_stats AS (
+      `WITH listing_raw AS (
          SELECT
            COALESCE(NULLIF(l.business_id, ''), NULLIF(l.seller_id, '')) AS business_ref,
-           (ARRAY_AGG(COALESCE(l.store_name, l.seller_name) ORDER BY l.created_at DESC))[1] AS store_name,
-           (ARRAY_AGG(COALESCE(l.city, '') ORDER BY l.created_at DESC))[1] AS city,
-           (ARRAY_AGG(COALESCE(l.area, '') ORDER BY l.created_at DESC))[1] AS locality,
-           COUNT(*)::bigint AS total_products_listed,
-           COUNT(*) FILTER (WHERE LOWER(COALESCE(l.status, 'active')) = 'active')::bigint AS active_products,
-           COUNT(*) FILTER (
-             WHERE l.expiry_date IS NOT NULL
-               AND l.expiry_date >= CURRENT_DATE
-               AND l.expiry_date <= (CURRENT_DATE + interval '3 days')
-           )::bigint AS near_expiry_products
+           REGEXP_REPLACE(COALESCE(l.metadata->>'ownerMobile', ''), '\\D', '', 'g') AS owner_phone,
+           COALESCE(l.store_name, l.seller_name) AS store_name,
+           COALESCE(l.city, '') AS city,
+           COALESCE(l.area, '') AS locality,
+           l.created_at,
+           l.expiry_date,
+           COALESCE(l.status, 'active') AS status
          FROM listings l
-         WHERE (LOWER(COALESCE(l.seller_type, '')) = 'business' OR l.business_id IS NOT NULL OR l.store_name IS NOT NULL)
-           AND COALESCE(NULLIF(l.business_id, ''), NULLIF(l.seller_id, '')) IS NOT NULL
-         GROUP BY 1
+         WHERE LOWER(COALESCE(l.seller_type, '')) = 'business' OR l.business_id IS NOT NULL OR l.store_name IS NOT NULL
+       ),
+       listing_stats_by_id AS (
+         SELECT
+           business_ref,
+           (ARRAY_AGG(store_name ORDER BY created_at DESC))[1] AS store_name,
+           (ARRAY_AGG(city ORDER BY created_at DESC))[1] AS city,
+           (ARRAY_AGG(locality ORDER BY created_at DESC))[1] AS locality,
+           COUNT(*)::bigint AS total_products_listed,
+           COUNT(*) FILTER (WHERE LOWER(status) = 'active')::bigint AS active_products,
+           COUNT(*) FILTER (
+             WHERE expiry_date IS NOT NULL
+               AND expiry_date >= CURRENT_DATE
+               AND expiry_date <= (CURRENT_DATE + interval '3 days')
+           )::bigint AS near_expiry_products
+         FROM listing_raw
+         WHERE business_ref IS NOT NULL
+         GROUP BY business_ref
+       ),
+       listing_stats_by_phone AS (
+         SELECT
+           owner_phone,
+           (ARRAY_AGG(store_name ORDER BY created_at DESC))[1] AS store_name,
+           (ARRAY_AGG(city ORDER BY created_at DESC))[1] AS city,
+           (ARRAY_AGG(locality ORDER BY created_at DESC))[1] AS locality,
+           COUNT(*)::bigint AS total_products_listed,
+           COUNT(*) FILTER (WHERE LOWER(status) = 'active')::bigint AS active_products,
+           COUNT(*) FILTER (
+             WHERE expiry_date IS NOT NULL
+               AND expiry_date >= CURRENT_DATE
+               AND expiry_date <= (CURRENT_DATE + interval '3 days')
+           )::bigint AS near_expiry_products
+         FROM listing_raw
+         WHERE business_ref IS NULL AND owner_phone <> ''
+         GROUP BY owner_phone
        )
        SELECT
          u.id::text AS business_id,
@@ -1806,30 +1835,31 @@ export function registerAdminModule({ app, getPool, isDbEnabled, createRateLimit
          u.phone,
          NULL::text AS email,
          u.created_at,
-         COALESCE(ls.store_name, p.name, u.name, 'Business Store') AS store_name,
+         COALESCE(lsid.store_name, lsph.store_name, p.name, u.name, 'Business Store') AS store_name,
          COALESCE(p.location_data->>'address', p.location_data->>'street', '') AS address,
-         COALESCE(p.location_data->>'city', ls.city, '') AS city,
-         COALESCE(p.location_data->>'locality', ls.locality, '') AS locality,
+         COALESCE(p.location_data->>'city', lsid.city, lsph.city, '') AS city,
+         COALESCE(p.location_data->>'locality', lsid.locality, lsph.locality, '') AS locality,
          COALESCE(bs.verification_status, 'unverified') AS verification_status,
          COALESCE(bs.status, 'active') AS account_status,
          bs.reason AS status_reason,
          COALESCE(p.karma, 0) AS store_karma,
-         COALESCE(ls.total_products_listed, 0) AS total_products_listed,
-         COALESCE(ls.active_products, 0) AS active_products,
-         COALESCE(ls.near_expiry_products, 0) AS near_expiry_products,
+         COALESCE(lsid.total_products_listed, lsph.total_products_listed, 0) AS total_products_listed,
+         COALESCE(lsid.active_products, lsph.active_products, 0) AS active_products,
+         COALESCE(lsid.near_expiry_products, lsph.near_expiry_products, 0) AS near_expiry_products,
          COALESCE(p.location_data->>'storeLogo', p.location_data->>'storeImage', p.location_data->>'profileImage', p.location_data->>'profile_image', p.location_data->>'profileImageUrl', '') AS logo_profile_image
        FROM users u
   LEFT JOIN profiles p ON p.phone = u.phone
   LEFT JOIN admin_business_status bs ON bs.business_id = u.id::text
-  LEFT JOIN listing_stats ls ON ls.business_ref = u.id::text
-      WHERE (LOWER(COALESCE(u.account_type, '')) = 'business' OR ls.business_ref IS NOT NULL)
-        AND ($1 = '' OR u.name ILIKE $2 OR u.phone ILIKE $2 OR u.id::text = $1 OR COALESCE(ls.store_name, '') ILIKE $2)
+  LEFT JOIN listing_stats_by_id lsid ON lsid.business_ref = u.id::text
+  LEFT JOIN listing_stats_by_phone lsph ON lsph.owner_phone = REGEXP_REPLACE(COALESCE(u.phone, ''), '\\D', '', 'g')
+      WHERE (LOWER(COALESCE(u.account_type, '')) = 'business' OR lsid.business_ref IS NOT NULL OR lsph.owner_phone IS NOT NULL)
+        AND ($1 = '' OR u.name ILIKE $2 OR u.phone ILIKE $2 OR u.id::text = $1 OR COALESCE(lsid.store_name, lsph.store_name, '') ILIKE $2)
         AND ($3 = '' OR LOWER(COALESCE(bs.status, 'active')) = $3)
         AND ($4 = '' OR LOWER(COALESCE(bs.verification_status, 'unverified')) = $4)
         AND (
           $5 = ''
-          OR LOWER(COALESCE(p.location_data->>'city', ls.city, '')) LIKE $6
-          OR LOWER(COALESCE(p.location_data->>'locality', ls.locality, '')) LIKE $6
+          OR LOWER(COALESCE(p.location_data->>'city', lsid.city, lsph.city, '')) LIKE $6
+          OR LOWER(COALESCE(p.location_data->>'locality', lsid.locality, lsph.locality, '')) LIKE $6
         )
       ORDER BY u.created_at DESC
       LIMIT $7 OFFSET $8`,
@@ -1837,20 +1867,34 @@ export function registerAdminModule({ app, getPool, isDbEnabled, createRateLimit
     );
 
     const countResult = await getPool().query(
-      `WITH listing_stats AS (
-         SELECT COALESCE(NULLIF(l.business_id, ''), NULLIF(l.seller_id, '')) AS business_ref
-           FROM listings l
-          WHERE (LOWER(COALESCE(l.seller_type, '')) = 'business' OR l.business_id IS NOT NULL OR l.store_name IS NOT NULL)
-            AND COALESCE(NULLIF(l.business_id, ''), NULLIF(l.seller_id, '')) IS NOT NULL
-          GROUP BY 1
+      `WITH listing_raw AS (
+         SELECT
+           COALESCE(NULLIF(l.business_id, ''), NULLIF(l.seller_id, '')) AS business_ref,
+           REGEXP_REPLACE(COALESCE(l.metadata->>'ownerMobile', ''), '\\D', '', 'g') AS owner_phone,
+           COALESCE(l.store_name, l.seller_name) AS store_name
+         FROM listings l
+         WHERE LOWER(COALESCE(l.seller_type, '')) = 'business' OR l.business_id IS NOT NULL OR l.store_name IS NOT NULL
+       ),
+       listing_stats_by_id AS (
+         SELECT business_ref, (ARRAY_AGG(store_name))[1] AS store_name
+         FROM listing_raw
+         WHERE business_ref IS NOT NULL
+         GROUP BY business_ref
+       ),
+       listing_stats_by_phone AS (
+         SELECT owner_phone, (ARRAY_AGG(store_name))[1] AS store_name
+         FROM listing_raw
+         WHERE business_ref IS NULL AND owner_phone <> ''
+         GROUP BY owner_phone
        )
        SELECT COUNT(*)::bigint AS total
          FROM users u
     LEFT JOIN profiles p ON p.phone = u.phone
     LEFT JOIN admin_business_status bs ON bs.business_id = u.id::text
-    LEFT JOIN listing_stats ls ON ls.business_ref = u.id::text
-        WHERE (LOWER(COALESCE(u.account_type, '')) = 'business' OR ls.business_ref IS NOT NULL)
-          AND ($1 = '' OR u.name ILIKE $2 OR u.phone ILIKE $2 OR u.id::text = $1 OR COALESCE(ls.business_ref, '') ILIKE $2)
+    LEFT JOIN listing_stats_by_id lsid ON lsid.business_ref = u.id::text
+    LEFT JOIN listing_stats_by_phone lsph ON lsph.owner_phone = REGEXP_REPLACE(COALESCE(u.phone, ''), '\\D', '', 'g')
+        WHERE (LOWER(COALESCE(u.account_type, '')) = 'business' OR lsid.business_ref IS NOT NULL OR lsph.owner_phone IS NOT NULL)
+          AND ($1 = '' OR u.name ILIKE $2 OR u.phone ILIKE $2 OR u.id::text = $1 OR COALESCE(lsid.store_name, lsph.store_name, '') ILIKE $2)
           AND ($3 = '' OR LOWER(COALESCE(bs.status, 'active')) = $3)
           AND ($4 = '' OR LOWER(COALESCE(bs.verification_status, 'unverified')) = $4)
           AND (
