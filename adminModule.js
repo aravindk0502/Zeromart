@@ -247,6 +247,7 @@ function normalizeBusinessAdminStatus(input = '') {
 
 export function registerAdminModule({ app, getPool, isDbEnabled, createRateLimiter, getClientIp }) {
   const router = express.Router();
+  router.use(express.json({ limit: '256kb' }));
 
   const loginLimiter = createRateLimiter({
     windowMs: ADMIN_LOGIN_WINDOW_MS,
