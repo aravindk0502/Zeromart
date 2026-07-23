@@ -7,7 +7,13 @@ const ADMIN_SESSION_KEY = 'drizn_admin_session';
 const apiBase = () => {
   const fromEnv = String(import.meta.env.VITE_API_URL || '').trim().replace(/\/$/, '');
   if (fromEnv) return fromEnv;
-  if (typeof window !== 'undefined' && window.location?.origin) return window.location.origin;
+  if (typeof window !== 'undefined' && window.location?.origin) {
+    const host = String(window.location.hostname || '').toLowerCase();
+    if (host === '127.0.0.1' || host === 'localhost') {
+      return 'https://www.drizn.com';
+    }
+    return window.location.origin;
+  }
   return '';
 };
 
@@ -65,6 +71,12 @@ export default function AdminLoginPage({ navigate = null }) {
     }
     try {
       const result = await requestJson('/api/admin/auth/me', { token });
+      if (!result?.authenticated || !result?.admin) {
+        localStorage.removeItem(ADMIN_TOKEN_KEY);
+        localStorage.removeItem(ADMIN_SESSION_KEY);
+        setSession(null);
+        return;
+      }
       const nextSession = {
         token,
         admin: result?.admin || null,

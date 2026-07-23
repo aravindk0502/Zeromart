@@ -414,6 +414,43 @@ export function registerAdminModule({ app, getPool, isDbEnabled, createRateLimit
     return next();
   }
 
+  async function getAdminFromToken(token = '', { updateLastSeen = false } = {}) {
+    if (!isDbEnabled() || !getPool()) return null;
+    const normalizedToken = String(token || '').trim();
+    if (!normalizedToken) return null;
+
+    const tokenHash = hashSessionToken(normalizedToken);
+    const sessionResult = await getPool().query(
+      `SELECT s.id, s.admin_id,
+              a.phone, a.normalized_phone, a.display_name, a.role, a.permissions
+         FROM admin_sessions s
+         JOIN admin_accounts a ON a.id = s.admin_id
+        WHERE s.token_hash = $1
+          AND s.revoked_at IS NULL
+          AND s.expires_at > now()
+          AND a.status = 'active'
+        LIMIT 1`,
+      [tokenHash],
+    );
+
+    const row = sessionResult.rows[0];
+    if (!row) return null;
+
+    if (updateLastSeen) {
+      await getPool().query('UPDATE admin_sessions SET last_seen_at = now() WHERE id = $1', [row.id]).catch(() => {});
+    }
+
+    return {
+      id: row.admin_id,
+      phone: row.phone,
+      normalizedPhone: row.normalized_phone,
+      name: row.display_name,
+      role: row.role,
+      permissions: normalizePermissionList(row.permissions),
+      sessionId: row.id,
+    };
+  }
+
   async function ensureAdminSchema() {
     if (!isDbEnabled() || !getPool()) return;
 
@@ -875,20 +912,35 @@ export function registerAdminModule({ app, getPool, isDbEnabled, createRateLimit
     return res.status(200).json(sessionPayload);
   });
 
-  router.use(adminAuthMiddleware);
-
   router.get('/auth/me', async (req, res) => {
+    if (!isDbEnabled() || !getPool()) {
+      return res.status(503).json({ error: 'Admin persistence is not configured' });
+    }
+
+    const token = parseAdminAuthHeader(req);
+    if (!token) {
+      return res.status(200).json({ success: true, authenticated: false, admin: null });
+    }
+
+    const admin = await getAdminFromToken(token, { updateLastSeen: true });
+    if (!admin) {
+      return res.status(200).json({ success: true, authenticated: false, admin: null });
+    }
+
     return res.status(200).json({
       success: true,
+      authenticated: true,
       admin: {
-        id: req.admin.id,
-        phone: req.admin.phone,
-        displayName: req.admin.name,
-        role: req.admin.role,
-        permissions: req.admin.permissions,
+        id: admin.id,
+        phone: admin.phone,
+        displayName: admin.name,
+        role: admin.role,
+        permissions: admin.permissions,
       },
     });
   });
+
+  router.use(adminAuthMiddleware);
 
   router.post('/auth/logout', async (req, res) => {
     if (req.admin?.sessionId) {
