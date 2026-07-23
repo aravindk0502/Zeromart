@@ -123,6 +123,33 @@ function parseAdminAuthHeader(req) {
   return auth.slice(7).trim();
 }
 
+function resolveAdminPhone(req) {
+  return normalizePhone(
+    req.body?.phone
+    || req.query?.phone
+    || req.headers['x-admin-phone']
+    || '',
+  );
+}
+
+function resolveAdminOtp(req) {
+  return String(
+    req.body?.otp
+    || req.query?.otp
+    || req.headers['x-admin-otp']
+    || '',
+  ).trim();
+}
+
+function resolveAdminPin(req) {
+  return String(
+    req.body?.pin
+    || req.query?.pin
+    || req.headers['x-admin-pin']
+    || '',
+  ).trim();
+}
+
 async function parseProviderBody(response) {
   const raw = await response.text();
   try {
@@ -581,7 +608,7 @@ export function registerAdminModule({ app, getPool, isDbEnabled, createRateLimit
       return res.status(503).json({ error: 'Admin persistence is not configured' });
     }
 
-    const phone = normalizePhone(req.body?.phone || '');
+    const phone = resolveAdminPhone(req);
     if (!phone || !/^\d{10}$/.test(phone)) {
       return res.status(400).json({ error: 'Enter a valid 10-digit admin phone number.' });
     }
@@ -638,7 +665,7 @@ export function registerAdminModule({ app, getPool, isDbEnabled, createRateLimit
       return res.status(503).json({ error: 'Admin persistence is not configured' });
     }
 
-    const phone = normalizePhone(req.body?.phone || '');
+    const phone = resolveAdminPhone(req);
     if (!phone || !/^\d{10}$/.test(phone)) {
       return res.status(400).json({ error: 'Enter a valid 10-digit admin phone number.' });
     }
@@ -688,8 +715,8 @@ export function registerAdminModule({ app, getPool, isDbEnabled, createRateLimit
       return res.status(503).json({ error: 'Admin persistence is not configured' });
     }
 
-    const phone = normalizePhone(req.body?.phone || '');
-    const otp = String(req.body?.otp || '').trim();
+    const phone = resolveAdminPhone(req);
+    const otp = resolveAdminOtp(req);
     if (!phone || !/^\d{10}$/.test(phone)) {
       return res.status(400).json({ error: 'Enter a valid 10-digit admin phone number.' });
     }
@@ -746,8 +773,8 @@ export function registerAdminModule({ app, getPool, isDbEnabled, createRateLimit
       return res.status(503).json({ error: 'Admin persistence is not configured' });
     }
 
-    const phone = normalizePhone(req.body?.phone || '');
-    const pin = String(req.body?.pin || '').trim();
+    const phone = resolveAdminPhone(req);
+    const pin = resolveAdminPin(req);
     if (!phone || !/^\d{10}$/.test(phone)) return res.status(400).json({ error: 'Enter a valid 10-digit admin phone number.' });
     if (!pin || pin.length < 4) return res.status(400).json({ error: 'Enter a valid admin PIN.' });
 

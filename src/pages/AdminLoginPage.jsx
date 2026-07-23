@@ -94,7 +94,7 @@ export default function AdminLoginPage({ navigate = null }) {
 
     setSendingOtp(true);
     try {
-      await requestJson('/api/admin/auth/send-otp', {
+      await requestJson(`/api/admin/auth/send-otp?phone=${encodeURIComponent(normalizedPhone)}`, {
         method: 'POST',
         body: { phone: normalizedPhone },
       });
@@ -123,7 +123,7 @@ export default function AdminLoginPage({ navigate = null }) {
 
     setVerifyingOtp(true);
     try {
-      const result = await requestJson('/api/admin/auth/verify-otp', {
+      const result = await requestJson(`/api/admin/auth/verify-otp?phone=${encodeURIComponent(normalizedPhone)}&otp=${encodeURIComponent(String(otp || '').trim())}`, {
         method: 'POST',
         body: {
           phone: normalizedPhone,
@@ -159,7 +159,7 @@ export default function AdminLoginPage({ navigate = null }) {
 
     setSendingOtp(true);
     try {
-      await requestJson('/api/admin/auth/resend-otp', {
+      await requestJson(`/api/admin/auth/resend-otp?phone=${encodeURIComponent(normalizedPhone)}`, {
         method: 'POST',
         body: { phone: normalizedPhone, retryType: 'text' },
       });
