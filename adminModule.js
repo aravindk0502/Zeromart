@@ -115,6 +115,46 @@ function parseAdminAuthHeader(req) {
   return auth.slice(7).trim();
 }
 
+function parseDashboardDateRange(query = {}) {
+  const now = new Date();
+  const period = String(query.period || 'month').trim().toLowerCase();
+  const fromRaw = String(query.from || '').trim();
+  const toRaw = String(query.to || '').trim();
+
+  let toDate = toRaw ? new Date(toRaw) : now;
+  if (Number.isNaN(toDate.getTime())) toDate = now;
+
+  let fromDate = null;
+  if (fromRaw) {
+    const parsed = new Date(fromRaw);
+    if (!Number.isNaN(parsed.getTime())) fromDate = parsed;
+  }
+
+  if (!fromDate) {
+    fromDate = new Date(toDate);
+    if (period === 'today' || period === 'day') {
+      fromDate.setHours(0, 0, 0, 0);
+    } else if (period === 'week') {
+      fromDate.setDate(fromDate.getDate() - 6);
+      fromDate.setHours(0, 0, 0, 0);
+    } else {
+      fromDate.setMonth(fromDate.getMonth() - 1);
+    }
+  }
+
+  if (fromDate > toDate) {
+    const swap = new Date(fromDate);
+    fromDate = toDate;
+    toDate = swap;
+  }
+
+  return {
+    period,
+    fromIso: fromDate.toISOString(),
+    toIso: toDate.toISOString(),
+  };
+}
+
 export function registerAdminModule({ app, getPool, isDbEnabled, createRateLimiter, getClientIp }) {
   const router = express.Router();
 
@@ -447,6 +487,139 @@ export function registerAdminModule({ app, getPool, isDbEnabled, createRateLimit
       await writeAuditLog({ adminId: req.admin.id, action: 'admin_logout', targetType: 'admin_session', targetId: req.admin.sessionId, req });
     }
     return res.status(200).json({ success: true });
+  });
+
+  router.get('/dashboard/overview', requirePermission('dashboard:read'), async (req, res) => {
+    const { period, fromIso, toIso } = parseDashboardDateRange(req.query || {});
+    const recentLimit = Math.min(25, Math.max(5, Number(req.query.recentLimit || 10) || 10));
+
+    const [
+      totalsResult,
+      newUsersResult,
+      activeUsersResult,
+      totalBusinessesResult,
+      totalListingsResult,
+      activeListingsResult,
+      completedCollectionsResult,
+      revenueResult,
+      totalKarmaResult,
+      pendingRequestsResult,
+      failedPaymentsResult,
+      recentSignupsResult,
+    ] = await Promise.all([
+      getPool().query('SELECT COUNT(*)::bigint AS count FROM users'),
+      getPool().query(
+        `SELECT
+           COUNT(*) FILTER (WHERE created_at >= date_trunc('day', now()))::bigint AS today_count,
+           COUNT(*) FILTER (WHERE created_at >= now() - interval '7 days')::bigint AS week_count,
+           COUNT(*) FILTER (WHERE created_at >= now() - interval '30 days')::bigint AS month_count
+         FROM users`,
+      ),
+      getPool().query(
+        `WITH active_sources AS (
+           SELECT CAST(id AS TEXT) AS actor_id
+             FROM users
+            WHERE created_at BETWEEN $1::timestamptz AND $2::timestamptz
+           UNION
+           SELECT CAST(buyer_id AS TEXT) AS actor_id
+             FROM orders
+            WHERE created_at BETWEEN $1::timestamptz AND $2::timestamptz
+           UNION
+           SELECT CAST(seller_id AS TEXT) AS actor_id
+             FROM requests
+            WHERE created_at BETWEEN $1::timestamptz AND $2::timestamptz
+           UNION
+           SELECT CAST(buyer_id AS TEXT) AS actor_id
+             FROM requests
+            WHERE created_at BETWEEN $1::timestamptz AND $2::timestamptz
+           UNION
+           SELECT CAST(seller_id AS TEXT) AS actor_id
+             FROM listings
+            WHERE created_at BETWEEN $1::timestamptz AND $2::timestamptz
+         )
+         SELECT COUNT(DISTINCT actor_id)::bigint AS count
+           FROM active_sources
+          WHERE actor_id IS NOT NULL
+            AND actor_id <> ''`,
+        [fromIso, toIso],
+      ),
+      getPool().query(
+        `SELECT GREATEST(
+           (SELECT COUNT(*)::bigint FROM users WHERE LOWER(COALESCE(account_type, '')) = 'business'),
+           (SELECT COUNT(*)::bigint FROM profiles WHERE LOWER(COALESCE(account_type, '')) IN ('business', 'store'))
+         ) AS count`,
+      ),
+      getPool().query('SELECT COUNT(*)::bigint AS count FROM listings'),
+      getPool().query(
+        `SELECT COUNT(*)::bigint AS count
+           FROM listings
+          WHERE LOWER(COALESCE(status, 'active')) = 'active'
+            AND COALESCE(available_quantity, 0) > 0`,
+      ),
+      getPool().query(
+        `SELECT COUNT(*)::bigint AS count
+           FROM requests
+          WHERE LOWER(COALESCE(status, '')) IN ('completed', 'collected', 'fulfilled')`,
+      ),
+      getPool().query(
+        `SELECT COALESCE(SUM(amount_paise), 0)::bigint AS amount_paise
+           FROM buyer_access_payments
+          WHERE LOWER(COALESCE(status, '')) IN ('captured', 'paid', 'success')
+            AND COALESCE(signature_verified, false) = true`,
+      ),
+      getPool().query('SELECT COALESCE(SUM(points), 0)::bigint AS points FROM karma_events'),
+      getPool().query(
+        `SELECT COUNT(*)::bigint AS count
+           FROM requests
+          WHERE LOWER(COALESCE(status, 'pending')) = 'pending'`,
+      ),
+      getPool().query(
+        `SELECT COUNT(*)::bigint AS count
+           FROM buyer_access_payments
+          WHERE LOWER(COALESCE(status, '')) IN ('failed', 'failure', 'cancelled', 'canceled')`,
+      ),
+      getPool().query(
+        `SELECT id, phone, name, COALESCE(account_type, 'personal') AS account_type, created_at
+           FROM users
+          ORDER BY created_at DESC
+          LIMIT $1`,
+        [recentLimit],
+      ),
+    ]);
+
+    return res.status(200).json({
+      success: true,
+      filters: {
+        period,
+        from: fromIso,
+        to: toIso,
+      },
+      summary: {
+        totalUsers: Number(totalsResult.rows[0]?.count || 0),
+        newUsersToday: Number(newUsersResult.rows[0]?.today_count || 0),
+        newUsersWeek: Number(newUsersResult.rows[0]?.week_count || 0),
+        newUsersMonth: Number(newUsersResult.rows[0]?.month_count || 0),
+        activeUsers: Number(activeUsersResult.rows[0]?.count || 0),
+        totalBusinesses: Number(totalBusinessesResult.rows[0]?.count || 0),
+        totalListings: Number(totalListingsResult.rows[0]?.count || 0),
+        activeListings: Number(activeListingsResult.rows[0]?.count || 0),
+        completedCollections: Number(completedCollectionsResult.rows[0]?.count || 0),
+        revenue: {
+          amountPaise: Number(revenueResult.rows[0]?.amount_paise || 0),
+          currency: 'INR',
+        },
+        totalKarma: Number(totalKarmaResult.rows[0]?.points || 0),
+        pendingRequests: Number(pendingRequestsResult.rows[0]?.count || 0),
+        failedPayments: Number(failedPaymentsResult.rows[0]?.count || 0),
+      },
+      recentSignups: recentSignupsResult.rows.map((row) => ({
+        id: row.id,
+        phone: row.phone,
+        name: row.name,
+        accountType: row.account_type,
+        createdAt: row.created_at,
+      })),
+    });
   });
 
   router.get('/team-members', requirePermission('dashboard:read'), async (req, res) => {

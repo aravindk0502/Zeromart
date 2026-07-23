@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import App from './App';
 import BusinessPortal from './pages/BusinessPortal';
 import AdminLoginPage from './pages/AdminLoginPage';
+import AdminDashboardPage from './pages/AdminDashboardPage';
 import StaticContentRouter from './pages/StaticContentRouter';
 import LocationPermissionScreen from './components/LocationPermissionScreen';
 import LocationPicker from './components/LocationPicker';
@@ -33,7 +34,9 @@ export default function Root() {
       {path.startsWith('/business')
         ? <BusinessPortal path={path} navigate={navigate} />
         : normalizedPath === '/admin/login'
-          ? <AdminLoginPage />
+          ? <AdminLoginPage navigate={navigate} />
+        : normalizedPath.startsWith('/admin')
+          ? <AdminDashboardPage navigate={navigate} />
         : isStaticRoute
           ? <StaticContentRouter path={path} navigate={navigate} />
           : <App path={path} navigate={navigate} />}

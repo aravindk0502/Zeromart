@@ -41,7 +41,7 @@ async function requestJson(path, options = {}) {
   return data;
 }
 
-export default function AdminLoginPage() {
+export default function AdminLoginPage({ navigate = null }) {
   const [phone, setPhone] = useState('');
   const [pin, setPin] = useState('');
   const [submitting, setSubmitting] = useState(false);
@@ -110,6 +110,7 @@ export default function AdminLoginPage() {
       localStorage.setItem(ADMIN_SESSION_KEY, JSON.stringify(nextSession));
       setSession(nextSession);
       setPin('');
+      if (navigate) navigate('/admin');
     } catch (nextError) {
       setError(nextError?.message || 'Could not sign in to admin dashboard.');
     } finally {
@@ -152,6 +153,19 @@ export default function AdminLoginPage() {
               <p className="mt-1 text-sm font-semibold text-slate-600">{maskedPhone}</p>
               <p className="mt-1 text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">Role: {String(session.admin.role || 'read_only').replaceAll('_', ' ')}</p>
             </div>
+            <button
+              type="button"
+              onClick={() => {
+                if (navigate) {
+                  navigate('/admin');
+                } else {
+                  window.location.href = '/admin';
+                }
+              }}
+              className="w-full rounded-xl bg-emerald-700 px-4 py-3 text-sm font-bold text-white"
+            >
+              Open Dashboard
+            </button>
             <button
               type="button"
               onClick={logout}
