@@ -12,6 +12,7 @@ import multer from 'multer';
 import WebSocket from 'ws';
 import admin from 'firebase-admin';
 import { createClient as createSupabaseClient } from '@supabase/supabase-js';
+import { registerAdminModule } from './adminModule.js';
 
 if (!globalThis.WebSocket) {
   globalThis.WebSocket = WebSocket;
@@ -153,6 +154,14 @@ const webhookRateLimit = createRateLimiter({
   max: 120,
   keyPrefix: 'webhook',
   keyGenerator: (req) => getClientIp(req),
+});
+
+const adminModule = registerAdminModule({
+  app,
+  getPool: () => pool,
+  isDbEnabled: () => Boolean(dbEnabled && pool),
+  createRateLimiter,
+  getClientIp,
 });
 
 app.use(cors({
@@ -521,6 +530,7 @@ export async function initDB() {
     ) AS t(title,category,emoji,distance,condition,seller_name,seller_karma,seller_initials,description,nearby_eligible,listed)
     WHERE NOT EXISTS (SELECT 1 FROM products LIMIT 1);
   `);
+  await adminModule.ensureAdminSchema();
   console.log('[DB] Tables ready');
   } catch (err) {
     console.error('[DB init failed]', err.message || err);
