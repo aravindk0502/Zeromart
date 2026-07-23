@@ -287,9 +287,47 @@ function normalizeBusinessAdminStatus(input = '') {
   return '';
 }
 
+function readJsonObject(value) {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+}
+
+function buildProfilePayload(row = {}) {
+  const source = row && typeof row === 'object' ? row : {};
+  const locationPayload = readJsonObject(source?.location_payload || source?.profile_location || source?.location_data || {});
+  const locationData = {
+    ...locationPayload,
+    address: String(source?.address || locationPayload.address || locationPayload.street || '').trim(),
+    city: String(source?.city || locationPayload.city || '').trim(),
+    locality: String(source?.locality || locationPayload.locality || source?.store_location || '').trim(),
+    profileImage: String(
+      source?.profile_picture
+        || source?.profile_image_url
+        || source?.avatar_url
+        || locationPayload.profileImage
+        || locationPayload.profile_image
+        || locationPayload.profileImageUrl
+        || locationPayload.avatar
+        || '',
+    ).trim(),
+    storeLogo: String(locationPayload.storeLogo || '').trim(),
+    storeImage: String(locationPayload.storeImage || source?.cover_image_url || '').trim(),
+  };
+
+  return {
+    ...source,
+    email: String(source?.email || '').trim(),
+    city: locationData.city,
+    locality: locationData.locality,
+    address: locationData.address,
+    profile_picture: locationData.profileImage,
+    locationData,
+  };
+}
+
 export function registerAdminModule({ app, getPool, isDbEnabled, createRateLimiter, getClientIp }) {
   const router = express.Router();
   router.use(express.json({ limit: '256kb' }));
+  let profileSqlCache = null;
 
   const loginLimiter = createRateLimiter({
     windowMs: ADMIN_LOGIN_WINDOW_MS,
@@ -349,6 +387,64 @@ export function registerAdminModule({ app, getPool, isDbEnabled, createRateLimit
     const fromDb = result.rows[0]?.permissions;
     if (Array.isArray(fromDb)) return normalizePermissionList(fromDb);
     return DEFAULT_ROLE_PERMISSIONS[role] || [];
+  }
+
+  async function getProfileSqlConfig() {
+    if (profileSqlCache) return profileSqlCache;
+
+    const columnsResult = await getPool().query(
+      `SELECT column_name
+         FROM information_schema.columns
+        WHERE table_name = 'profiles'`,
+    );
+    const columns = new Set(columnsResult.rows.map((row) => String(row.column_name || '').trim().toLowerCase()).filter(Boolean));
+
+    const locationPayloadExpr = columns.has('location_data')
+      ? `COALESCE(p.location_data, '{}'::jsonb)`
+      : columns.has('profile_location')
+        ? `COALESCE(p.profile_location, '{}'::jsonb)`
+        : `'{}'::jsonb`;
+
+    const cityExpr = columns.has('city')
+      ? `COALESCE(NULLIF(p.city, ''), ${locationPayloadExpr}->>'city', '')`
+      : `COALESCE(${locationPayloadExpr}->>'city', '')`;
+
+    const localityExpr = columns.has('store_location')
+      ? `COALESCE(${locationPayloadExpr}->>'locality', NULLIF(p.store_location, ''), '')`
+      : `COALESCE(${locationPayloadExpr}->>'locality', '')`;
+
+    const addressExpr = columns.has('address')
+      ? `COALESCE(NULLIF(p.address, ''), ${locationPayloadExpr}->>'address', ${locationPayloadExpr}->>'street', '')`
+      : `COALESCE(${locationPayloadExpr}->>'address', ${locationPayloadExpr}->>'street', '')`;
+
+    const profilePictureExpr = columns.has('profile_image_url') && columns.has('avatar_url')
+      ? `COALESCE(NULLIF(p.profile_image_url, ''), NULLIF(p.avatar_url, ''), ${locationPayloadExpr}->>'profileImage', ${locationPayloadExpr}->>'profile_image', ${locationPayloadExpr}->>'profileImageUrl', ${locationPayloadExpr}->>'avatar', '')`
+      : columns.has('profile_image_url')
+        ? `COALESCE(NULLIF(p.profile_image_url, ''), ${locationPayloadExpr}->>'profileImage', ${locationPayloadExpr}->>'profile_image', ${locationPayloadExpr}->>'profileImageUrl', ${locationPayloadExpr}->>'avatar', '')`
+        : columns.has('avatar_url')
+          ? `COALESCE(NULLIF(p.avatar_url, ''), ${locationPayloadExpr}->>'profileImage', ${locationPayloadExpr}->>'profile_image', ${locationPayloadExpr}->>'profileImageUrl', ${locationPayloadExpr}->>'avatar', '')`
+          : `COALESCE(${locationPayloadExpr}->>'profileImage', ${locationPayloadExpr}->>'profile_image', ${locationPayloadExpr}->>'profileImageUrl', ${locationPayloadExpr}->>'avatar', '')`;
+
+    const emailExpr = columns.has('email') ? `COALESCE(p.email, '')` : `''`;
+    const nameExpr = columns.has('full_name') && columns.has('display_name') && columns.has('business_name')
+      ? `COALESCE(NULLIF(p.full_name, ''), NULLIF(p.display_name, ''), NULLIF(p.business_name, ''), p.name)`
+      : columns.has('display_name') && columns.has('business_name')
+        ? `COALESCE(NULLIF(p.display_name, ''), NULLIF(p.business_name, ''), p.name)`
+        : columns.has('business_name')
+          ? `COALESCE(NULLIF(p.business_name, ''), p.name)`
+          : `p.name`;
+
+    profileSqlCache = {
+      locationPayloadExpr,
+      cityExpr,
+      localityExpr,
+      addressExpr,
+      profilePictureExpr,
+      emailExpr,
+      nameExpr,
+    };
+
+    return profileSqlCache;
   }
 
   function hasPermission(admin, requiredPermission = '') {
@@ -1026,7 +1122,7 @@ export function registerAdminModule({ app, getPool, isDbEnabled, createRateLimit
         `SELECT COALESCE(SUM(amount_paise), 0)::bigint AS amount_paise
            FROM buyer_access_payments
           WHERE LOWER(COALESCE(status, '')) IN ('captured', 'paid', 'success')
-            AND COALESCE(signature_verified, false) = true`,
+            AND COALESCE(amount_paise, 0) > 0`,
       ),
       getPool().query('SELECT COALESCE(SUM(points), 0)::bigint AS points FROM karma_events'),
       getPool().query(
@@ -1107,6 +1203,7 @@ export function registerAdminModule({ app, getPool, isDbEnabled, createRateLimit
     const userId = String(user?.user_id || '');
     const userPhone = String(user?.phone || '');
     const safeLikePhone = userPhone ? `%${userPhone}%` : '';
+    const profileSql = await getProfileSqlConfig();
 
     const [
       statusResult,
@@ -1131,7 +1228,14 @@ export function registerAdminModule({ app, getPool, isDbEnabled, createRateLimit
         [userId],
       ),
       getPool().query(
-        `SELECT id, phone, name, account_type, karma, location_data, created_at, updated_at
+        `SELECT id, phone, ${profileSql.nameExpr} AS profile_name, account_type, karma,
+                ${profileSql.locationPayloadExpr} AS location_payload,
+                ${profileSql.cityExpr} AS city,
+                ${profileSql.localityExpr} AS locality,
+                ${profileSql.addressExpr} AS address,
+                ${profileSql.profilePictureExpr} AS profile_picture,
+                ${profileSql.emailExpr} AS email,
+                created_at, updated_at
            FROM profiles
           WHERE phone = $1
           LIMIT 1`,
@@ -1251,11 +1355,11 @@ export function registerAdminModule({ app, getPool, isDbEnabled, createRateLimit
     ]);
 
     const statusRow = statusResult.rows[0] || null;
-    const profileRow = profileResult.rows[0] || null;
+    const profileRow = buildProfilePayload(profileResult.rows[0] || null);
     const loginHistory = loginHistoryResult.rows;
     const lastLogin = loginHistory.find((entry) => String(entry.event_type || '').toLowerCase().includes('login')) || null;
-    const locationData = profileRow?.location_data || {};
-    const primaryCity = String(locationData?.city || locationData?.locality || '').trim();
+    const locationData = profileRow?.locationData || {};
+    const primaryCity = String(profileRow?.city || locationData?.city || locationData?.locality || '').trim();
 
     const acceptedRequests = requestsResult.rows.filter((item) => String(item.status || '').toLowerCase() === 'accepted').length;
     const declinedRequests = requestsResult.rows.filter((item) => String(item.status || '').toLowerCase() === 'declined').length;
@@ -1271,22 +1375,16 @@ export function registerAdminModule({ app, getPool, isDbEnabled, createRateLimit
         userId,
         name: user.name,
         phone: user.phone,
-        email: null,
+        email: profileRow?.email || null,
         accountType: user.account_type,
         signupAt: user.created_at,
         lastLoginAt: lastLogin?.created_at || null,
         lastActiveAt: activityTimelineResult.rows[0]?.created_at || user.created_at,
         sessionDuration: null,
         city: primaryCity,
-        locality: String(locationData?.locality || '').trim(),
+        locality: String(profileRow?.locality || locationData?.locality || '').trim(),
         locationData,
-        profilePicture: String(
-          locationData?.profileImage
-            || locationData?.profile_image
-            || locationData?.profileImageUrl
-            || locationData?.avatar
-            || '',
-        ),
+        profilePicture: profileRow?.profile_picture || '',
         karma: Number(profileRow?.karma || 0),
         listingsCount: listingsResult.rows.length,
         productsRequested: requestsResult.rows.length,
@@ -1318,6 +1416,7 @@ export function registerAdminModule({ app, getPool, isDbEnabled, createRateLimit
   }
 
   router.get('/users', requirePermission('users:read'), async (req, res) => {
+    const profileSql = await getProfileSqlConfig();
     const { limit, page, offset } = parsePagination(req.query || {}, 25, 100);
     const searchRaw = String(req.query.search || '').trim();
     const accountType = String(req.query.accountType || '').trim().toLowerCase();
@@ -1332,16 +1431,17 @@ export function registerAdminModule({ app, getPool, isDbEnabled, createRateLimit
          u.id::text AS user_id,
          u.name,
          u.phone,
-         NULL::text AS email,
+         ${profileSql.emailExpr} AS email,
          COALESCE(NULLIF(u.account_type, ''), 'personal') AS account_type,
          u.created_at,
          COALESCE(us.status, 'active') AS account_status,
          us.reason AS status_reason,
          p.karma,
-         p.location_data,
-         COALESCE(p.location_data->>'city', '') AS city,
-         COALESCE(p.location_data->>'locality', '') AS locality,
-         COALESCE(p.location_data->>'profileImage', p.location_data->>'profile_image', p.location_data->>'profileImageUrl', p.location_data->>'avatar', '') AS profile_picture
+         ${profileSql.locationPayloadExpr} AS location_payload,
+         ${profileSql.cityExpr} AS city,
+         ${profileSql.localityExpr} AS locality,
+         ${profileSql.profilePictureExpr} AS profile_picture,
+         ${profileSql.addressExpr} AS address
        FROM users u
   LEFT JOIN profiles p ON p.phone = u.phone
   LEFT JOIN admin_user_status us ON us.user_id = u.id::text
@@ -1350,8 +1450,8 @@ export function registerAdminModule({ app, getPool, isDbEnabled, createRateLimit
         AND ($4 = '' OR LOWER(COALESCE(us.status, 'active')) = $4)
         AND (
           $5 = ''
-          OR LOWER(COALESCE(p.location_data->>'city', '')) LIKE $6
-          OR LOWER(COALESCE(p.location_data->>'locality', '')) LIKE $6
+          OR LOWER(${profileSql.cityExpr}) LIKE $6
+          OR LOWER(${profileSql.localityExpr}) LIKE $6
         )
       ORDER BY u.created_at DESC
       LIMIT $7 OFFSET $8`,
@@ -1368,8 +1468,8 @@ export function registerAdminModule({ app, getPool, isDbEnabled, createRateLimit
           AND ($4 = '' OR LOWER(COALESCE(us.status, 'active')) = $4)
           AND (
             $5 = ''
-            OR LOWER(COALESCE(p.location_data->>'city', '')) LIKE $6
-            OR LOWER(COALESCE(p.location_data->>'locality', '')) LIKE $6
+            OR LOWER(${profileSql.cityExpr}) LIKE $6
+            OR LOWER(${profileSql.localityExpr}) LIKE $6
           )`,
       [searchRaw, searchLike, accountType, statusFilter, cityFilter, cityLike],
     );
@@ -1492,6 +1592,7 @@ export function registerAdminModule({ app, getPool, isDbEnabled, createRateLimit
     return res.status(200).json({
       success: true,
       rows: listResult.rows.map((row) => {
+        const profileRow = buildProfilePayload(row);
         const userId = String(row.user_id || '');
         const normalizedPhone = normalizePhone(row.phone || '');
         const requestStats = requestsByUser.get(userId) || {};
@@ -1521,10 +1622,10 @@ export function registerAdminModule({ app, getPool, isDbEnabled, createRateLimit
           lastLoginAt,
           lastActiveAt,
           sessionDuration: null,
-          city: row.city,
-          locality: row.locality,
-          locationData: row.location_data || {},
-          profilePicture: row.profile_picture || '',
+          city: profileRow.city,
+          locality: profileRow.locality,
+          locationData: profileRow.locationData || {},
+          profilePicture: profileRow.profile_picture || '',
           karma: Number(row.karma || 0),
           listingsCount: Number(listingsByUser.get(userId) || 0) + Number(listingByPhone.get(normalizedPhone) || 0),
           productsRequested: Number(requestStats.requests_count || 0),
@@ -1671,6 +1772,7 @@ export function registerAdminModule({ app, getPool, isDbEnabled, createRateLimit
     const businessId = String(business?.business_id || '');
     const businessPhone = String(business?.phone || '');
     const phoneLike = businessPhone ? `%${businessPhone}%` : '';
+    const profileSql = await getProfileSqlConfig();
 
     const [
       statusResult,
@@ -1692,7 +1794,14 @@ export function registerAdminModule({ app, getPool, isDbEnabled, createRateLimit
         [businessId],
       ),
       getPool().query(
-        `SELECT id, phone, name, account_type, karma, location_data, created_at, updated_at
+        `SELECT id, phone, ${profileSql.nameExpr} AS profile_name, account_type, karma,
+                ${profileSql.locationPayloadExpr} AS location_payload,
+                ${profileSql.cityExpr} AS city,
+                ${profileSql.localityExpr} AS locality,
+                ${profileSql.addressExpr} AS address,
+                ${profileSql.profilePictureExpr} AS profile_picture,
+                ${profileSql.emailExpr} AS email,
+                created_at, updated_at
            FROM profiles
           WHERE phone = $1
           LIMIT 1`,
@@ -1783,8 +1892,8 @@ export function registerAdminModule({ app, getPool, isDbEnabled, createRateLimit
     ]);
 
     const statusRow = statusResult.rows[0] || null;
-    const profileRow = profileResult.rows[0] || null;
-    const locationData = profileRow?.location_data || {};
+    const profileRow = buildProfilePayload(profileResult.rows[0] || null);
+    const locationData = profileRow?.locationData || {};
     const lastLogin = loginHistoryResult.rows.find((entry) => String(entry.event_type || '').toLowerCase().includes('login')) || null;
     const latestListing = listingsResult.rows[0] || null;
 
@@ -1809,13 +1918,13 @@ export function registerAdminModule({ app, getPool, isDbEnabled, createRateLimit
     return {
       profile: {
         businessId,
-        storeName: String(latestListing?.store_name || profileRow?.name || business.name || 'Business Store'),
+        storeName: String(latestListing?.store_name || profileRow?.profile_name || business.name || 'Business Store'),
         ownerName: business.name,
         phone: business.phone,
-        email: null,
-        address: String(locationData?.address || locationData?.street || ''),
-        city: String(locationData?.city || latestListing?.city || ''),
-        locality: String(locationData?.locality || latestListing?.area || ''),
+        email: profileRow?.email || null,
+        address: String(profileRow?.address || locationData?.address || locationData?.street || ''),
+        city: String(profileRow?.city || locationData?.city || latestListing?.city || ''),
+        locality: String(profileRow?.locality || locationData?.locality || latestListing?.area || ''),
         signupAt: business.created_at,
         lastLoginAt: lastLogin?.created_at || null,
         verificationStatus: statusRow?.verification_status || 'unverified',
@@ -1831,14 +1940,7 @@ export function registerAdminModule({ app, getPool, isDbEnabled, createRateLimit
         revenuePaise: totalRevenuePaise,
         accountStatus: statusRow?.status || 'active',
         statusReason: statusRow?.reason || '',
-        logoProfileImage: String(
-          locationData?.storeLogo
-            || locationData?.storeImage
-            || locationData?.profileImage
-            || locationData?.profile_image
-            || locationData?.profileImageUrl
-            || '',
-        ),
+        logoProfileImage: String(locationData?.storeLogo || locationData?.storeImage || profileRow?.profile_picture || ''),
         verificationDocuments: locationData?.verificationDocuments || locationData?.documents || null,
       },
       listings: listingsResult.rows,
@@ -1851,9 +1953,9 @@ export function registerAdminModule({ app, getPool, isDbEnabled, createRateLimit
       activityTimeline: activityTimelineResult.rows,
       storeLocations: {
         primary: {
-          address: String(locationData?.address || locationData?.street || ''),
-          city: String(locationData?.city || latestListing?.city || ''),
-          locality: String(locationData?.locality || latestListing?.area || ''),
+          address: String(profileRow?.address || locationData?.address || locationData?.street || ''),
+          city: String(profileRow?.city || locationData?.city || latestListing?.city || ''),
+          locality: String(profileRow?.locality || locationData?.locality || latestListing?.area || ''),
           locationData,
         },
       },
@@ -1861,6 +1963,7 @@ export function registerAdminModule({ app, getPool, isDbEnabled, createRateLimit
   }
 
   router.get('/businesses', requirePermission('businesses:read'), async (req, res) => {
+    const profileSql = await getProfileSqlConfig();
     const { limit, page, offset } = parsePagination(req.query || {}, 25, 100);
     const searchRaw = String(req.query.search || '').trim();
     const cityRaw = String(req.query.city || '').trim().toLowerCase();
@@ -1921,12 +2024,12 @@ export function registerAdminModule({ app, getPool, isDbEnabled, createRateLimit
          u.id::text AS business_id,
          u.name AS owner_name,
          u.phone,
-         NULL::text AS email,
+         ${profileSql.emailExpr} AS email,
          u.created_at,
          COALESCE(lsid.store_name, lsph.store_name, p.name, u.name, 'Business Store') AS store_name,
-         COALESCE(p.location_data->>'address', p.location_data->>'street', '') AS address,
-         COALESCE(p.location_data->>'city', lsid.city, lsph.city, '') AS city,
-         COALESCE(p.location_data->>'locality', lsid.locality, lsph.locality, '') AS locality,
+         COALESCE(${profileSql.addressExpr}, '') AS address,
+         COALESCE(${profileSql.cityExpr}, lsid.city, lsph.city, '') AS city,
+         COALESCE(${profileSql.localityExpr}, lsid.locality, lsph.locality, '') AS locality,
          COALESCE(bs.verification_status, 'unverified') AS verification_status,
          COALESCE(bs.status, 'active') AS account_status,
          bs.reason AS status_reason,
@@ -1934,7 +2037,7 @@ export function registerAdminModule({ app, getPool, isDbEnabled, createRateLimit
          COALESCE(lsid.total_products_listed, lsph.total_products_listed, 0) AS total_products_listed,
          COALESCE(lsid.active_products, lsph.active_products, 0) AS active_products,
          COALESCE(lsid.near_expiry_products, lsph.near_expiry_products, 0) AS near_expiry_products,
-         COALESCE(p.location_data->>'storeLogo', p.location_data->>'storeImage', p.location_data->>'profileImage', p.location_data->>'profile_image', p.location_data->>'profileImageUrl', '') AS logo_profile_image
+         ${profileSql.profilePictureExpr} AS logo_profile_image
        FROM users u
   LEFT JOIN profiles p ON p.phone = u.phone
   LEFT JOIN admin_business_status bs ON bs.business_id = u.id::text
@@ -1946,8 +2049,8 @@ export function registerAdminModule({ app, getPool, isDbEnabled, createRateLimit
         AND ($4 = '' OR LOWER(COALESCE(bs.verification_status, 'unverified')) = $4)
         AND (
           $5 = ''
-          OR LOWER(COALESCE(p.location_data->>'city', lsid.city, lsph.city, '')) LIKE $6
-          OR LOWER(COALESCE(p.location_data->>'locality', lsid.locality, lsph.locality, '')) LIKE $6
+          OR LOWER(COALESCE(${profileSql.cityExpr}, lsid.city, lsph.city, '')) LIKE $6
+          OR LOWER(COALESCE(${profileSql.localityExpr}, lsid.locality, lsph.locality, '')) LIKE $6
         )
       ORDER BY u.created_at DESC
       LIMIT $7 OFFSET $8`,
@@ -1987,8 +2090,8 @@ export function registerAdminModule({ app, getPool, isDbEnabled, createRateLimit
           AND ($4 = '' OR LOWER(COALESCE(bs.verification_status, 'unverified')) = $4)
           AND (
             $5 = ''
-            OR LOWER(COALESCE(p.location_data->>'city', '')) LIKE $6
-            OR LOWER(COALESCE(p.location_data->>'locality', '')) LIKE $6
+            OR LOWER(${profileSql.cityExpr}) LIKE $6
+            OR LOWER(${profileSql.localityExpr}) LIKE $6
           )`,
       [searchRaw, searchLike, statusFilter, verificationFilter, cityRaw, cityLike],
     );
