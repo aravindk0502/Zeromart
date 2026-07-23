@@ -619,6 +619,50 @@ export function registerAdminModule({ app, getPool, isDbEnabled, createRateLimit
     };
   }
 
+  async function ensureBootstrapAdminAccount(phone = '') {
+    const bootstrapPhone = normalizePhone(process.env.ADMIN_BOOTSTRAP_PHONE || '');
+    if (!bootstrapPhone || phone !== bootstrapPhone) return null;
+
+    const existing = await getPool().query(
+      `SELECT id, phone, normalized_phone, display_name, role, permissions, status
+         FROM admin_accounts
+        WHERE normalized_phone = $1
+        LIMIT 1`,
+      [phone],
+    );
+    if (existing.rows[0]) return existing.rows[0];
+
+    const superName = String(process.env.ADMIN_BOOTSTRAP_NAME || 'Drizn Super Admin').trim();
+    const superPin = String(process.env.ADMIN_BOOTSTRAP_PIN || '').trim();
+    const bootstrapSecret = superPin || crypto.randomBytes(24).toString('hex');
+    const secret = createPinSecret(bootstrapSecret);
+
+    await getPool().query(
+      `INSERT INTO admin_accounts (
+        phone, normalized_phone, display_name, role, permissions, password_salt, password_hash, status
+      ) VALUES ($1,$2,$3,$4,$5::jsonb,$6,$7,'active')
+      ON CONFLICT (normalized_phone) DO NOTHING`,
+      [
+        phone,
+        phone,
+        superName,
+        ADMIN_ROLES.super_admin,
+        JSON.stringify(mergePermissions(ADMIN_ROLES.super_admin)),
+        secret.salt,
+        secret.hash,
+      ],
+    );
+
+    const created = await getPool().query(
+      `SELECT id, phone, normalized_phone, display_name, role, permissions, status
+         FROM admin_accounts
+        WHERE normalized_phone = $1
+        LIMIT 1`,
+      [phone],
+    );
+    return created.rows[0] || null;
+  }
+
   router.post('/auth/send-otp', otpSendLimiter, async (req, res) => {
     if (!isDbEnabled() || !getPool()) {
       return res.status(503).json({ error: 'Admin persistence is not configured' });
@@ -636,7 +680,10 @@ export function registerAdminModule({ app, getPool, isDbEnabled, createRateLimit
         LIMIT 1`,
       [phone],
     );
-    const adminRow = adminResult.rows[0];
+    let adminRow = adminResult.rows[0] || null;
+    if (!adminRow) {
+      adminRow = await ensureBootstrapAdminAccount(phone);
+    }
     if (!adminRow) {
       await writeAuditLog({ action: 'admin_otp_send_failed', targetType: 'admin_account', targetId: phone, metadata: { reason: 'not_found' }, req });
       return res.status(401).json({ error: 'Admin account not found.' });
@@ -693,7 +740,10 @@ export function registerAdminModule({ app, getPool, isDbEnabled, createRateLimit
         LIMIT 1`,
       [phone],
     );
-    const adminRow = adminResult.rows[0];
+    let adminRow = adminResult.rows[0] || null;
+    if (!adminRow) {
+      adminRow = await ensureBootstrapAdminAccount(phone);
+    }
     if (!adminRow) return res.status(401).json({ error: 'Admin account not found.' });
     if (adminRow.status !== 'active') return res.status(403).json({ error: 'Admin account is suspended.' });
 
@@ -747,7 +797,10 @@ export function registerAdminModule({ app, getPool, isDbEnabled, createRateLimit
         LIMIT 1`,
       [phone],
     );
-    const adminRow = result.rows[0];
+    let adminRow = result.rows[0] || null;
+    if (!adminRow) {
+      adminRow = await ensureBootstrapAdminAccount(phone);
+    }
     if (!adminRow) {
       await writeAuditLog({ action: 'admin_otp_verify_failed', targetType: 'admin_account', targetId: phone, metadata: { reason: 'not_found' }, req });
       return res.status(401).json({ error: 'Admin account not found.' });
