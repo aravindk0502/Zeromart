@@ -1121,7 +1121,7 @@ export function registerAdminModule({ app, getPool, isDbEnabled, createRateLimit
       getPool().query(
         `SELECT COALESCE(SUM(amount_paise), 0)::bigint AS amount_paise
            FROM buyer_access_payments
-          WHERE LOWER(COALESCE(status, '')) IN ('captured', 'paid', 'success')
+          WHERE LOWER(COALESCE(status, '')) IN ('captured', 'paid', 'success', 'verified')
             AND COALESCE(amount_paise, 0) > 0`,
       ),
       getPool().query('SELECT COALESCE(SUM(points), 0)::bigint AS points FROM karma_events'),
@@ -1365,7 +1365,7 @@ export function registerAdminModule({ app, getPool, isDbEnabled, createRateLimit
     const declinedRequests = requestsResult.rows.filter((item) => String(item.status || '').toLowerCase() === 'declined').length;
     const collectedRequests = requestsResult.rows.filter((item) => ['completed', 'collected', 'fulfilled'].includes(String(item.status || '').toLowerCase())).length;
     const totalAmountPaidPaise = paymentsResult.rows
-      .filter((item) => ['captured', 'paid', 'success'].includes(String(item.status || '').toLowerCase()))
+      .filter((item) => ['captured', 'paid', 'success', 'verified'].includes(String(item.status || '').toLowerCase()))
       .reduce((acc, item) => acc + Number(item.amount_paise || 0), 0);
 
     const paymentStatus = paymentsResult.rows[0]?.status || 'none';
@@ -1530,7 +1530,7 @@ export function registerAdminModule({ app, getPool, isDbEnabled, createRateLimit
         getPool().query(
           `SELECT user_id::text AS user_id,
                   COUNT(*)::bigint AS payment_count,
-                  COALESCE(SUM(CASE WHEN LOWER(COALESCE(status, '')) IN ('captured', 'paid', 'success') THEN amount_paise ELSE 0 END), 0)::bigint AS total_paid_paise,
+                  COALESCE(SUM(CASE WHEN LOWER(COALESCE(status, '')) IN ('captured', 'paid', 'success', 'verified') THEN amount_paise ELSE 0 END), 0)::bigint AS total_paid_paise,
                   (ARRAY_AGG(status ORDER BY created_at DESC))[1] AS last_payment_status,
                   MAX(created_at) AS last_payment_at
              FROM buyer_access_payments
@@ -1912,7 +1912,7 @@ export function registerAdminModule({ app, getPool, isDbEnabled, createRateLimit
     const completedCount = requestsReceivedResult.rows.filter((item) => ['completed', 'collected', 'fulfilled'].includes(String(item.status || '').toLowerCase())).length;
 
     const totalRevenuePaise = paymentsResult.rows
-      .filter((item) => ['captured', 'paid', 'success'].includes(String(item.status || '').toLowerCase()))
+      .filter((item) => ['captured', 'paid', 'success', 'verified'].includes(String(item.status || '').toLowerCase()))
       .reduce((acc, item) => acc + Number(item.amount_paise || 0), 0);
 
     return {
@@ -2118,7 +2118,7 @@ export function registerAdminModule({ app, getPool, isDbEnabled, createRateLimit
         getPool().query(
           `SELECT user_id::text AS business_id,
                   COUNT(*)::bigint AS payment_history_count,
-                  COALESCE(SUM(CASE WHEN LOWER(COALESCE(status, '')) IN ('captured', 'paid', 'success') THEN amount_paise ELSE 0 END), 0)::bigint AS revenue_paise,
+                  COALESCE(SUM(CASE WHEN LOWER(COALESCE(status, '')) IN ('captured', 'paid', 'success', 'verified') THEN amount_paise ELSE 0 END), 0)::bigint AS revenue_paise,
                   (ARRAY_AGG(status ORDER BY created_at DESC))[1] AS subscription_payment_status
              FROM buyer_access_payments
             WHERE user_id::text = ANY($1::text[])
