@@ -7,13 +7,19 @@ const ADMIN_SESSION_KEY = 'drizn_admin_session';
 const apiBase = () => {
   const fromEnv = String(import.meta.env.VITE_API_URL || '').trim().replace(/\/$/, '');
   if (fromEnv) return fromEnv;
-  if (typeof window !== 'undefined' && window.location?.origin) return window.location.origin;
+  if (typeof window !== 'undefined' && window.location?.origin) {
+    const host = String(window.location.hostname || '').toLowerCase();
+    if (host === '127.0.0.1' || host === 'localhost') {
+      return 'https://www.drizn.com';
+    }
+    return window.location.origin;
+  }
   return '';
 };
 
 async function requestJson(path, options = {}) {
   const base = apiBase();
-  const response = await fetch(`${base}${path}`, {
+  const buildRequestOptions = () => ({
     method: options.method || 'GET',
     headers: {
       ...(options.body ? { 'Content-Type': 'application/json' } : {}),
@@ -21,6 +27,25 @@ async function requestJson(path, options = {}) {
     },
     ...(options.body ? { body: JSON.stringify(options.body) } : {}),
   });
+
+  let response;
+  try {
+    response = await fetch(`${base}${path}`, buildRequestOptions());
+  } catch {
+    if (base !== 'https://www.drizn.com') {
+      try {
+        response = await fetch(`https://www.drizn.com${path}`, buildRequestOptions());
+      } catch {
+        const fallbackError = new Error('Network error while contacting admin API. Open https://www.drizn.com/admin/login and retry.');
+        fallbackError.status = 0;
+        throw fallbackError;
+      }
+    } else {
+      const fallbackError = new Error('Network error while contacting admin API. Open https://www.drizn.com/admin/login and retry.');
+      fallbackError.status = 0;
+      throw fallbackError;
+    }
+  }
 
   const raw = await response.text();
   let data = {};
@@ -160,6 +185,13 @@ export default function AdminDashboardPage({ navigate, path = '/admin' }) {
     }
     try {
       const meResult = await requestJson('/api/admin/auth/me', { token });
+      if (!meResult?.authenticated || !meResult?.admin) {
+        localStorage.removeItem(ADMIN_TOKEN_KEY);
+        localStorage.removeItem(ADMIN_SESSION_KEY);
+        setToken('');
+        navigate('/admin/login');
+        return;
+      }
       setAdmin(meResult?.admin || null);
       localStorage.setItem(ADMIN_SESSION_KEY, JSON.stringify({
         token,
