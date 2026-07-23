@@ -22,16 +22,16 @@ const ROLE_ORDER = [
 const DEFAULT_ROLE_PERMISSIONS = {
   [ADMIN_ROLES.super_admin]: ['*'],
   [ADMIN_ROLES.operations]: [
-    'dashboard:read', 'users:read', 'businesses:read', 'listings:read', 'orders:read', 'audit_logs:read',
+    'dashboard:read', 'users:read', 'businesses:read', 'businesses:moderate', 'listings:read', 'orders:read', 'audit_logs:read',
   ],
   [ADMIN_ROLES.support]: [
-    'dashboard:read', 'users:read', 'users:note', 'requests:read', 'orders:read', 'notifications:read',
+    'dashboard:read', 'users:read', 'users:note', 'businesses:read', 'businesses:note', 'requests:read', 'orders:read', 'notifications:read',
   ],
   [ADMIN_ROLES.finance]: [
     'dashboard:read', 'payments:read', 'payments:export', 'subscriptions:read', 'audit_logs:read',
   ],
   [ADMIN_ROLES.content]: [
-    'dashboard:read', 'listings:read', 'listings:moderate', 'notifications:send', 'notifications:template',
+    'dashboard:read', 'businesses:read', 'businesses:moderate', 'listings:read', 'listings:moderate', 'notifications:send', 'notifications:template',
   ],
   [ADMIN_ROLES.read_only]: [
     'dashboard:read', 'users:read', 'businesses:read', 'listings:read', 'orders:read', 'payments:read',
@@ -163,6 +163,12 @@ function parsePagination(query = {}, defaultLimit = 25, maxLimit = 100) {
 }
 
 function normalizeUserAdminStatus(input = '') {
+  const status = String(input || '').trim().toLowerCase();
+  if (status === 'active' || status === 'suspended' || status === 'blocked') return status;
+  return '';
+}
+
+function normalizeBusinessAdminStatus(input = '') {
   const status = String(input || '').trim().toLowerCase();
   if (status === 'active' || status === 'suspended' || status === 'blocked') return status;
   return '';
@@ -347,6 +353,23 @@ export function registerAdminModule({ app, getPool, isDbEnabled, createRateLimit
         created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
       );
 
+      CREATE TABLE IF NOT EXISTS admin_business_status (
+        business_id      TEXT PRIMARY KEY,
+        status           TEXT NOT NULL DEFAULT 'active',
+        verification_status TEXT NOT NULL DEFAULT 'unverified',
+        reason           TEXT,
+        updated_by       TEXT REFERENCES admin_accounts(id) ON DELETE SET NULL,
+        updated_at       TIMESTAMPTZ NOT NULL DEFAULT now()
+      );
+
+      CREATE TABLE IF NOT EXISTS admin_business_notes (
+        id              TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
+        business_id     TEXT NOT NULL,
+        admin_id        TEXT REFERENCES admin_accounts(id) ON DELETE SET NULL,
+        note            TEXT NOT NULL,
+        created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+      );
+
       CREATE INDEX IF NOT EXISTS admin_accounts_role_idx ON admin_accounts(role);
       CREATE INDEX IF NOT EXISTS admin_accounts_status_idx ON admin_accounts(status);
       CREATE INDEX IF NOT EXISTS admin_sessions_admin_idx ON admin_sessions(admin_id);
@@ -355,6 +378,9 @@ export function registerAdminModule({ app, getPool, isDbEnabled, createRateLimit
       CREATE INDEX IF NOT EXISTS admin_audit_logs_created_idx ON admin_audit_logs(created_at DESC);
       CREATE INDEX IF NOT EXISTS admin_user_status_status_idx ON admin_user_status(status);
       CREATE INDEX IF NOT EXISTS admin_user_notes_user_idx ON admin_user_notes(user_id, created_at DESC);
+      CREATE INDEX IF NOT EXISTS admin_business_status_status_idx ON admin_business_status(status);
+      CREATE INDEX IF NOT EXISTS admin_business_status_verification_idx ON admin_business_status(verification_status);
+      CREATE INDEX IF NOT EXISTS admin_business_notes_business_idx ON admin_business_notes(business_id, created_at DESC);
     `);
 
     for (const role of ROLE_ORDER) {
@@ -1118,6 +1144,477 @@ export function registerAdminModule({ app, getPool, isDbEnabled, createRateLimit
       success: true,
       exportedAt: new Date().toISOString(),
       userId: user.user_id,
+      data: detail,
+    });
+  });
+
+  async function resolveBusinessIdentity(rawBusinessRef = '') {
+    const businessRef = String(rawBusinessRef || '').trim();
+    if (!businessRef) return null;
+
+    const result = await getPool().query(
+      `SELECT DISTINCT
+          u.id::text AS business_id,
+          u.id,
+          u.phone,
+          u.name,
+          COALESCE(NULLIF(u.account_type, ''), 'business') AS account_type,
+          u.created_at
+         FROM users u
+    LEFT JOIN listings l ON l.seller_id = u.id::text OR l.business_id = u.id::text
+        WHERE (u.id::text = $1 OR u.phone = $1)
+          AND (
+            LOWER(COALESCE(u.account_type, '')) = 'business'
+            OR LOWER(COALESCE(l.seller_type, '')) = 'business'
+            OR l.business_id IS NOT NULL
+          )
+        LIMIT 1`,
+      [businessRef],
+    );
+
+    return result.rows[0] || null;
+  }
+
+  async function buildBusinessDetailPayload(business) {
+    const businessId = String(business?.business_id || '');
+    const businessPhone = String(business?.phone || '');
+    const phoneLike = businessPhone ? `%${businessPhone}%` : '';
+
+    const [
+      statusResult,
+      profileResult,
+      listingsResult,
+      requestsReceivedResult,
+      notificationsResult,
+      karmaResult,
+      paymentsResult,
+      notesResult,
+      loginHistoryResult,
+      activityTimelineResult,
+    ] = await Promise.all([
+      getPool().query(
+        `SELECT business_id, status, verification_status, reason, updated_by, updated_at
+           FROM admin_business_status
+          WHERE business_id = $1
+          LIMIT 1`,
+        [businessId],
+      ),
+      getPool().query(
+        `SELECT id, phone, name, account_type, karma, location_data, created_at, updated_at
+           FROM profiles
+          WHERE phone = $1
+          LIMIT 1`,
+        [businessPhone],
+      ),
+      getPool().query(
+        `SELECT id, title, category, status, quantity, available_quantity, sold_quantity,
+                created_at, expiry_date, location, area, city, store_name, metadata
+           FROM listings
+          WHERE seller_id = $1 OR business_id = $1 OR COALESCE(metadata->>'ownerMobile', '') = $2
+          ORDER BY created_at DESC
+          LIMIT 300`,
+        [businessId, businessPhone],
+      ),
+      getPool().query(
+        `SELECT id, listing_id, buyer_id, status, quantity, details, created_at, updated_at
+           FROM requests
+          WHERE seller_id = $1
+          ORDER BY created_at DESC
+          LIMIT 300`,
+        [businessId],
+      ),
+      getPool().query(
+        `SELECT id, title, body, channel, status, created_at
+           FROM app_notifications
+          WHERE recipient_account_id = $1 OR ($2 <> '' AND recipient_account_id ILIKE $3)
+          ORDER BY created_at DESC
+          LIMIT 200`,
+        [businessId, businessPhone, phoneLike],
+      ),
+      getPool().query(
+        `SELECT id, giver_id, receiver_id, listing_id, order_id, request_id, points, note, created_at
+           FROM karma_events
+          WHERE receiver_id = $1
+          ORDER BY created_at DESC
+          LIMIT 200`,
+        [businessId],
+      ),
+      getPool().query(
+        `SELECT id, plan_code, amount_paise, currency, razorpay_order_id, razorpay_payment_id,
+                signature_verified, status, metadata, created_at, updated_at
+           FROM buyer_access_payments
+          WHERE user_id::text = $1
+          ORDER BY created_at DESC
+          LIMIT 160`,
+        [businessId],
+      ),
+      getPool().query(
+        `SELECT n.id, n.business_id, n.note, n.created_at,
+                a.id AS admin_id, a.display_name AS admin_name, a.role AS admin_role
+           FROM admin_business_notes n
+      LEFT JOIN admin_accounts a ON a.id = n.admin_id
+          WHERE n.business_id = $1
+          ORDER BY n.created_at DESC
+          LIMIT 160`,
+        [businessId],
+      ),
+      getPool().query(
+        `SELECT id, event_type, status, phone_last4, ip_address, metadata, created_at
+           FROM security_audit_events
+          WHERE user_id::text = $1 OR ($2 <> '' AND phone_last4 = RIGHT($2, 4))
+          ORDER BY created_at DESC
+          LIMIT 200`,
+        [businessId, businessPhone],
+      ),
+      getPool().query(
+        `SELECT * FROM (
+           SELECT 'listing_event' AS event_type, id AS entity_id, status, created_at, jsonb_build_object('title', title) AS payload
+             FROM listings
+            WHERE seller_id = $1 OR business_id = $1 OR COALESCE(metadata->>'ownerMobile', '') = $2
+           UNION ALL
+           SELECT 'request_event' AS event_type, id AS entity_id, status, created_at, details AS payload
+             FROM requests
+            WHERE seller_id = $1
+           UNION ALL
+           SELECT 'payment_event' AS event_type, id AS entity_id, status, created_at, metadata AS payload
+             FROM buyer_access_payments
+            WHERE user_id::text = $1
+           UNION ALL
+           SELECT event_type, id AS entity_id, status, created_at, metadata AS payload
+             FROM security_audit_events
+            WHERE user_id::text = $1 OR ($2 <> '' AND phone_last4 = RIGHT($2, 4))
+         ) timeline
+         ORDER BY created_at DESC
+         LIMIT 300`,
+        [businessId, businessPhone],
+      ),
+    ]);
+
+    const statusRow = statusResult.rows[0] || null;
+    const profileRow = profileResult.rows[0] || null;
+    const locationData = profileRow?.location_data || {};
+    const lastLogin = loginHistoryResult.rows.find((entry) => String(entry.event_type || '').toLowerCase().includes('login')) || null;
+    const latestListing = listingsResult.rows[0] || null;
+
+    const activeListings = listingsResult.rows.filter((item) => String(item.status || '').toLowerCase() === 'active').length;
+    const nearExpiryListings = listingsResult.rows.filter((item) => {
+      const expiry = item.expiry_date ? new Date(item.expiry_date) : null;
+      if (!expiry || Number.isNaN(expiry.getTime())) return false;
+      const now = new Date();
+      const inThreeDays = new Date(now.getTime() + (3 * 24 * 60 * 60 * 1000));
+      return expiry >= now && expiry <= inThreeDays;
+    }).length;
+
+    const requestsReceived = requestsReceivedResult.rows.length;
+    const acceptedCount = requestsReceivedResult.rows.filter((item) => String(item.status || '').toLowerCase() === 'accepted').length;
+    const declinedCount = requestsReceivedResult.rows.filter((item) => String(item.status || '').toLowerCase() === 'declined').length;
+    const completedCount = requestsReceivedResult.rows.filter((item) => ['completed', 'collected', 'fulfilled'].includes(String(item.status || '').toLowerCase())).length;
+
+    const totalRevenuePaise = paymentsResult.rows
+      .filter((item) => ['captured', 'paid', 'success'].includes(String(item.status || '').toLowerCase()))
+      .reduce((acc, item) => acc + Number(item.amount_paise || 0), 0);
+
+    return {
+      profile: {
+        businessId,
+        storeName: String(latestListing?.store_name || profileRow?.name || business.name || 'Business Store'),
+        ownerName: business.name,
+        phone: business.phone,
+        email: null,
+        address: String(locationData?.address || locationData?.street || ''),
+        city: String(locationData?.city || latestListing?.city || ''),
+        locality: String(locationData?.locality || latestListing?.area || ''),
+        signupAt: business.created_at,
+        lastLoginAt: lastLogin?.created_at || null,
+        verificationStatus: statusRow?.verification_status || 'unverified',
+        subscriptionPaymentStatus: paymentsResult.rows[0]?.status || 'none',
+        totalProductsListed: listingsResult.rows.length,
+        activeProducts: activeListings,
+        nearExpiryProducts: nearExpiryListings,
+        ordersReceived: requestsReceived,
+        acceptedOrders: acceptedCount,
+        declinedOrders: declinedCount,
+        completedOrders: completedCount,
+        storeKarma: Number(profileRow?.karma || 0),
+        revenuePaise: totalRevenuePaise,
+        accountStatus: statusRow?.status || 'active',
+        statusReason: statusRow?.reason || '',
+        logoProfileImage: String(
+          locationData?.storeLogo
+            || locationData?.storeImage
+            || locationData?.profileImage
+            || locationData?.profile_image
+            || locationData?.profileImageUrl
+            || '',
+        ),
+        verificationDocuments: locationData?.verificationDocuments || locationData?.documents || null,
+      },
+      listings: listingsResult.rows,
+      ordersReceived: requestsReceivedResult.rows,
+      notifications: notificationsResult.rows,
+      karmaHistory: karmaResult.rows,
+      payments: paymentsResult.rows,
+      loginHistory: loginHistoryResult.rows,
+      supportNotes: notesResult.rows,
+      activityTimeline: activityTimelineResult.rows,
+      storeLocations: {
+        primary: {
+          address: String(locationData?.address || locationData?.street || ''),
+          city: String(locationData?.city || latestListing?.city || ''),
+          locality: String(locationData?.locality || latestListing?.area || ''),
+          locationData,
+        },
+      },
+    };
+  }
+
+  router.get('/businesses', requirePermission('businesses:read'), async (req, res) => {
+    const { limit, page, offset } = parsePagination(req.query || {}, 25, 100);
+    const searchRaw = String(req.query.search || '').trim();
+    const cityRaw = String(req.query.city || '').trim().toLowerCase();
+    const statusFilter = normalizeBusinessAdminStatus(req.query.status || '');
+    const verificationFilter = String(req.query.verificationStatus || '').trim().toLowerCase();
+
+    const searchLike = searchRaw ? `%${searchRaw}%` : '';
+    const cityLike = cityRaw ? `%${cityRaw}%` : '';
+
+    const whereClause = `
+      WHERE LOWER(COALESCE(u.account_type, '')) = 'business'
+        AND ($1 = '' OR u.name ILIKE $2 OR u.phone ILIKE $2 OR u.id::text = $1 OR COALESCE(store_stats.store_name, '') ILIKE $2)
+        AND ($3 = '' OR LOWER(COALESCE(bs.status, 'active')) = $3)
+        AND ($4 = '' OR LOWER(COALESCE(bs.verification_status, 'unverified')) = $4)
+        AND (
+          $5 = ''
+          OR LOWER(COALESCE(p.location_data->>'city', store_stats.city, '')) LIKE $6
+          OR LOWER(COALESCE(p.location_data->>'locality', store_stats.locality, '')) LIKE $6
+        )
+    `;
+
+    const listResult = await getPool().query(
+      `SELECT
+         u.id::text AS business_id,
+         u.name AS owner_name,
+         u.phone,
+         NULL::text AS email,
+         u.created_at,
+         COALESCE(store_stats.store_name, p.name, u.name, 'Business Store') AS store_name,
+         COALESCE(p.location_data->>'address', p.location_data->>'street', '') AS address,
+         COALESCE(p.location_data->>'city', store_stats.city, '') AS city,
+         COALESCE(p.location_data->>'locality', store_stats.locality, '') AS locality,
+         COALESCE(bs.verification_status, 'unverified') AS verification_status,
+         COALESCE(bs.status, 'active') AS account_status,
+         bs.reason AS status_reason,
+         COALESCE(payment_stats.last_payment_status, 'none') AS subscription_payment_status,
+         COALESCE(store_stats.total_products_listed, 0) AS total_products_listed,
+         COALESCE(store_stats.active_products, 0) AS active_products,
+         COALESCE(store_stats.near_expiry_products, 0) AS near_expiry_products,
+         COALESCE(request_stats.orders_received, 0) AS orders_received,
+         COALESCE(request_stats.accepted_orders, 0) AS accepted_orders,
+         COALESCE(request_stats.declined_orders, 0) AS declined_orders,
+         COALESCE(request_stats.completed_orders, 0) AS completed_orders,
+         COALESCE(p.karma, 0) AS store_karma,
+         COALESCE(payment_stats.total_revenue_paise, 0) AS revenue_paise,
+         COALESCE(payment_stats.payment_count, 0) AS payment_history_count,
+         login.last_login_at,
+         COALESCE(p.location_data->>'storeLogo', p.location_data->>'storeImage', p.location_data->>'profileImage', p.location_data->>'profile_image', p.location_data->>'profileImageUrl', '') AS logo_profile_image
+       FROM users u
+  LEFT JOIN profiles p ON p.phone = u.phone
+  LEFT JOIN admin_business_status bs ON bs.business_id = u.id::text
+  LEFT JOIN LATERAL (
+       SELECT
+         (ARRAY_AGG(COALESCE(l.store_name, l.seller_name) ORDER BY l.created_at DESC))[1] AS store_name,
+         (ARRAY_AGG(COALESCE(l.city, '') ORDER BY l.created_at DESC))[1] AS city,
+         (ARRAY_AGG(COALESCE(l.area, '') ORDER BY l.created_at DESC))[1] AS locality,
+         COUNT(*)::bigint AS total_products_listed,
+         COUNT(*) FILTER (WHERE LOWER(COALESCE(l.status, 'active')) = 'active')::bigint AS active_products,
+         COUNT(*) FILTER (
+           WHERE l.expiry_date IS NOT NULL
+             AND l.expiry_date >= CURRENT_DATE
+             AND l.expiry_date <= (CURRENT_DATE + interval '3 days')
+         )::bigint AS near_expiry_products
+         FROM listings l
+        WHERE l.seller_id = u.id::text OR l.business_id = u.id::text OR COALESCE(l.metadata->>'ownerMobile', '') = u.phone
+     ) store_stats ON true
+  LEFT JOIN LATERAL (
+       SELECT
+         COUNT(*)::bigint AS orders_received,
+         COUNT(*) FILTER (WHERE LOWER(COALESCE(r.status, '')) = 'accepted')::bigint AS accepted_orders,
+         COUNT(*) FILTER (WHERE LOWER(COALESCE(r.status, '')) = 'declined')::bigint AS declined_orders,
+         COUNT(*) FILTER (WHERE LOWER(COALESCE(r.status, '')) IN ('completed', 'collected', 'fulfilled'))::bigint AS completed_orders
+         FROM requests r
+        WHERE r.seller_id = u.id::text
+     ) request_stats ON true
+  LEFT JOIN LATERAL (
+       SELECT
+         COUNT(*)::bigint AS payment_count,
+         COALESCE(SUM(CASE WHEN LOWER(COALESCE(bp.status, '')) IN ('captured', 'paid', 'success') THEN bp.amount_paise ELSE 0 END), 0)::bigint AS total_revenue_paise,
+         (ARRAY_AGG(bp.status ORDER BY bp.created_at DESC))[1] AS last_payment_status
+         FROM buyer_access_payments bp
+        WHERE bp.user_id::text = u.id::text
+     ) payment_stats ON true
+  LEFT JOIN LATERAL (
+       SELECT se.created_at AS last_login_at
+         FROM security_audit_events se
+        WHERE se.user_id::text = u.id::text OR (u.phone <> '' AND se.phone_last4 = RIGHT(u.phone, 4))
+        ORDER BY se.created_at DESC
+        LIMIT 1
+     ) login ON true
+      ${whereClause}
+      ORDER BY u.created_at DESC
+      LIMIT $7 OFFSET $8`,
+      [searchRaw, searchLike, statusFilter, verificationFilter, cityRaw, cityLike, limit, offset],
+    );
+
+    const countResult = await getPool().query(
+      `SELECT COUNT(*)::bigint AS total
+         FROM users u
+    LEFT JOIN profiles p ON p.phone = u.phone
+    LEFT JOIN admin_business_status bs ON bs.business_id = u.id::text
+    LEFT JOIN LATERAL (
+       SELECT
+         (ARRAY_AGG(COALESCE(l.store_name, l.seller_name) ORDER BY l.created_at DESC))[1] AS store_name,
+         (ARRAY_AGG(COALESCE(l.city, '') ORDER BY l.created_at DESC))[1] AS city,
+         (ARRAY_AGG(COALESCE(l.area, '') ORDER BY l.created_at DESC))[1] AS locality
+         FROM listings l
+        WHERE l.seller_id = u.id::text OR l.business_id = u.id::text OR COALESCE(l.metadata->>'ownerMobile', '') = u.phone
+     ) store_stats ON true
+      ${whereClause}`,
+      [searchRaw, searchLike, statusFilter, verificationFilter, cityRaw, cityLike],
+    );
+
+    return res.status(200).json({
+      success: true,
+      rows: listResult.rows.map((row) => ({
+        businessId: row.business_id,
+        storeName: row.store_name,
+        ownerName: row.owner_name,
+        phone: row.phone,
+        email: row.email,
+        address: row.address,
+        city: row.city,
+        locality: row.locality,
+        signupAt: row.created_at,
+        lastLoginAt: row.last_login_at,
+        verificationStatus: row.verification_status,
+        subscriptionPaymentStatus: row.subscription_payment_status,
+        totalProductsListed: Number(row.total_products_listed || 0),
+        activeProducts: Number(row.active_products || 0),
+        nearExpiryProducts: Number(row.near_expiry_products || 0),
+        ordersReceived: Number(row.orders_received || 0),
+        acceptedOrders: Number(row.accepted_orders || 0),
+        declinedOrders: Number(row.declined_orders || 0),
+        completedOrders: Number(row.completed_orders || 0),
+        storeKarma: Number(row.store_karma || 0),
+        revenuePaise: Number(row.revenue_paise || 0),
+        paymentHistoryCount: Number(row.payment_history_count || 0),
+        accountStatus: row.account_status,
+        statusReason: row.status_reason || '',
+        logoProfileImage: row.logo_profile_image || '',
+      })),
+      pagination: {
+        page,
+        limit,
+        total: Number(countResult.rows[0]?.total || 0),
+      },
+    });
+  });
+
+  router.get('/businesses/:businessId', requirePermission('businesses:read'), async (req, res) => {
+    const business = await resolveBusinessIdentity(req.params.businessId);
+    if (!business) return res.status(404).json({ error: 'Business not found.' });
+
+    const detail = await buildBusinessDetailPayload(business);
+    return res.status(200).json({ success: true, ...detail });
+  });
+
+  router.put('/businesses/:businessId/status', sensitiveWriteLimiter, requirePermission('businesses:moderate'), async (req, res) => {
+    const business = await resolveBusinessIdentity(req.params.businessId);
+    if (!business) return res.status(404).json({ error: 'Business not found.' });
+
+    const nextStatus = normalizeBusinessAdminStatus(req.body?.status || '');
+    const verificationStatusRaw = String(req.body?.verificationStatus || '').trim().toLowerCase();
+    const verificationStatus = (verificationStatusRaw === 'verified' || verificationStatusRaw === 'unverified') ? verificationStatusRaw : '';
+    const reason = String(req.body?.reason || '').trim().slice(0, 240);
+
+    if (!nextStatus && !verificationStatus) {
+      return res.status(400).json({ error: 'Provide status and/or verificationStatus update.' });
+    }
+
+    await getPool().query(
+      `INSERT INTO admin_business_status (business_id, status, verification_status, reason, updated_by, updated_at)
+       VALUES ($1,$2,$3,$4,$5,now())
+       ON CONFLICT (business_id) DO UPDATE SET
+         status = CASE WHEN $2 <> '' THEN $2 ELSE admin_business_status.status END,
+         verification_status = CASE WHEN $3 <> '' THEN $3 ELSE admin_business_status.verification_status END,
+         reason = $4,
+         updated_by = $5,
+         updated_at = now()`,
+      [business.business_id, nextStatus || 'active', verificationStatus || 'unverified', reason, req.admin.id],
+    );
+
+    await writeAuditLog({
+      adminId: req.admin.id,
+      action: 'admin_business_status_updated',
+      targetType: 'business',
+      targetId: business.business_id,
+      metadata: { status: nextStatus, verificationStatus, reason },
+      req,
+    });
+
+    return res.status(200).json({
+      success: true,
+      businessId: business.business_id,
+      status: nextStatus || undefined,
+      verificationStatus: verificationStatus || undefined,
+      reason,
+    });
+  });
+
+  router.post('/businesses/:businessId/notes', sensitiveWriteLimiter, requirePermission('businesses:note'), async (req, res) => {
+    const business = await resolveBusinessIdentity(req.params.businessId);
+    if (!business) return res.status(404).json({ error: 'Business not found.' });
+
+    const note = String(req.body?.note || '').trim();
+    if (!note) return res.status(400).json({ error: 'Note is required.' });
+    if (note.length > 2000) return res.status(400).json({ error: 'Note is too long.' });
+
+    const created = await getPool().query(
+      `INSERT INTO admin_business_notes (business_id, admin_id, note)
+       VALUES ($1,$2,$3)
+       RETURNING id, business_id, note, created_at`,
+      [business.business_id, req.admin.id, note],
+    );
+
+    await writeAuditLog({
+      adminId: req.admin.id,
+      action: 'admin_business_note_added',
+      targetType: 'business',
+      targetId: business.business_id,
+      metadata: { noteLength: note.length },
+      req,
+    });
+
+    return res.status(201).json({ success: true, note: created.rows[0] });
+  });
+
+  router.get('/businesses/:businessId/export', requirePermission('businesses:read'), async (req, res) => {
+    const business = await resolveBusinessIdentity(req.params.businessId);
+    if (!business) return res.status(404).json({ error: 'Business not found.' });
+
+    const detail = await buildBusinessDetailPayload(business);
+    await writeAuditLog({
+      adminId: req.admin.id,
+      action: 'admin_business_exported',
+      targetType: 'business',
+      targetId: business.business_id,
+      metadata: { format: 'json' },
+      req,
+    });
+
+    return res.status(200).json({
+      success: true,
+      exportedAt: new Date().toISOString(),
+      businessId: business.business_id,
       data: detail,
     });
   });

@@ -66,6 +66,19 @@ const accountTypeOptions = [
   { value: 'business', label: 'Business' },
 ];
 
+const businessStatusOptions = [
+  { value: '', label: 'All status' },
+  { value: 'active', label: 'Active' },
+  { value: 'suspended', label: 'Suspended' },
+  { value: 'blocked', label: 'Blocked' },
+];
+
+const verificationStatusOptions = [
+  { value: '', label: 'All verification' },
+  { value: 'verified', label: 'Verified' },
+  { value: 'unverified', label: 'Unverified' },
+];
+
 const maskedPhone = (value = '') => {
   const digits = String(value || '').replace(/\D/g, '');
   if (!digits) return '--';
@@ -91,21 +104,43 @@ export default function AdminDashboardPage({ navigate, path = '/admin' }) {
   const [filterStatus, setFilterStatus] = useState('');
   const [filterCity, setFilterCity] = useState('');
 
+  const [businesses, setBusinesses] = useState([]);
+  const [businessesPagination, setBusinessesPagination] = useState({ page: 1, limit: 25, total: 0 });
+  const [businessesLoading, setBusinessesLoading] = useState(false);
+  const [businessSearchInput, setBusinessSearchInput] = useState('');
+  const [businessSearchQuery, setBusinessSearchQuery] = useState('');
+  const [businessFilterStatus, setBusinessFilterStatus] = useState('');
+  const [businessFilterVerification, setBusinessFilterVerification] = useState('');
+  const [businessFilterCity, setBusinessFilterCity] = useState('');
+
   const [selectedUserId, setSelectedUserId] = useState('');
   const [selectedUserDetail, setSelectedUserDetail] = useState(null);
   const [userDetailLoading, setUserDetailLoading] = useState(false);
+  const [selectedBusinessId, setSelectedBusinessId] = useState('');
+  const [selectedBusinessDetail, setSelectedBusinessDetail] = useState(null);
+  const [businessDetailLoading, setBusinessDetailLoading] = useState(false);
   const [noteInput, setNoteInput] = useState('');
   const [statusReasonInput, setStatusReasonInput] = useState('');
+  const [businessNoteInput, setBusinessNoteInput] = useState('');
+  const [businessStatusReasonInput, setBusinessStatusReasonInput] = useState('');
 
   const [error, setError] = useState('');
   const [actionBusy, setActionBusy] = useState('');
 
   const normalizedPath = String(path || '/admin').replace(/\/$/, '') || '/admin';
   const isUsersSection = normalizedPath.startsWith('/admin/users');
+  const isBusinessesSection = normalizedPath.startsWith('/admin/businesses');
+  const isOverviewSection = !isUsersSection && !isBusinessesSection;
 
   const selectedUserFromPath = useMemo(() => {
     const parts = normalizedPath.split('/').filter(Boolean);
     if (parts[0] !== 'admin' || parts[1] !== 'users') return '';
+    return parts[2] ? decodeURIComponent(parts[2]) : '';
+  }, [normalizedPath]);
+
+  const selectedBusinessFromPath = useMemo(() => {
+    const parts = normalizedPath.split('/').filter(Boolean);
+    if (parts[0] !== 'admin' || parts[1] !== 'businesses') return '';
     return parts[2] ? decodeURIComponent(parts[2]) : '';
   }, [normalizedPath]);
 
@@ -188,6 +223,54 @@ export default function AdminDashboardPage({ navigate, path = '/admin' }) {
     }
   };
 
+  const businessListQuery = useMemo(() => {
+    const params = new URLSearchParams();
+    params.set('page', String(businessesPagination.page || 1));
+    params.set('limit', String(businessesPagination.limit || 25));
+    if (businessSearchQuery) params.set('search', businessSearchQuery);
+    if (businessFilterStatus) params.set('status', businessFilterStatus);
+    if (businessFilterVerification) params.set('verificationStatus', businessFilterVerification);
+    if (businessFilterCity) params.set('city', businessFilterCity);
+    return params.toString();
+  }, [businessesPagination.page, businessesPagination.limit, businessSearchQuery, businessFilterStatus, businessFilterVerification, businessFilterCity]);
+
+  const loadBusinesses = async () => {
+    if (!token || !isBusinessesSection) return;
+    setBusinessesLoading(true);
+    setError('');
+    try {
+      const result = await requestJson(`/api/admin/businesses?${businessListQuery}`, { token });
+      setBusinesses(result?.rows || []);
+      setBusinessesPagination((prev) => ({
+        ...prev,
+        page: Number(result?.pagination?.page || prev.page || 1),
+        limit: Number(result?.pagination?.limit || prev.limit || 25),
+        total: Number(result?.pagination?.total || 0),
+      }));
+    } catch (nextError) {
+      setError(nextError?.message || 'Unable to load businesses.');
+    } finally {
+      setBusinessesLoading(false);
+    }
+  };
+
+  const loadBusinessDetail = async (businessId) => {
+    if (!token || !businessId) {
+      setSelectedBusinessDetail(null);
+      return;
+    }
+    setBusinessDetailLoading(true);
+    setError('');
+    try {
+      const result = await requestJson(`/api/admin/businesses/${encodeURIComponent(businessId)}`, { token });
+      setSelectedBusinessDetail(result || null);
+    } catch (nextError) {
+      setError(nextError?.message || 'Unable to load business details.');
+    } finally {
+      setBusinessDetailLoading(false);
+    }
+  };
+
   const loadUserDetail = async (userId) => {
     if (!token || !userId) {
       setSelectedUserDetail(null);
@@ -210,16 +293,22 @@ export default function AdminDashboardPage({ navigate, path = '/admin' }) {
   }, [token]);
 
   useEffect(() => {
-    if (!isUsersSection) {
+    if (isOverviewSection) {
       loadOverview();
     }
-  }, [token, queryString, isUsersSection]);
+  }, [token, queryString, isOverviewSection]);
 
   useEffect(() => {
     if (isUsersSection) {
       loadUsers();
     }
   }, [token, isUsersSection, userListQuery]);
+
+  useEffect(() => {
+    if (isBusinessesSection) {
+      loadBusinesses();
+    }
+  }, [token, isBusinessesSection, businessListQuery]);
 
   useEffect(() => {
     setSelectedUserId(selectedUserFromPath || '');
@@ -233,6 +322,19 @@ export default function AdminDashboardPage({ navigate, path = '/admin' }) {
       setSelectedUserDetail(null);
     }
   }, [token, isUsersSection, selectedUserId]);
+
+  useEffect(() => {
+    setSelectedBusinessId(selectedBusinessFromPath || '');
+  }, [selectedBusinessFromPath]);
+
+  useEffect(() => {
+    if (isBusinessesSection && selectedBusinessId) {
+      loadBusinessDetail(selectedBusinessId);
+    }
+    if (isBusinessesSection && !selectedBusinessId) {
+      setSelectedBusinessDetail(null);
+    }
+  }, [token, isBusinessesSection, selectedBusinessId]);
 
   const handleLogout = async () => {
     try {
@@ -250,15 +352,26 @@ export default function AdminDashboardPage({ navigate, path = '/admin' }) {
 
   const goToOverview = () => navigate('/admin');
   const goToUsers = () => navigate('/admin/users');
+  const goToBusinesses = () => navigate('/admin/businesses');
 
   const openUserDetails = (userId) => {
     navigate(`/admin/users/${encodeURIComponent(userId)}`);
+  };
+
+  const openBusinessDetails = (businessId) => {
+    navigate(`/admin/businesses/${encodeURIComponent(businessId)}`);
   };
 
   const applySearch = (event) => {
     event.preventDefault();
     setUsersPagination((prev) => ({ ...prev, page: 1 }));
     setSearchQuery(searchInput.trim());
+  };
+
+  const applyBusinessSearch = (event) => {
+    event.preventDefault();
+    setBusinessesPagination((prev) => ({ ...prev, page: 1 }));
+    setBusinessSearchQuery(businessSearchInput.trim());
   };
 
   const updateUserStatus = async (status) => {
@@ -326,6 +439,70 @@ export default function AdminDashboardPage({ navigate, path = '/admin' }) {
     }
   };
 
+  const updateBusinessStatus = async ({ status = '', verificationStatus = '' } = {}) => {
+    if (!selectedBusinessId) return;
+    setActionBusy(`business:${status || verificationStatus}`);
+    setError('');
+    try {
+      await requestJson(`/api/admin/businesses/${encodeURIComponent(selectedBusinessId)}/status`, {
+        method: 'PUT',
+        token,
+        body: {
+          status,
+          verificationStatus,
+          reason: businessStatusReasonInput.trim(),
+        },
+      });
+      await loadBusinesses();
+      await loadBusinessDetail(selectedBusinessId);
+      setBusinessStatusReasonInput('');
+    } catch (nextError) {
+      setError(nextError?.message || 'Unable to update business status.');
+    } finally {
+      setActionBusy('');
+    }
+  };
+
+  const addBusinessNote = async () => {
+    if (!selectedBusinessId || !businessNoteInput.trim()) return;
+    setActionBusy('business-note');
+    setError('');
+    try {
+      await requestJson(`/api/admin/businesses/${encodeURIComponent(selectedBusinessId)}/notes`, {
+        method: 'POST',
+        token,
+        body: { note: businessNoteInput.trim() },
+      });
+      setBusinessNoteInput('');
+      await loadBusinessDetail(selectedBusinessId);
+    } catch (nextError) {
+      setError(nextError?.message || 'Unable to add business note.');
+    } finally {
+      setActionBusy('');
+    }
+  };
+
+  const exportBusinessData = async () => {
+    if (!selectedBusinessId) return;
+    setActionBusy('business-export');
+    setError('');
+    try {
+      const result = await requestJson(`/api/admin/businesses/${encodeURIComponent(selectedBusinessId)}/export`, { token });
+      const payload = JSON.stringify(result?.data || {}, null, 2);
+      const blob = new Blob([payload], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement('a');
+      anchor.href = url;
+      anchor.download = `drizn-business-export-${selectedBusinessId}.json`;
+      anchor.click();
+      URL.revokeObjectURL(url);
+    } catch (nextError) {
+      setError(nextError?.message || 'Unable to export business data.');
+    } finally {
+      setActionBusy('');
+    }
+  };
+
   const summary = overview?.summary || {};
   const revenueInr = Number(summary?.revenue?.amountPaise || 0) / 100;
 
@@ -351,7 +528,7 @@ export default function AdminDashboardPage({ navigate, path = '/admin' }) {
         <div className="mb-5 flex flex-col gap-3 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:flex-row sm:items-center sm:justify-between">
           <div>
             <p className="text-xs font-bold uppercase tracking-[0.14em] text-emerald-700">Drizn Admin Dashboard</p>
-            <h1 className="text-2xl font-black text-slate-900">{isUsersSection ? 'User Management' : 'Overview'}</h1>
+            <h1 className="text-2xl font-black text-slate-900">{isUsersSection ? 'User Management' : isBusinessesSection ? 'Business Management' : 'Overview'}</h1>
             <p className="mt-1 text-sm font-semibold text-slate-600">{admin?.displayName || 'Admin'} · {String(admin?.role || 'read_only').replaceAll('_', ' ')}</p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
@@ -371,6 +548,13 @@ export default function AdminDashboardPage({ navigate, path = '/admin' }) {
             </button>
             <button
               type="button"
+              onClick={goToBusinesses}
+              className={`rounded-xl px-3 py-2 text-sm font-bold ${isBusinessesSection ? 'bg-emerald-700 text-white' : 'border border-slate-200 bg-white text-slate-700'}`}
+            >
+              Businesses
+            </button>
+            <button
+              type="button"
               onClick={handleLogout}
               className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-2.5 text-sm font-bold text-rose-700"
             >
@@ -385,7 +569,7 @@ export default function AdminDashboardPage({ navigate, path = '/admin' }) {
           </div>
         )}
 
-        {!isUsersSection ? (
+        {isOverviewSection ? (
           <>
             <div className="mb-5 grid grid-cols-1 gap-3 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm md:grid-cols-4">
               <label className="text-xs font-bold uppercase tracking-[0.12em] text-slate-600">
@@ -479,7 +663,7 @@ export default function AdminDashboardPage({ navigate, path = '/admin' }) {
               </>
             )}
           </>
-        ) : (
+        ) : isUsersSection ? (
           <>
             <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
               <form onSubmit={applySearch} className="grid grid-cols-1 gap-3 md:grid-cols-6">
@@ -845,6 +1029,284 @@ export default function AdminDashboardPage({ navigate, path = '/admin' }) {
                   </div>
                 ) : (
                   <p className="text-sm font-semibold text-slate-500">User details are unavailable.</p>
+                )}
+              </div>
+            </div>
+          </>
+        ) : (
+          <>
+            <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+              <form onSubmit={applyBusinessSearch} className="grid grid-cols-1 gap-3 md:grid-cols-6">
+                <label className="md:col-span-2">
+                  <span className="text-xs font-bold uppercase tracking-[0.12em] text-slate-600">Search store/owner/phone</span>
+                  <div className="mt-1.5 flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-2.5 py-2">
+                    <Search size={16} className="text-slate-500" />
+                    <input
+                      value={businessSearchInput}
+                      onChange={(event) => setBusinessSearchInput(event.target.value)}
+                      placeholder="Store, owner, phone, business ID"
+                      className="w-full bg-transparent text-sm font-semibold text-slate-900 outline-none"
+                    />
+                  </div>
+                </label>
+                <label>
+                  <span className="text-xs font-bold uppercase tracking-[0.12em] text-slate-600">Status</span>
+                  <select
+                    value={businessFilterStatus}
+                    onChange={(event) => {
+                      setBusinessesPagination((prev) => ({ ...prev, page: 1 }));
+                      setBusinessFilterStatus(event.target.value);
+                    }}
+                    className="mt-1.5 w-full rounded-xl border border-slate-200 px-2.5 py-2 text-sm font-semibold text-slate-900"
+                  >
+                    {businessStatusOptions.map((option) => (
+                      <option key={option.value} value={option.value}>{option.label}</option>
+                    ))}
+                  </select>
+                </label>
+                <label>
+                  <span className="text-xs font-bold uppercase tracking-[0.12em] text-slate-600">Verification</span>
+                  <select
+                    value={businessFilterVerification}
+                    onChange={(event) => {
+                      setBusinessesPagination((prev) => ({ ...prev, page: 1 }));
+                      setBusinessFilterVerification(event.target.value);
+                    }}
+                    className="mt-1.5 w-full rounded-xl border border-slate-200 px-2.5 py-2 text-sm font-semibold text-slate-900"
+                  >
+                    {verificationStatusOptions.map((option) => (
+                      <option key={option.value} value={option.value}>{option.label}</option>
+                    ))}
+                  </select>
+                </label>
+                <label>
+                  <span className="text-xs font-bold uppercase tracking-[0.12em] text-slate-600">City/locality</span>
+                  <input
+                    value={businessFilterCity}
+                    onChange={(event) => {
+                      setBusinessesPagination((prev) => ({ ...prev, page: 1 }));
+                      setBusinessFilterCity(event.target.value);
+                    }}
+                    placeholder="City"
+                    className="mt-1.5 w-full rounded-xl border border-slate-200 px-2.5 py-2 text-sm font-semibold text-slate-900"
+                  />
+                </label>
+                <div className="flex items-end">
+                  <button type="submit" className="w-full rounded-xl bg-emerald-700 px-3 py-2.5 text-sm font-bold text-white">Apply</button>
+                </div>
+              </form>
+            </div>
+
+            <div className="mt-4 grid grid-cols-1 gap-4 xl:grid-cols-[1.4fr,1fr]">
+              <div className="rounded-2xl border border-slate-200 bg-white shadow-sm">
+                <div className="overflow-x-auto">
+                  <table className="min-w-[1250px] text-left text-xs">
+                    <thead className="bg-slate-50 uppercase tracking-[0.12em] text-slate-500">
+                      <tr>
+                        <th className="px-3 py-3">Store</th>
+                        <th className="px-3 py-3">Owner</th>
+                        <th className="px-3 py-3">Phone</th>
+                        <th className="px-3 py-3">Email</th>
+                        <th className="px-3 py-3">Address</th>
+                        <th className="px-3 py-3">City/locality</th>
+                        <th className="px-3 py-3">Signup</th>
+                        <th className="px-3 py-3">Last login</th>
+                        <th className="px-3 py-3">Verification</th>
+                        <th className="px-3 py-3">Payment status</th>
+                        <th className="px-3 py-3">Total products</th>
+                        <th className="px-3 py-3">Active</th>
+                        <th className="px-3 py-3">Near expiry</th>
+                        <th className="px-3 py-3">Orders</th>
+                        <th className="px-3 py-3">A/D/C</th>
+                        <th className="px-3 py-3">Karma</th>
+                        <th className="px-3 py-3">Revenue</th>
+                        <th className="px-3 py-3">Status</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {businessesLoading ? (
+                        <tr>
+                          <td colSpan={18} className="px-4 py-6 text-center text-sm font-semibold text-slate-500">Loading businesses...</td>
+                        </tr>
+                      ) : (
+                        businesses.map((row) => (
+                          <tr
+                            key={row.businessId}
+                            onClick={() => openBusinessDetails(row.businessId)}
+                            className={`cursor-pointer border-t border-slate-100 ${selectedBusinessId === row.businessId ? 'bg-emerald-50/60' : 'hover:bg-slate-50'}`}
+                          >
+                            <td className="px-3 py-2.5 font-semibold text-slate-900">{row.storeName || 'Business Store'}</td>
+                            <td className="px-3 py-2.5 font-semibold text-slate-700">{row.ownerName || 'Unknown'}</td>
+                            <td className="px-3 py-2.5 font-semibold text-slate-700">{maskedPhone(row.phone)}</td>
+                            <td className="px-3 py-2.5 font-semibold text-slate-700">{row.email || '--'}</td>
+                            <td className="px-3 py-2.5 font-semibold text-slate-700">{row.address || '--'}</td>
+                            <td className="px-3 py-2.5 font-semibold text-slate-700">{[row.city, row.locality].filter(Boolean).join(', ') || '--'}</td>
+                            <td className="px-3 py-2.5 font-semibold text-slate-700">{dateLabel(row.signupAt)}</td>
+                            <td className="px-3 py-2.5 font-semibold text-slate-700">{dateLabel(row.lastLoginAt)}</td>
+                            <td className="px-3 py-2.5 font-semibold text-slate-700">{row.verificationStatus || 'unverified'}</td>
+                            <td className="px-3 py-2.5 font-semibold text-slate-700">{row.subscriptionPaymentStatus || 'none'}</td>
+                            <td className="px-3 py-2.5 font-semibold text-slate-700">{numberFormat.format(Number(row.totalProductsListed || 0))}</td>
+                            <td className="px-3 py-2.5 font-semibold text-slate-700">{numberFormat.format(Number(row.activeProducts || 0))}</td>
+                            <td className="px-3 py-2.5 font-semibold text-slate-700">{numberFormat.format(Number(row.nearExpiryProducts || 0))}</td>
+                            <td className="px-3 py-2.5 font-semibold text-slate-700">{numberFormat.format(Number(row.ordersReceived || 0))}</td>
+                            <td className="px-3 py-2.5 font-semibold text-slate-700">{numberFormat.format(Number(row.acceptedOrders || 0))}/{numberFormat.format(Number(row.declinedOrders || 0))}/{numberFormat.format(Number(row.completedOrders || 0))}</td>
+                            <td className="px-3 py-2.5 font-semibold text-slate-700">{numberFormat.format(Number(row.storeKarma || 0))}</td>
+                            <td className="px-3 py-2.5 font-semibold text-slate-700">Rs {numberFormat.format(Number(row.revenuePaise || 0) / 100)}</td>
+                            <td className="px-3 py-2.5 font-semibold text-slate-700">{row.accountStatus || 'active'}</td>
+                          </tr>
+                        ))
+                      )}
+                      {!businessesLoading && businesses.length === 0 && (
+                        <tr>
+                          <td colSpan={18} className="px-4 py-6 text-center text-sm font-semibold text-slate-500">No businesses found for current filters.</td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+                <div className="flex items-center justify-between border-t border-slate-200 px-4 py-3 text-sm font-semibold text-slate-700">
+                  <p>Page {businessesPagination.page} · {numberFormat.format(businessesPagination.total)} businesses</p>
+                  <div className="flex gap-2">
+                    <button
+                      type="button"
+                      disabled={businessesPagination.page <= 1}
+                      onClick={() => setBusinessesPagination((prev) => ({ ...prev, page: Math.max(1, prev.page - 1) }))}
+                      className="rounded-lg border border-slate-200 px-3 py-1.5 disabled:opacity-50"
+                    >
+                      Prev
+                    </button>
+                    <button
+                      type="button"
+                      disabled={businessesPagination.page * businessesPagination.limit >= businessesPagination.total}
+                      onClick={() => setBusinessesPagination((prev) => ({ ...prev, page: prev.page + 1 }))}
+                      className="rounded-lg border border-slate-200 px-3 py-1.5 disabled:opacity-50"
+                    >
+                      Next
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+                {!selectedBusinessId ? (
+                  <p className="text-sm font-semibold text-slate-500">Select a business to view complete store profile and actions.</p>
+                ) : businessDetailLoading ? (
+                  <p className="text-sm font-semibold text-slate-500">Loading business details...</p>
+                ) : selectedBusinessDetail?.profile ? (
+                  <div className="space-y-4">
+                    <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
+                      <p className="text-xs font-bold uppercase tracking-[0.12em] text-slate-500">Store profile</p>
+                      <p className="mt-1 text-base font-black text-slate-900">{selectedBusinessDetail.profile.storeName || 'Business Store'}</p>
+                      <p className="text-sm font-semibold text-slate-600">Owner: {selectedBusinessDetail.profile.ownerName || 'Unknown'}</p>
+                      <p className="text-sm font-semibold text-slate-600">{maskedPhone(selectedBusinessDetail.profile.phone)}</p>
+                      <p className="text-xs font-semibold text-slate-600">ID: {selectedBusinessDetail.profile.businessId}</p>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-2 text-xs font-semibold text-slate-700">
+                      <div className="rounded-lg border border-slate-200 p-2">Products: {numberFormat.format(Number(selectedBusinessDetail.profile.totalProductsListed || 0))}</div>
+                      <div className="rounded-lg border border-slate-200 p-2">Active: {numberFormat.format(Number(selectedBusinessDetail.profile.activeProducts || 0))}</div>
+                      <div className="rounded-lg border border-slate-200 p-2">Near expiry: {numberFormat.format(Number(selectedBusinessDetail.profile.nearExpiryProducts || 0))}</div>
+                      <div className="rounded-lg border border-slate-200 p-2">Orders received: {numberFormat.format(Number(selectedBusinessDetail.profile.ordersReceived || 0))}</div>
+                      <div className="rounded-lg border border-slate-200 p-2">Accepted/Declined/Completed: {numberFormat.format(Number(selectedBusinessDetail.profile.acceptedOrders || 0))}/{numberFormat.format(Number(selectedBusinessDetail.profile.declinedOrders || 0))}/{numberFormat.format(Number(selectedBusinessDetail.profile.completedOrders || 0))}</div>
+                      <div className="rounded-lg border border-slate-200 p-2">Store karma: {numberFormat.format(Number(selectedBusinessDetail.profile.storeKarma || 0))}</div>
+                      <div className="rounded-lg border border-slate-200 p-2">Revenue: Rs {numberFormat.format(Number(selectedBusinessDetail.profile.revenuePaise || 0) / 100)}</div>
+                      <div className="rounded-lg border border-slate-200 p-2">Payment status: {selectedBusinessDetail.profile.subscriptionPaymentStatus || 'none'}</div>
+                      <div className="rounded-lg border border-slate-200 p-2">Verification: {selectedBusinessDetail.profile.verificationStatus || 'unverified'}</div>
+                      <div className="rounded-lg border border-slate-200 p-2">Account status: {selectedBusinessDetail.profile.accountStatus || 'active'}</div>
+                    </div>
+
+                    <div className="rounded-xl border border-slate-200 p-3">
+                      <p className="text-xs font-bold uppercase tracking-[0.12em] text-slate-500">Admin actions</p>
+                      <input
+                        value={businessStatusReasonInput}
+                        onChange={(event) => setBusinessStatusReasonInput(event.target.value)}
+                        placeholder="Reason (optional)"
+                        className="mt-2 w-full rounded-lg border border-slate-200 px-2.5 py-2 text-sm font-semibold text-slate-900"
+                      />
+                      <div className="mt-2 flex flex-wrap gap-2">
+                        <button type="button" disabled={Boolean(actionBusy)} onClick={() => updateBusinessStatus({ verificationStatus: 'verified' })} className="rounded-lg border border-emerald-200 bg-emerald-50 px-2.5 py-1.5 text-xs font-bold text-emerald-700 disabled:opacity-50">Approve/Verify</button>
+                        <button type="button" disabled={Boolean(actionBusy)} onClick={() => updateBusinessStatus({ verificationStatus: 'unverified' })} className="rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-1.5 text-xs font-bold text-slate-700 disabled:opacity-50">Unverify</button>
+                        <button type="button" disabled={Boolean(actionBusy)} onClick={() => updateBusinessStatus({ status: 'active' })} className="rounded-lg border border-emerald-200 bg-emerald-50 px-2.5 py-1.5 text-xs font-bold text-emerald-700 disabled:opacity-50">Activate</button>
+                        <button type="button" disabled={Boolean(actionBusy)} onClick={() => updateBusinessStatus({ status: 'suspended' })} className="rounded-lg border border-amber-200 bg-amber-50 px-2.5 py-1.5 text-xs font-bold text-amber-700 disabled:opacity-50">Suspend</button>
+                        <button type="button" disabled={Boolean(actionBusy)} onClick={() => updateBusinessStatus({ status: 'blocked' })} className="rounded-lg border border-rose-200 bg-rose-50 px-2.5 py-1.5 text-xs font-bold text-rose-700 disabled:opacity-50">Block</button>
+                      </div>
+                    </div>
+
+                    <div className="rounded-xl border border-slate-200 p-3">
+                      <p className="text-xs font-bold uppercase tracking-[0.12em] text-slate-500">Internal note</p>
+                      <textarea
+                        value={businessNoteInput}
+                        onChange={(event) => setBusinessNoteInput(event.target.value)}
+                        rows={3}
+                        className="mt-2 w-full rounded-lg border border-slate-200 px-2.5 py-2 text-sm font-semibold text-slate-900"
+                        placeholder="Add internal note for this business"
+                      />
+                      <div className="mt-2 flex gap-2">
+                        <button type="button" disabled={!businessNoteInput.trim() || Boolean(actionBusy)} onClick={addBusinessNote} className="rounded-lg bg-emerald-700 px-3 py-1.5 text-xs font-bold text-white disabled:opacity-50">Save Note</button>
+                        <button type="button" disabled={Boolean(actionBusy)} onClick={exportBusinessData} className="rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-bold text-slate-700 disabled:opacity-50">Export JSON</button>
+                      </div>
+                    </div>
+
+                    <div className="rounded-xl border border-slate-200 p-3">
+                      <p className="text-xs font-bold uppercase tracking-[0.12em] text-slate-500">Support notes</p>
+                      <div className="mt-2 max-h-32 space-y-2 overflow-auto">
+                        {(selectedBusinessDetail.supportNotes || []).map((note) => (
+                          <div key={note.id} className="rounded-lg border border-slate-100 bg-slate-50 p-2">
+                            <p className="text-xs font-semibold text-slate-800">{note.note}</p>
+                            <p className="mt-1 text-[11px] font-semibold text-slate-500">{note.admin_name || 'Admin'} · {dateLabel(note.created_at)}</p>
+                          </div>
+                        ))}
+                        {(!selectedBusinessDetail.supportNotes || selectedBusinessDetail.supportNotes.length === 0) && <p className="text-xs font-semibold text-slate-500">No notes yet.</p>}
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-2 text-xs font-semibold text-slate-700">
+                      <div className="rounded-lg border border-slate-200 p-2">Listings: {numberFormat.format(Number(selectedBusinessDetail.listings?.length || 0))}</div>
+                      <div className="rounded-lg border border-slate-200 p-2">Order history: {numberFormat.format(Number(selectedBusinessDetail.ordersReceived?.length || 0))}</div>
+                      <div className="rounded-lg border border-slate-200 p-2">Notifications: {numberFormat.format(Number(selectedBusinessDetail.notifications?.length || 0))}</div>
+                      <div className="rounded-lg border border-slate-200 p-2">Karma history: {numberFormat.format(Number(selectedBusinessDetail.karmaHistory?.length || 0))}</div>
+                      <div className="rounded-lg border border-slate-200 p-2">Payment history: {numberFormat.format(Number(selectedBusinessDetail.payments?.length || 0))}</div>
+                      <div className="rounded-lg border border-slate-200 p-2">Activity timeline: {numberFormat.format(Number(selectedBusinessDetail.activityTimeline?.length || 0))}</div>
+                    </div>
+
+                    <div className="rounded-xl border border-slate-200 p-3">
+                      <p className="text-xs font-bold uppercase tracking-[0.12em] text-slate-500">Listings preview</p>
+                      <div className="mt-2 space-y-1 text-xs font-semibold text-slate-700">
+                        {(selectedBusinessDetail.listings || []).slice(0, 5).map((item) => (
+                          <p key={item.id}>{item.title || 'Listing'} · {item.status || 'unknown'} · expiry {item.expiry_date || '--'}</p>
+                        ))}
+                        {(!selectedBusinessDetail.listings || selectedBusinessDetail.listings.length === 0) && <p className="text-slate-500">No listings.</p>}
+                      </div>
+                    </div>
+
+                    <div className="rounded-xl border border-slate-200 p-3">
+                      <p className="text-xs font-bold uppercase tracking-[0.12em] text-slate-500">Order history preview</p>
+                      <div className="mt-2 space-y-1 text-xs font-semibold text-slate-700">
+                        {(selectedBusinessDetail.ordersReceived || []).slice(0, 5).map((item) => (
+                          <p key={item.id}>{item.id} · {item.status || 'unknown'} · qty {item.quantity || 0}</p>
+                        ))}
+                        {(!selectedBusinessDetail.ordersReceived || selectedBusinessDetail.ordersReceived.length === 0) && <p className="text-slate-500">No orders.</p>}
+                      </div>
+                    </div>
+
+                    <div className="rounded-xl border border-slate-200 p-3">
+                      <p className="text-xs font-bold uppercase tracking-[0.12em] text-slate-500">Activity timeline</p>
+                      <div className="mt-2 max-h-32 overflow-auto">
+                        <table className="w-full text-xs">
+                          <tbody>
+                            {(selectedBusinessDetail.activityTimeline || []).slice(0, 20).map((item, index) => (
+                              <tr key={`${item.entity_id || 'x'}-${index}`} className="border-t border-slate-100">
+                                <td className="py-1 pr-2 font-semibold text-slate-700">{item.event_type}</td>
+                                <td className="py-1 text-right font-semibold text-slate-500">{dateLabel(item.created_at)}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  </div>
+                ) : (
+                  <p className="text-sm font-semibold text-slate-500">Business details are unavailable.</p>
                 )}
               </div>
             </div>
