@@ -1327,17 +1327,6 @@ export function registerAdminModule({ app, getPool, isDbEnabled, createRateLimit
     const searchLike = searchRaw ? `%${searchRaw}%` : '';
     const cityLike = cityFilter ? `%${cityFilter}%` : '';
 
-    const whereClause = `
-      WHERE ($1 = '' OR u.name ILIKE $2 OR u.phone ILIKE $2 OR u.id::text = $1)
-        AND ($3 = '' OR LOWER(COALESCE(u.account_type, 'personal')) = $3)
-        AND ($4 = '' OR LOWER(COALESCE(us.status, 'active')) = $4)
-        AND (
-          $5 = ''
-          OR LOWER(COALESCE(p.location_data->>'city', '')) LIKE $6
-          OR LOWER(COALESCE(p.location_data->>'locality', '')) LIKE $6
-        )
-    `;
-
     const listResult = await getPool().query(
       `SELECT
          u.id::text AS user_id,
@@ -1352,62 +1341,18 @@ export function registerAdminModule({ app, getPool, isDbEnabled, createRateLimit
          p.location_data,
          COALESCE(p.location_data->>'city', '') AS city,
          COALESCE(p.location_data->>'locality', '') AS locality,
-         COALESCE(p.location_data->>'profileImage', p.location_data->>'profile_image', p.location_data->>'profileImageUrl', p.location_data->>'avatar', '') AS profile_picture,
-         COALESCE(lc.listings_count, 0) AS listings_count,
-         COALESCE(rc.requests_count, 0) AS products_requested,
-         COALESCE(rc.collected_count, 0) AS products_collected,
-         COALESCE(pc.payment_count, 0) AS payment_count,
-         COALESCE(pc.total_paid_paise, 0) AS total_amount_paid_paise,
-         COALESCE(pc.last_payment_status, 'none') AS payment_status,
-         login.last_login_at,
-         activity.last_active_at,
-         activity.last_activity_metadata
+         COALESCE(p.location_data->>'profileImage', p.location_data->>'profile_image', p.location_data->>'profileImageUrl', p.location_data->>'avatar', '') AS profile_picture
        FROM users u
   LEFT JOIN profiles p ON p.phone = u.phone
   LEFT JOIN admin_user_status us ON us.user_id = u.id::text
-  LEFT JOIN LATERAL (
-       SELECT COUNT(*)::bigint AS listings_count
-         FROM listings l
-        WHERE l.seller_id = u.id::text OR COALESCE(l.metadata->>'ownerMobile', '') = u.phone
-     ) lc ON true
-  LEFT JOIN LATERAL (
-       SELECT
-         COUNT(*)::bigint AS requests_count,
-         COUNT(*) FILTER (WHERE LOWER(COALESCE(r.status, '')) IN ('completed', 'collected', 'fulfilled'))::bigint AS collected_count
-         FROM requests r
-        WHERE r.buyer_id = u.id::text
-     ) rc ON true
-  LEFT JOIN LATERAL (
-       SELECT
-         COUNT(*)::bigint AS payment_count,
-         COALESCE(SUM(CASE WHEN LOWER(COALESCE(bp.status, '')) IN ('captured', 'paid', 'success') THEN bp.amount_paise ELSE 0 END), 0)::bigint AS total_paid_paise,
-         (ARRAY_AGG(bp.status ORDER BY bp.created_at DESC))[1] AS last_payment_status
-         FROM buyer_access_payments bp
-        WHERE bp.user_id::text = u.id::text
-     ) pc ON true
-  LEFT JOIN LATERAL (
-       SELECT se.created_at AS last_login_at
-         FROM security_audit_events se
-        WHERE se.user_id::text = u.id::text
-           OR (u.phone <> '' AND se.phone_last4 = RIGHT(u.phone, 4))
-        ORDER BY se.created_at DESC
-        LIMIT 1
-     ) login ON true
-  LEFT JOIN LATERAL (
-       SELECT timeline.created_at AS last_active_at, timeline.metadata AS last_activity_metadata
-         FROM (
-           SELECT created_at, metadata FROM security_audit_events se WHERE se.user_id::text = u.id::text
-           UNION ALL
-           SELECT created_at, metadata FROM listings l WHERE l.seller_id = u.id::text OR COALESCE(l.metadata->>'ownerMobile', '') = u.phone
-           UNION ALL
-           SELECT created_at, details AS metadata FROM requests r WHERE r.buyer_id = u.id::text
-           UNION ALL
-           SELECT created_at, metadata FROM buyer_access_payments bp WHERE bp.user_id::text = u.id::text
-         ) timeline
-        ORDER BY timeline.created_at DESC
-        LIMIT 1
-     ) activity ON true
-      ${whereClause}
+      WHERE ($1 = '' OR u.name ILIKE $2 OR u.phone ILIKE $2 OR u.id::text = $1)
+        AND ($3 = '' OR LOWER(COALESCE(u.account_type, 'personal')) = $3)
+        AND ($4 = '' OR LOWER(COALESCE(us.status, 'active')) = $4)
+        AND (
+          $5 = ''
+          OR LOWER(COALESCE(p.location_data->>'city', '')) LIKE $6
+          OR LOWER(COALESCE(p.location_data->>'locality', '')) LIKE $6
+        )
       ORDER BY u.created_at DESC
       LIMIT $7 OFFSET $8`,
       [searchRaw, searchLike, accountType, statusFilter, cityFilter, cityLike, limit, offset],
@@ -1418,37 +1363,180 @@ export function registerAdminModule({ app, getPool, isDbEnabled, createRateLimit
          FROM users u
     LEFT JOIN profiles p ON p.phone = u.phone
     LEFT JOIN admin_user_status us ON us.user_id = u.id::text
-        ${whereClause}`,
+        WHERE ($1 = '' OR u.name ILIKE $2 OR u.phone ILIKE $2 OR u.id::text = $1)
+          AND ($3 = '' OR LOWER(COALESCE(u.account_type, 'personal')) = $3)
+          AND ($4 = '' OR LOWER(COALESCE(us.status, 'active')) = $4)
+          AND (
+            $5 = ''
+            OR LOWER(COALESCE(p.location_data->>'city', '')) LIKE $6
+            OR LOWER(COALESCE(p.location_data->>'locality', '')) LIKE $6
+          )`,
       [searchRaw, searchLike, accountType, statusFilter, cityFilter, cityLike],
     );
 
+    const userIds = listResult.rows.map((row) => String(row.user_id || '')).filter(Boolean);
+    const phoneList = listResult.rows
+      .map((row) => normalizePhone(row.phone || ''))
+      .filter((value) => /^\d{10}$/.test(value));
+
+    const listingsByUser = new Map();
+    const requestsByUser = new Map();
+    const paymentsByUser = new Map();
+    const loginByUser = new Map();
+    const listingActivityByUser = new Map();
+    const requestActivityByUser = new Map();
+    const paymentActivityByUser = new Map();
+    const securityMetaByUser = new Map();
+    const listingByPhone = new Map();
+
+    if (userIds.length > 0) {
+      const [
+        listingsByUserResult,
+        listingsByPhoneResult,
+        requestsResult,
+        paymentsResult,
+        loginResult,
+        listingActivityResult,
+        requestActivityResult,
+        paymentActivityResult,
+        securityMetaResult,
+      ] = await Promise.all([
+        getPool().query(
+          `SELECT seller_id AS user_id, COUNT(*)::bigint AS listings_count
+             FROM listings
+            WHERE seller_id = ANY($1::text[])
+            GROUP BY seller_id`,
+          [userIds],
+        ),
+        getPool().query(
+          `SELECT REGEXP_REPLACE(COALESCE(metadata->>'ownerMobile', ''), '\\D', '', 'g') AS owner_phone,
+                  COUNT(*)::bigint AS listings_count
+             FROM listings
+            WHERE (seller_id IS NULL OR seller_id = '')
+              AND REGEXP_REPLACE(COALESCE(metadata->>'ownerMobile', ''), '\\D', '', 'g') = ANY($1::text[])
+            GROUP BY owner_phone`,
+          [phoneList],
+        ),
+        getPool().query(
+          `SELECT buyer_id AS user_id,
+                  COUNT(*)::bigint AS requests_count,
+                  COUNT(*) FILTER (WHERE LOWER(COALESCE(status, '')) IN ('completed', 'collected', 'fulfilled'))::bigint AS collected_count,
+                  MAX(created_at) AS last_request_at
+             FROM requests
+            WHERE buyer_id = ANY($1::text[])
+            GROUP BY buyer_id`,
+          [userIds],
+        ),
+        getPool().query(
+          `SELECT user_id::text AS user_id,
+                  COUNT(*)::bigint AS payment_count,
+                  COALESCE(SUM(CASE WHEN LOWER(COALESCE(status, '')) IN ('captured', 'paid', 'success') THEN amount_paise ELSE 0 END), 0)::bigint AS total_paid_paise,
+                  (ARRAY_AGG(status ORDER BY created_at DESC))[1] AS last_payment_status,
+                  MAX(created_at) AS last_payment_at
+             FROM buyer_access_payments
+            WHERE user_id::text = ANY($1::text[])
+            GROUP BY user_id::text`,
+          [userIds],
+        ),
+        getPool().query(
+          `SELECT user_id::text AS user_id, MAX(created_at) AS last_login_at
+             FROM security_audit_events
+            WHERE user_id::text = ANY($1::text[])
+            GROUP BY user_id::text`,
+          [userIds],
+        ),
+        getPool().query(
+          `SELECT seller_id AS user_id, MAX(created_at) AS last_listing_at
+             FROM listings
+            WHERE seller_id = ANY($1::text[])
+            GROUP BY seller_id`,
+          [userIds],
+        ),
+        getPool().query(
+          `SELECT buyer_id AS user_id, MAX(created_at) AS last_request_at
+             FROM requests
+            WHERE buyer_id = ANY($1::text[])
+            GROUP BY buyer_id`,
+          [userIds],
+        ),
+        getPool().query(
+          `SELECT user_id::text AS user_id, MAX(created_at) AS last_payment_at
+             FROM buyer_access_payments
+            WHERE user_id::text = ANY($1::text[])
+            GROUP BY user_id::text`,
+          [userIds],
+        ),
+        getPool().query(
+          `SELECT DISTINCT ON (user_id::text)
+                  user_id::text AS user_id,
+                  metadata,
+                  created_at
+             FROM security_audit_events
+            WHERE user_id::text = ANY($1::text[])
+            ORDER BY user_id::text, created_at DESC`,
+          [userIds],
+        ),
+      ]);
+
+      listingsByUserResult.rows.forEach((row) => listingsByUser.set(String(row.user_id), Number(row.listings_count || 0)));
+      listingsByPhoneResult.rows.forEach((row) => listingByPhone.set(String(row.owner_phone || ''), Number(row.listings_count || 0)));
+      requestsResult.rows.forEach((row) => requestsByUser.set(String(row.user_id), row));
+      paymentsResult.rows.forEach((row) => paymentsByUser.set(String(row.user_id), row));
+      loginResult.rows.forEach((row) => loginByUser.set(String(row.user_id), row.last_login_at || null));
+      listingActivityResult.rows.forEach((row) => listingActivityByUser.set(String(row.user_id), row.last_listing_at || null));
+      requestActivityResult.rows.forEach((row) => requestActivityByUser.set(String(row.user_id), row.last_request_at || null));
+      paymentActivityResult.rows.forEach((row) => paymentActivityByUser.set(String(row.user_id), row.last_payment_at || null));
+      securityMetaResult.rows.forEach((row) => securityMetaByUser.set(String(row.user_id), row.metadata || null));
+    }
+
     return res.status(200).json({
       success: true,
-      rows: listResult.rows.map((row) => ({
-        userId: row.user_id,
-        name: row.name,
-        phone: row.phone,
-        email: row.email,
-        accountType: row.account_type,
-        signupAt: row.created_at,
-        lastLoginAt: row.last_login_at,
-        lastActiveAt: row.last_active_at,
-        sessionDuration: null,
-        city: row.city,
-        locality: row.locality,
-        locationData: row.location_data || {},
-        profilePicture: row.profile_picture || '',
-        karma: Number(row.karma || 0),
-        listingsCount: Number(row.listings_count || 0),
-        productsRequested: Number(row.products_requested || 0),
-        productsCollected: Number(row.products_collected || 0),
-        purchasePaymentHistoryCount: Number(row.payment_count || 0),
-        paymentStatus: row.payment_status || 'none',
-        totalAmountPaidPaise: Number(row.total_amount_paid_paise || 0),
-        accountStatus: row.account_status || 'active',
-        statusReason: row.status_reason || '',
-        deviceSessionInfo: row.last_activity_metadata || null,
-      })),
+      rows: listResult.rows.map((row) => {
+        const userId = String(row.user_id || '');
+        const normalizedPhone = normalizePhone(row.phone || '');
+        const requestStats = requestsByUser.get(userId) || {};
+        const paymentStats = paymentsByUser.get(userId) || {};
+        const lastLoginAt = loginByUser.get(userId) || null;
+
+        const activityCandidates = [
+          lastLoginAt,
+          listingActivityByUser.get(userId) || null,
+          requestActivityByUser.get(userId) || requestStats.last_request_at || null,
+          paymentActivityByUser.get(userId) || paymentStats.last_payment_at || null,
+        ]
+          .filter(Boolean)
+          .map((value) => new Date(value));
+
+        const lastActiveAt = activityCandidates.length
+          ? new Date(Math.max(...activityCandidates.map((value) => value.getTime()))).toISOString()
+          : null;
+
+        return {
+          userId,
+          name: row.name,
+          phone: row.phone,
+          email: row.email,
+          accountType: row.account_type,
+          signupAt: row.created_at,
+          lastLoginAt,
+          lastActiveAt,
+          sessionDuration: null,
+          city: row.city,
+          locality: row.locality,
+          locationData: row.location_data || {},
+          profilePicture: row.profile_picture || '',
+          karma: Number(row.karma || 0),
+          listingsCount: Number(listingsByUser.get(userId) || 0) + Number(listingByPhone.get(normalizedPhone) || 0),
+          productsRequested: Number(requestStats.requests_count || 0),
+          productsCollected: Number(requestStats.collected_count || 0),
+          purchasePaymentHistoryCount: Number(paymentStats.payment_count || 0),
+          paymentStatus: paymentStats.last_payment_status || 'none',
+          totalAmountPaidPaise: Number(paymentStats.total_paid_paise || 0),
+          accountStatus: row.account_status || 'active',
+          statusReason: row.status_reason || '',
+          deviceSessionInfo: securityMetaByUser.get(userId) || null,
+        };
+      }),
       pagination: {
         page,
         limit,

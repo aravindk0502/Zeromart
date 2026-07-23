@@ -3,6 +3,8 @@ import { Activity, Building2, Clock3, Coins, ListChecks, Search, TriangleAlert, 
 
 const ADMIN_TOKEN_KEY = 'drizn_admin_token';
 const ADMIN_SESSION_KEY = 'drizn_admin_session';
+const ADMIN_API_FALLBACK = 'https://www.drizn.com';
+const ADMIN_API_RAILWAY = 'https://web-production-74e61.up.railway.app';
 
 const apiBase = () => {
   const fromEnv = String(import.meta.env.VITE_API_URL || '').trim().replace(/\/$/, '');
@@ -18,7 +20,12 @@ const apiBase = () => {
 };
 
 async function requestJson(path, options = {}) {
-  const base = apiBase();
+  const primaryBase = apiBase();
+  const candidates = [primaryBase, ADMIN_API_FALLBACK, ADMIN_API_RAILWAY]
+    .map((value) => String(value || '').trim().replace(/\/$/, ''))
+    .filter(Boolean)
+    .filter((value, index, arr) => arr.indexOf(value) === index);
+
   const buildRequestOptions = () => ({
     method: options.method || 'GET',
     headers: {
@@ -28,40 +35,40 @@ async function requestJson(path, options = {}) {
     ...(options.body ? { body: JSON.stringify(options.body) } : {}),
   });
 
-  let response;
-  try {
-    response = await fetch(`${base}${path}`, buildRequestOptions());
-  } catch {
-    if (base !== 'https://www.drizn.com') {
-      try {
-        response = await fetch(`https://www.drizn.com${path}`, buildRequestOptions());
-      } catch {
-        const fallbackError = new Error('Network error while contacting admin API. Open https://www.drizn.com/admin/login and retry.');
-        fallbackError.status = 0;
-        throw fallbackError;
-      }
-    } else {
-      const fallbackError = new Error('Network error while contacting admin API. Open https://www.drizn.com/admin/login and retry.');
-      fallbackError.status = 0;
-      throw fallbackError;
+  let lastError = null;
+  for (const base of candidates) {
+    let response;
+    try {
+      response = await fetch(`${base}${path}`, buildRequestOptions());
+    } catch {
+      lastError = new Error('Network error while contacting admin API. Open https://www.drizn.com/admin/login and retry.');
+      lastError.status = 0;
+      continue;
     }
+
+    const raw = await response.text();
+    let data = {};
+    try {
+      data = raw ? JSON.parse(raw) : {};
+    } catch {
+      data = { error: raw || 'Unexpected response.' };
+    }
+
+    if (!response.ok) {
+      const message = data?.error || data?.message || `Request failed (${response.status})`;
+      const error = new Error(message);
+      error.status = response.status;
+      lastError = error;
+      if (response.status >= 500 && base !== ADMIN_API_RAILWAY) {
+        continue;
+      }
+      throw error;
+    }
+
+    return data;
   }
 
-  const raw = await response.text();
-  let data = {};
-  try {
-    data = raw ? JSON.parse(raw) : {};
-  } catch {
-    data = { error: raw || 'Unexpected response.' };
-  }
-
-  if (!response.ok) {
-    const error = new Error(data?.error || data?.message || `Request failed (${response.status})`);
-    error.status = response.status;
-    throw error;
-  }
-
-  return data;
+  throw lastError || new Error('Unable to contact admin API.');
 }
 
 const numberFormat = new Intl.NumberFormat('en-IN');
@@ -138,6 +145,10 @@ export default function AdminDashboardPage({ navigate, path = '/admin' }) {
   const [businessFilterVerification, setBusinessFilterVerification] = useState('');
   const [businessFilterCity, setBusinessFilterCity] = useState('');
 
+  const [teamMembers, setTeamMembers] = useState([]);
+  const [teamLoading, setTeamLoading] = useState(false);
+  const [teamForm, setTeamForm] = useState({ displayName: '', phone: '', pin: '', role: 'support' });
+
   const [selectedUserId, setSelectedUserId] = useState('');
   const [selectedUserDetail, setSelectedUserDetail] = useState(null);
   const [userDetailLoading, setUserDetailLoading] = useState(false);
@@ -155,7 +166,9 @@ export default function AdminDashboardPage({ navigate, path = '/admin' }) {
   const normalizedPath = String(path || '/admin').replace(/\/$/, '') || '/admin';
   const isUsersSection = normalizedPath.startsWith('/admin/users');
   const isBusinessesSection = normalizedPath.startsWith('/admin/businesses');
-  const isOverviewSection = !isUsersSection && !isBusinessesSection;
+  const isTeamSection = normalizedPath.startsWith('/admin/team');
+  const isOverviewSection = !isUsersSection && !isBusinessesSection && !isTeamSection;
+  const isSuperAdmin = String(admin?.role || '').toLowerCase() === 'super_admin';
 
   const selectedUserFromPath = useMemo(() => {
     const parts = normalizedPath.split('/').filter(Boolean);
@@ -303,6 +316,20 @@ export default function AdminDashboardPage({ navigate, path = '/admin' }) {
     }
   };
 
+  const loadTeamMembers = async () => {
+    if (!token || !isTeamSection || !isSuperAdmin) return;
+    setTeamLoading(true);
+    setError('');
+    try {
+      const result = await requestJson('/api/admin/team-members?limit=100&offset=0', { token });
+      setTeamMembers(Array.isArray(result?.rows) ? result.rows : []);
+    } catch (nextError) {
+      setError(nextError?.message || 'Unable to load team members.');
+    } finally {
+      setTeamLoading(false);
+    }
+  };
+
   const loadUserDetail = async (userId) => {
     if (!token || !userId) {
       setSelectedUserDetail(null);
@@ -341,6 +368,12 @@ export default function AdminDashboardPage({ navigate, path = '/admin' }) {
       loadBusinesses();
     }
   }, [token, isBusinessesSection, businessListQuery]);
+
+  useEffect(() => {
+    if (isTeamSection) {
+      loadTeamMembers();
+    }
+  }, [token, isTeamSection, isSuperAdmin]);
 
   useEffect(() => {
     setSelectedUserId(selectedUserFromPath || '');
@@ -385,6 +418,7 @@ export default function AdminDashboardPage({ navigate, path = '/admin' }) {
   const goToOverview = () => navigate('/admin');
   const goToUsers = () => navigate('/admin/users');
   const goToBusinesses = () => navigate('/admin/businesses');
+  const goToTeam = () => navigate('/admin/team');
 
   const openUserDetails = (userId) => {
     navigate(`/admin/users/${encodeURIComponent(userId)}`);
@@ -404,6 +438,53 @@ export default function AdminDashboardPage({ navigate, path = '/admin' }) {
     event.preventDefault();
     setBusinessesPagination((prev) => ({ ...prev, page: 1 }));
     setBusinessSearchQuery(businessSearchInput.trim());
+  };
+
+  const createTeamMember = async (event) => {
+    event.preventDefault();
+    if (!isSuperAdmin) return;
+    setActionBusy('team-create');
+    setError('');
+    try {
+      await requestJson('/api/admin/team-members', {
+        method: 'POST',
+        token,
+        body: {
+          phone: String(teamForm.phone || '').trim(),
+          pin: String(teamForm.pin || '').trim(),
+          role: String(teamForm.role || 'support').trim(),
+          displayName: String(teamForm.displayName || '').trim(),
+        },
+      });
+      setTeamForm({ displayName: '', phone: '', pin: '', role: 'support' });
+      await loadTeamMembers();
+    } catch (nextError) {
+      setError(nextError?.message || 'Unable to add team member.');
+    } finally {
+      setActionBusy('');
+    }
+  };
+
+  const toggleTeamMemberSuspension = async (member) => {
+    if (!member?.id || !isSuperAdmin) return;
+    const shouldSuspend = String(member.status || 'active') !== 'suspended';
+    setActionBusy(`team-suspend:${member.id}`);
+    setError('');
+    try {
+      await requestJson(`/api/admin/team-members/${encodeURIComponent(member.id)}/suspend`, {
+        method: 'PUT',
+        token,
+        body: {
+          suspend: shouldSuspend,
+          reason: shouldSuspend ? 'Suspended by super admin' : '',
+        },
+      });
+      await loadTeamMembers();
+    } catch (nextError) {
+      setError(nextError?.message || 'Unable to update team member status.');
+    } finally {
+      setActionBusy('');
+    }
   };
 
   const updateUserStatus = async (status) => {
@@ -560,7 +641,7 @@ export default function AdminDashboardPage({ navigate, path = '/admin' }) {
         <div className="mb-5 flex flex-col gap-3 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:flex-row sm:items-center sm:justify-between">
           <div>
             <p className="text-xs font-bold uppercase tracking-[0.14em] text-emerald-700">Drizn Admin Dashboard</p>
-            <h1 className="text-2xl font-black text-slate-900">{isUsersSection ? 'User Management' : isBusinessesSection ? 'Business Management' : 'Overview'}</h1>
+            <h1 className="text-2xl font-black text-slate-900">{isUsersSection ? 'User Management' : isBusinessesSection ? 'Business Management' : isTeamSection ? 'Team Access' : 'Overview'}</h1>
             <p className="mt-1 text-sm font-semibold text-slate-600">{admin?.displayName || 'Admin'} · {String(admin?.role || 'read_only').replaceAll('_', ' ')}</p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
@@ -585,6 +666,15 @@ export default function AdminDashboardPage({ navigate, path = '/admin' }) {
             >
               Businesses
             </button>
+            {isSuperAdmin && (
+              <button
+                type="button"
+                onClick={goToTeam}
+                className={`rounded-xl px-3 py-2 text-sm font-bold ${isTeamSection ? 'bg-emerald-700 text-white' : 'border border-slate-200 bg-white text-slate-700'}`}
+              >
+                Team Access
+              </button>
+            )}
             <button
               type="button"
               onClick={handleLogout}
@@ -1064,6 +1154,123 @@ export default function AdminDashboardPage({ navigate, path = '/admin' }) {
                 )}
               </div>
             </div>
+          </>
+        ) : isTeamSection ? (
+          <>
+            {!isSuperAdmin ? (
+              <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-semibold text-amber-700">
+                Team Access management is available only for Super Admin.
+              </div>
+            ) : (
+              <>
+                <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+                  <form onSubmit={createTeamMember} className="grid grid-cols-1 gap-3 md:grid-cols-5">
+                    <label>
+                      <span className="text-xs font-bold uppercase tracking-[0.12em] text-slate-600">Name</span>
+                      <input
+                        value={teamForm.displayName}
+                        onChange={(event) => setTeamForm((prev) => ({ ...prev, displayName: event.target.value }))}
+                        placeholder="Team member name"
+                        className="mt-1.5 w-full rounded-xl border border-slate-200 px-2.5 py-2 text-sm font-semibold text-slate-900"
+                      />
+                    </label>
+                    <label>
+                      <span className="text-xs font-bold uppercase tracking-[0.12em] text-slate-600">Phone</span>
+                      <input
+                        value={teamForm.phone}
+                        onChange={(event) => setTeamForm((prev) => ({ ...prev, phone: event.target.value.replace(/\D/g, '').slice(-10) }))}
+                        placeholder="10-digit phone"
+                        className="mt-1.5 w-full rounded-xl border border-slate-200 px-2.5 py-2 text-sm font-semibold text-slate-900"
+                      />
+                    </label>
+                    <label>
+                      <span className="text-xs font-bold uppercase tracking-[0.12em] text-slate-600">Role</span>
+                      <select
+                        value={teamForm.role}
+                        onChange={(event) => setTeamForm((prev) => ({ ...prev, role: event.target.value }))}
+                        className="mt-1.5 w-full rounded-xl border border-slate-200 px-2.5 py-2 text-sm font-semibold text-slate-900"
+                      >
+                        <option value="operations">Operations</option>
+                        <option value="support">Support</option>
+                        <option value="finance">Finance</option>
+                        <option value="content">Content</option>
+                        <option value="read_only">Read only</option>
+                      </select>
+                    </label>
+                    <label>
+                      <span className="text-xs font-bold uppercase tracking-[0.12em] text-slate-600">PIN</span>
+                      <input
+                        type="password"
+                        value={teamForm.pin}
+                        onChange={(event) => setTeamForm((prev) => ({ ...prev, pin: event.target.value }))}
+                        placeholder="Temporary PIN"
+                        className="mt-1.5 w-full rounded-xl border border-slate-200 px-2.5 py-2 text-sm font-semibold text-slate-900"
+                      />
+                    </label>
+                    <div className="flex items-end">
+                      <button
+                        type="submit"
+                        disabled={Boolean(actionBusy)}
+                        className="w-full rounded-xl bg-emerald-700 px-3 py-2.5 text-sm font-bold text-white disabled:opacity-50"
+                      >
+                        Add Team Member
+                      </button>
+                    </div>
+                  </form>
+                </div>
+
+                <div className="mt-4 rounded-2xl border border-slate-200 bg-white shadow-sm">
+                  <div className="overflow-x-auto">
+                    <table className="min-w-[920px] text-left text-xs">
+                      <thead className="bg-slate-50 uppercase tracking-[0.12em] text-slate-500">
+                        <tr>
+                          <th className="px-3 py-3">Name</th>
+                          <th className="px-3 py-3">Phone</th>
+                          <th className="px-3 py-3">Role</th>
+                          <th className="px-3 py-3">Status</th>
+                          <th className="px-3 py-3">Permissions</th>
+                          <th className="px-3 py-3">Last login</th>
+                          <th className="px-3 py-3">Actions</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {teamLoading ? (
+                          <tr>
+                            <td colSpan={7} className="px-4 py-6 text-center text-sm font-semibold text-slate-500">Loading team members...</td>
+                          </tr>
+                        ) : (
+                          (teamMembers || []).map((member) => (
+                            <tr key={member.id} className="border-t border-slate-100">
+                              <td className="px-3 py-2.5 font-semibold text-slate-900">{member.displayName || 'Admin member'}</td>
+                              <td className="px-3 py-2.5 font-semibold text-slate-700">{maskedPhone(member.phone)}</td>
+                              <td className="px-3 py-2.5 font-semibold text-slate-700">{String(member.role || 'read_only').replaceAll('_', ' ')}</td>
+                              <td className="px-3 py-2.5 font-semibold text-slate-700">{member.status || 'active'}</td>
+                              <td className="px-3 py-2.5 font-semibold text-slate-700">{(member.permissions || []).slice(0, 4).join(', ') || '--'}</td>
+                              <td className="px-3 py-2.5 font-semibold text-slate-700">{dateLabel(member.lastLoginAt)}</td>
+                              <td className="px-3 py-2.5">
+                                <button
+                                  type="button"
+                                  disabled={Boolean(actionBusy)}
+                                  onClick={() => toggleTeamMemberSuspension(member)}
+                                  className="rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-bold text-slate-700 disabled:opacity-50"
+                                >
+                                  {String(member.status || 'active') === 'suspended' ? 'Unsuspend' : 'Suspend'}
+                                </button>
+                              </td>
+                            </tr>
+                          ))
+                        )}
+                        {!teamLoading && teamMembers.length === 0 && (
+                          <tr>
+                            <td colSpan={7} className="px-4 py-6 text-center text-sm font-semibold text-slate-500">No team members found.</td>
+                          </tr>
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              </>
+            )}
           </>
         ) : (
           <>
