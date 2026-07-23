@@ -1781,140 +1781,168 @@ export function registerAdminModule({ app, getPool, isDbEnabled, createRateLimit
 
     const searchLike = searchRaw ? `%${searchRaw}%` : '';
     const cityLike = cityRaw ? `%${cityRaw}%` : '';
-
-    const whereClause = `
-      WHERE LOWER(COALESCE(u.account_type, '')) = 'business'
-        AND ($1 = '' OR u.name ILIKE $2 OR u.phone ILIKE $2 OR u.id::text = $1 OR COALESCE(store_stats.store_name, '') ILIKE $2)
-        AND ($3 = '' OR LOWER(COALESCE(bs.status, 'active')) = $3)
-        AND ($4 = '' OR LOWER(COALESCE(bs.verification_status, 'unverified')) = $4)
-        AND (
-          $5 = ''
-          OR LOWER(COALESCE(p.location_data->>'city', store_stats.city, '')) LIKE $6
-          OR LOWER(COALESCE(p.location_data->>'locality', store_stats.locality, '')) LIKE $6
-        )
-    `;
-
-    const listResult = await getPool().query(
-      `SELECT
+    const baseRowsResult = await getPool().query(
+      `WITH listing_stats AS (
+         SELECT
+           COALESCE(NULLIF(l.business_id, ''), NULLIF(l.seller_id, '')) AS business_ref,
+           (ARRAY_AGG(COALESCE(l.store_name, l.seller_name) ORDER BY l.created_at DESC))[1] AS store_name,
+           (ARRAY_AGG(COALESCE(l.city, '') ORDER BY l.created_at DESC))[1] AS city,
+           (ARRAY_AGG(COALESCE(l.area, '') ORDER BY l.created_at DESC))[1] AS locality,
+           COUNT(*)::bigint AS total_products_listed,
+           COUNT(*) FILTER (WHERE LOWER(COALESCE(l.status, 'active')) = 'active')::bigint AS active_products,
+           COUNT(*) FILTER (
+             WHERE l.expiry_date IS NOT NULL
+               AND l.expiry_date >= CURRENT_DATE
+               AND l.expiry_date <= (CURRENT_DATE + interval '3 days')
+           )::bigint AS near_expiry_products
+         FROM listings l
+         WHERE (LOWER(COALESCE(l.seller_type, '')) = 'business' OR l.business_id IS NOT NULL OR l.store_name IS NOT NULL)
+           AND COALESCE(NULLIF(l.business_id, ''), NULLIF(l.seller_id, '')) IS NOT NULL
+         GROUP BY 1
+       )
+       SELECT
          u.id::text AS business_id,
          u.name AS owner_name,
          u.phone,
          NULL::text AS email,
          u.created_at,
-         COALESCE(store_stats.store_name, p.name, u.name, 'Business Store') AS store_name,
+         COALESCE(ls.store_name, p.name, u.name, 'Business Store') AS store_name,
          COALESCE(p.location_data->>'address', p.location_data->>'street', '') AS address,
-         COALESCE(p.location_data->>'city', store_stats.city, '') AS city,
-         COALESCE(p.location_data->>'locality', store_stats.locality, '') AS locality,
+         COALESCE(p.location_data->>'city', ls.city, '') AS city,
+         COALESCE(p.location_data->>'locality', ls.locality, '') AS locality,
          COALESCE(bs.verification_status, 'unverified') AS verification_status,
          COALESCE(bs.status, 'active') AS account_status,
          bs.reason AS status_reason,
-         COALESCE(payment_stats.last_payment_status, 'none') AS subscription_payment_status,
-         COALESCE(store_stats.total_products_listed, 0) AS total_products_listed,
-         COALESCE(store_stats.active_products, 0) AS active_products,
-         COALESCE(store_stats.near_expiry_products, 0) AS near_expiry_products,
-         COALESCE(request_stats.orders_received, 0) AS orders_received,
-         COALESCE(request_stats.accepted_orders, 0) AS accepted_orders,
-         COALESCE(request_stats.declined_orders, 0) AS declined_orders,
-         COALESCE(request_stats.completed_orders, 0) AS completed_orders,
          COALESCE(p.karma, 0) AS store_karma,
-         COALESCE(payment_stats.total_revenue_paise, 0) AS revenue_paise,
-         COALESCE(payment_stats.payment_count, 0) AS payment_history_count,
-         login.last_login_at,
+         COALESCE(ls.total_products_listed, 0) AS total_products_listed,
+         COALESCE(ls.active_products, 0) AS active_products,
+         COALESCE(ls.near_expiry_products, 0) AS near_expiry_products,
          COALESCE(p.location_data->>'storeLogo', p.location_data->>'storeImage', p.location_data->>'profileImage', p.location_data->>'profile_image', p.location_data->>'profileImageUrl', '') AS logo_profile_image
        FROM users u
   LEFT JOIN profiles p ON p.phone = u.phone
   LEFT JOIN admin_business_status bs ON bs.business_id = u.id::text
-  LEFT JOIN LATERAL (
-       SELECT
-         (ARRAY_AGG(COALESCE(l.store_name, l.seller_name) ORDER BY l.created_at DESC))[1] AS store_name,
-         (ARRAY_AGG(COALESCE(l.city, '') ORDER BY l.created_at DESC))[1] AS city,
-         (ARRAY_AGG(COALESCE(l.area, '') ORDER BY l.created_at DESC))[1] AS locality,
-         COUNT(*)::bigint AS total_products_listed,
-         COUNT(*) FILTER (WHERE LOWER(COALESCE(l.status, 'active')) = 'active')::bigint AS active_products,
-         COUNT(*) FILTER (
-           WHERE l.expiry_date IS NOT NULL
-             AND l.expiry_date >= CURRENT_DATE
-             AND l.expiry_date <= (CURRENT_DATE + interval '3 days')
-         )::bigint AS near_expiry_products
-         FROM listings l
-        WHERE l.seller_id = u.id::text OR l.business_id = u.id::text OR COALESCE(l.metadata->>'ownerMobile', '') = u.phone
-     ) store_stats ON true
-  LEFT JOIN LATERAL (
-       SELECT
-         COUNT(*)::bigint AS orders_received,
-         COUNT(*) FILTER (WHERE LOWER(COALESCE(r.status, '')) = 'accepted')::bigint AS accepted_orders,
-         COUNT(*) FILTER (WHERE LOWER(COALESCE(r.status, '')) = 'declined')::bigint AS declined_orders,
-         COUNT(*) FILTER (WHERE LOWER(COALESCE(r.status, '')) IN ('completed', 'collected', 'fulfilled'))::bigint AS completed_orders
-         FROM requests r
-        WHERE r.seller_id = u.id::text
-     ) request_stats ON true
-  LEFT JOIN LATERAL (
-       SELECT
-         COUNT(*)::bigint AS payment_count,
-         COALESCE(SUM(CASE WHEN LOWER(COALESCE(bp.status, '')) IN ('captured', 'paid', 'success') THEN bp.amount_paise ELSE 0 END), 0)::bigint AS total_revenue_paise,
-         (ARRAY_AGG(bp.status ORDER BY bp.created_at DESC))[1] AS last_payment_status
-         FROM buyer_access_payments bp
-        WHERE bp.user_id::text = u.id::text
-     ) payment_stats ON true
-  LEFT JOIN LATERAL (
-       SELECT se.created_at AS last_login_at
-         FROM security_audit_events se
-        WHERE se.user_id::text = u.id::text OR (u.phone <> '' AND se.phone_last4 = RIGHT(u.phone, 4))
-        ORDER BY se.created_at DESC
-        LIMIT 1
-     ) login ON true
-      ${whereClause}
+  LEFT JOIN listing_stats ls ON ls.business_ref = u.id::text
+      WHERE (LOWER(COALESCE(u.account_type, '')) = 'business' OR ls.business_ref IS NOT NULL)
+        AND ($1 = '' OR u.name ILIKE $2 OR u.phone ILIKE $2 OR u.id::text = $1 OR COALESCE(ls.store_name, '') ILIKE $2)
+        AND ($3 = '' OR LOWER(COALESCE(bs.status, 'active')) = $3)
+        AND ($4 = '' OR LOWER(COALESCE(bs.verification_status, 'unverified')) = $4)
+        AND (
+          $5 = ''
+          OR LOWER(COALESCE(p.location_data->>'city', ls.city, '')) LIKE $6
+          OR LOWER(COALESCE(p.location_data->>'locality', ls.locality, '')) LIKE $6
+        )
       ORDER BY u.created_at DESC
       LIMIT $7 OFFSET $8`,
       [searchRaw, searchLike, statusFilter, verificationFilter, cityRaw, cityLike, limit, offset],
     );
 
     const countResult = await getPool().query(
-      `SELECT COUNT(*)::bigint AS total
+      `WITH listing_stats AS (
+         SELECT COALESCE(NULLIF(l.business_id, ''), NULLIF(l.seller_id, '')) AS business_ref
+           FROM listings l
+          WHERE (LOWER(COALESCE(l.seller_type, '')) = 'business' OR l.business_id IS NOT NULL OR l.store_name IS NOT NULL)
+            AND COALESCE(NULLIF(l.business_id, ''), NULLIF(l.seller_id, '')) IS NOT NULL
+          GROUP BY 1
+       )
+       SELECT COUNT(*)::bigint AS total
          FROM users u
     LEFT JOIN profiles p ON p.phone = u.phone
     LEFT JOIN admin_business_status bs ON bs.business_id = u.id::text
-    LEFT JOIN LATERAL (
-       SELECT
-         (ARRAY_AGG(COALESCE(l.store_name, l.seller_name) ORDER BY l.created_at DESC))[1] AS store_name,
-         (ARRAY_AGG(COALESCE(l.city, '') ORDER BY l.created_at DESC))[1] AS city,
-         (ARRAY_AGG(COALESCE(l.area, '') ORDER BY l.created_at DESC))[1] AS locality
-         FROM listings l
-        WHERE l.seller_id = u.id::text OR l.business_id = u.id::text OR COALESCE(l.metadata->>'ownerMobile', '') = u.phone
-     ) store_stats ON true
-      ${whereClause}`,
+    LEFT JOIN listing_stats ls ON ls.business_ref = u.id::text
+        WHERE (LOWER(COALESCE(u.account_type, '')) = 'business' OR ls.business_ref IS NOT NULL)
+          AND ($1 = '' OR u.name ILIKE $2 OR u.phone ILIKE $2 OR u.id::text = $1 OR COALESCE(ls.business_ref, '') ILIKE $2)
+          AND ($3 = '' OR LOWER(COALESCE(bs.status, 'active')) = $3)
+          AND ($4 = '' OR LOWER(COALESCE(bs.verification_status, 'unverified')) = $4)
+          AND (
+            $5 = ''
+            OR LOWER(COALESCE(p.location_data->>'city', '')) LIKE $6
+            OR LOWER(COALESCE(p.location_data->>'locality', '')) LIKE $6
+          )`,
       [searchRaw, searchLike, statusFilter, verificationFilter, cityRaw, cityLike],
     );
 
+    const businessIds = baseRowsResult.rows.map((row) => String(row.business_id || '')).filter(Boolean);
+
+    const requestStatsMap = new Map();
+    const paymentStatsMap = new Map();
+    const lastLoginMap = new Map();
+
+    if (businessIds.length > 0) {
+      const [requestStatsResult, paymentStatsResult, loginStatsResult] = await Promise.all([
+        getPool().query(
+          `SELECT seller_id AS business_id,
+                  COUNT(*)::bigint AS orders_received,
+                  COUNT(*) FILTER (WHERE LOWER(COALESCE(status, '')) = 'accepted')::bigint AS accepted_orders,
+                  COUNT(*) FILTER (WHERE LOWER(COALESCE(status, '')) = 'declined')::bigint AS declined_orders,
+                  COUNT(*) FILTER (WHERE LOWER(COALESCE(status, '')) IN ('completed', 'collected', 'fulfilled'))::bigint AS completed_orders
+             FROM requests
+            WHERE seller_id = ANY($1::text[])
+            GROUP BY seller_id`,
+          [businessIds],
+        ),
+        getPool().query(
+          `SELECT user_id::text AS business_id,
+                  COUNT(*)::bigint AS payment_history_count,
+                  COALESCE(SUM(CASE WHEN LOWER(COALESCE(status, '')) IN ('captured', 'paid', 'success') THEN amount_paise ELSE 0 END), 0)::bigint AS revenue_paise,
+                  (ARRAY_AGG(status ORDER BY created_at DESC))[1] AS subscription_payment_status
+             FROM buyer_access_payments
+            WHERE user_id::text = ANY($1::text[])
+            GROUP BY user_id::text`,
+          [businessIds],
+        ),
+        getPool().query(
+          `SELECT user_id::text AS business_id, MAX(created_at) AS last_login_at
+             FROM security_audit_events
+            WHERE user_id::text = ANY($1::text[])
+            GROUP BY user_id::text`,
+          [businessIds],
+        ),
+      ]);
+
+      requestStatsResult.rows.forEach((row) => {
+        requestStatsMap.set(String(row.business_id), row);
+      });
+      paymentStatsResult.rows.forEach((row) => {
+        paymentStatsMap.set(String(row.business_id), row);
+      });
+      loginStatsResult.rows.forEach((row) => {
+        lastLoginMap.set(String(row.business_id), row.last_login_at || null);
+      });
+    }
+
     return res.status(200).json({
       success: true,
-      rows: listResult.rows.map((row) => ({
-        businessId: row.business_id,
-        storeName: row.store_name,
-        ownerName: row.owner_name,
-        phone: row.phone,
-        email: row.email,
-        address: row.address,
-        city: row.city,
-        locality: row.locality,
-        signupAt: row.created_at,
-        lastLoginAt: row.last_login_at,
-        verificationStatus: row.verification_status,
-        subscriptionPaymentStatus: row.subscription_payment_status,
-        totalProductsListed: Number(row.total_products_listed || 0),
-        activeProducts: Number(row.active_products || 0),
-        nearExpiryProducts: Number(row.near_expiry_products || 0),
-        ordersReceived: Number(row.orders_received || 0),
-        acceptedOrders: Number(row.accepted_orders || 0),
-        declinedOrders: Number(row.declined_orders || 0),
-        completedOrders: Number(row.completed_orders || 0),
-        storeKarma: Number(row.store_karma || 0),
-        revenuePaise: Number(row.revenue_paise || 0),
-        paymentHistoryCount: Number(row.payment_history_count || 0),
-        accountStatus: row.account_status,
-        statusReason: row.status_reason || '',
-        logoProfileImage: row.logo_profile_image || '',
-      })),
+      rows: baseRowsResult.rows.map((row) => {
+        const requestStats = requestStatsMap.get(String(row.business_id)) || {};
+        const paymentStats = paymentStatsMap.get(String(row.business_id)) || {};
+        return {
+          businessId: row.business_id,
+          storeName: row.store_name,
+          ownerName: row.owner_name,
+          phone: row.phone,
+          email: row.email,
+          address: row.address,
+          city: row.city,
+          locality: row.locality,
+          signupAt: row.created_at,
+          lastLoginAt: lastLoginMap.get(String(row.business_id)) || null,
+          verificationStatus: row.verification_status,
+          subscriptionPaymentStatus: paymentStats.subscription_payment_status || 'none',
+          totalProductsListed: Number(row.total_products_listed || 0),
+          activeProducts: Number(row.active_products || 0),
+          nearExpiryProducts: Number(row.near_expiry_products || 0),
+          ordersReceived: Number(requestStats.orders_received || 0),
+          acceptedOrders: Number(requestStats.accepted_orders || 0),
+          declinedOrders: Number(requestStats.declined_orders || 0),
+          completedOrders: Number(requestStats.completed_orders || 0),
+          storeKarma: Number(row.store_karma || 0),
+          revenuePaise: Number(paymentStats.revenue_paise || 0),
+          paymentHistoryCount: Number(paymentStats.payment_history_count || 0),
+          accountStatus: row.account_status,
+          statusReason: row.status_reason || '',
+          logoProfileImage: row.logo_profile_image || '',
+        };
+      }),
       pagination: {
         page,
         limit,
