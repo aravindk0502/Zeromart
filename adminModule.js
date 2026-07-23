@@ -45,6 +45,7 @@ const ADMIN_SCRYPT_N = 16384;
 const ADMIN_SCRYPT_R = 8;
 const ADMIN_SCRYPT_P = 1;
 const ADMIN_SCRYPT_KEYLEN = 64;
+const MSG91_TIMEOUT_MS = Math.max(4_000, Number(process.env.MSG91_TIMEOUT_MS || 15_000) || 15_000);
 
 function normalizeRole(input = '') {
   const value = String(input || '').trim().toLowerCase().replace(/\s+/g, '_');
@@ -56,6 +57,13 @@ function normalizeRole(input = '') {
 
 function normalizePhone(value = '') {
   return String(value || '').replace(/\D/g, '').slice(-10);
+}
+
+function normalizeIndianMobile(value = '') {
+  const digits = String(value || '').replace(/\D/g, '');
+  if (!digits) return '';
+  const local = digits.length > 10 ? digits.slice(-10) : digits;
+  return /^\d{10}$/.test(local) ? `91${local}` : '';
 }
 
 function normalizePermissionList(list = []) {
@@ -113,6 +121,69 @@ function parseAdminAuthHeader(req) {
   const auth = String(req.headers.authorization || '').trim();
   if (!auth.toLowerCase().startsWith('bearer ')) return '';
   return auth.slice(7).trim();
+}
+
+async function parseProviderBody(response) {
+  const raw = await response.text();
+  try {
+    return raw ? JSON.parse(raw) : {};
+  } catch {
+    return { raw };
+  }
+}
+
+function requireMsg91Config() {
+  const authKey = String(process.env.MSG91_AUTH_KEY || '').trim();
+  const templateId = String(process.env.MSG91_TEMPLATE_ID || '').trim();
+  if (!authKey || !templateId) {
+    return null;
+  }
+  return { authKey, templateId };
+}
+
+async function sendMsg91Otp({ authKey, templateId, mobile }) {
+  const url = `https://control.msg91.com/api/v5/otp?template_id=${encodeURIComponent(templateId)}&mobile=${encodeURIComponent(mobile)}`;
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: {
+      authkey: authKey,
+      'Content-Type': 'application/json',
+    },
+    signal: AbortSignal.timeout(MSG91_TIMEOUT_MS),
+  });
+  const body = await parseProviderBody(response);
+  return { response, body };
+}
+
+async function resendMsg91Otp({ authKey, mobile, retryType = 'text' }) {
+  const normalizedRetryType = ['text', 'voice'].includes(String(retryType || '').toLowerCase())
+    ? String(retryType).toLowerCase()
+    : 'text';
+  const url = `https://control.msg91.com/api/v5/otp/retry?mobile=${encodeURIComponent(mobile)}&retrytype=${encodeURIComponent(normalizedRetryType)}`;
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: {
+      authkey: authKey,
+      'Content-Type': 'application/json',
+    },
+    signal: AbortSignal.timeout(MSG91_TIMEOUT_MS),
+  });
+  const body = await parseProviderBody(response);
+  return { response, body };
+}
+
+async function verifyMsg91Otp({ authKey, mobile, otp }) {
+  const url = `https://control.msg91.com/api/v5/otp/verify?mobile=${encodeURIComponent(mobile)}&otp=${encodeURIComponent(String(otp || '').trim())}`;
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: {
+      authkey: authKey,
+      'Content-Type': 'application/json',
+    },
+    signal: AbortSignal.timeout(MSG91_TIMEOUT_MS),
+  });
+  const body = await parseProviderBody(response);
+  return { response, body };
 }
 
 function parseDashboardDateRange(query = {}) {
@@ -189,6 +260,20 @@ export function registerAdminModule({ app, getPool, isDbEnabled, createRateLimit
     max: 80,
     keyPrefix: 'admin-sensitive-write',
     keyGenerator: (req) => String(req.admin?.id || getClientIp(req)),
+  });
+
+  const otpSendLimiter = createRateLimiter({
+    windowMs: 10 * 60 * 1000,
+    max: 6,
+    keyPrefix: 'admin-otp-send',
+    keyGenerator: (req) => `${normalizePhone(req.body?.phone || '') || 'unknown'}:${getClientIp(req)}`,
+  });
+
+  const otpVerifyLimiter = createRateLimiter({
+    windowMs: 10 * 60 * 1000,
+    max: 12,
+    keyPrefix: 'admin-otp-verify',
+    keyGenerator: (req) => `${normalizePhone(req.body?.phone || '') || 'unknown'}:${getClientIp(req)}`,
   });
 
   async function writeAuditLog({ adminId = null, action = '', targetType = '', targetId = '', metadata = {}, req = null }) {
@@ -454,6 +539,207 @@ export function registerAdminModule({ app, getPool, isDbEnabled, createRateLimit
     }
   }
 
+  async function createAdminSession(adminRow, req) {
+    await getPool().query('UPDATE admin_sessions SET revoked_at = now() WHERE admin_id = $1 AND revoked_at IS NULL', [adminRow.id]);
+
+    const sessionToken = crypto.randomBytes(48).toString('base64url');
+    const sessionHash = hashSessionToken(sessionToken);
+    const expiresAt = new Date(Date.now() + ADMIN_SESSION_TTL_HOURS * 60 * 60 * 1000);
+
+    await getPool().query(
+      `INSERT INTO admin_sessions (admin_id, token_hash, expires_at, ip_address, user_agent)
+       VALUES ($1,$2,$3,$4,$5)`,
+      [
+        adminRow.id,
+        sessionHash,
+        expiresAt.toISOString(),
+        String(getClientIp(req) || '').slice(0, 120),
+        String(req.headers['user-agent'] || '').slice(0, 300),
+      ],
+    );
+
+    await getPool().query('UPDATE admin_accounts SET last_login_at = now(), updated_at = now() WHERE id = $1', [adminRow.id]);
+    await writeAuditLog({ adminId: adminRow.id, action: 'admin_login_success', targetType: 'admin_account', targetId: adminRow.id, req });
+
+    return {
+      success: true,
+      token: sessionToken,
+      expiresAt: expiresAt.toISOString(),
+      admin: {
+        id: adminRow.id,
+        phone: adminRow.phone,
+        displayName: adminRow.display_name,
+        role: adminRow.role,
+        permissions: normalizePermissionList(adminRow.permissions),
+      },
+    };
+  }
+
+  router.post('/auth/send-otp', otpSendLimiter, async (req, res) => {
+    if (!isDbEnabled() || !getPool()) {
+      return res.status(503).json({ error: 'Admin persistence is not configured' });
+    }
+
+    const phone = normalizePhone(req.body?.phone || '');
+    if (!phone || !/^\d{10}$/.test(phone)) {
+      return res.status(400).json({ error: 'Enter a valid 10-digit admin phone number.' });
+    }
+
+    const adminResult = await getPool().query(
+      `SELECT id, phone, normalized_phone, display_name, role, permissions, status
+         FROM admin_accounts
+        WHERE normalized_phone = $1
+        LIMIT 1`,
+      [phone],
+    );
+    const adminRow = adminResult.rows[0];
+    if (!adminRow) {
+      await writeAuditLog({ action: 'admin_otp_send_failed', targetType: 'admin_account', targetId: phone, metadata: { reason: 'not_found' }, req });
+      return res.status(401).json({ error: 'Admin account not found.' });
+    }
+    if (adminRow.status !== 'active') {
+      await writeAuditLog({ adminId: adminRow.id, action: 'admin_otp_send_denied', targetType: 'admin_account', targetId: adminRow.id, metadata: { reason: 'suspended' }, req });
+      return res.status(403).json({ error: 'Admin account is suspended.' });
+    }
+
+    const config = requireMsg91Config();
+    if (!config) {
+      return res.status(503).json({ error: 'OTP service is not configured', code: 'MSG91_NOT_CONFIGURED' });
+    }
+
+    const mobile = normalizeIndianMobile(phone);
+    if (!mobile) {
+      return res.status(400).json({ error: 'Enter a valid Indian mobile number.' });
+    }
+
+    try {
+      const { response, body } = await sendMsg91Otp({ authKey: config.authKey, templateId: config.templateId, mobile });
+      if (!(response.ok && String(body?.type || '').toLowerCase() === 'success')) {
+        await writeAuditLog({ adminId: adminRow.id, action: 'admin_otp_send_failed', targetType: 'admin_account', targetId: adminRow.id, metadata: { providerStatus: response.status }, req });
+        return res.status(502).json({ error: body?.message || body?.error || 'Failed to send OTP' });
+      }
+      await writeAuditLog({ adminId: adminRow.id, action: 'admin_otp_sent', targetType: 'admin_account', targetId: adminRow.id, req });
+      return res.status(200).json({
+        success: true,
+        requestId: body?.request_id || body?.requestId || null,
+        providerMessage: body?.message || '',
+      });
+    } catch (error) {
+      const timedOut = String(error?.name || '').toLowerCase() === 'timeouterror' || /aborted|timed out/i.test(String(error?.message || ''));
+      return res.status(timedOut ? 504 : 500).json({
+        error: timedOut ? 'OTP provider timeout while sending OTP' : 'Failed to send OTP',
+      });
+    }
+  });
+
+  router.post('/auth/resend-otp', otpSendLimiter, async (req, res) => {
+    if (!isDbEnabled() || !getPool()) {
+      return res.status(503).json({ error: 'Admin persistence is not configured' });
+    }
+
+    const phone = normalizePhone(req.body?.phone || '');
+    if (!phone || !/^\d{10}$/.test(phone)) {
+      return res.status(400).json({ error: 'Enter a valid 10-digit admin phone number.' });
+    }
+
+    const adminResult = await getPool().query(
+      `SELECT id, phone, normalized_phone, display_name, role, permissions, status
+         FROM admin_accounts
+        WHERE normalized_phone = $1
+        LIMIT 1`,
+      [phone],
+    );
+    const adminRow = adminResult.rows[0];
+    if (!adminRow) return res.status(401).json({ error: 'Admin account not found.' });
+    if (adminRow.status !== 'active') return res.status(403).json({ error: 'Admin account is suspended.' });
+
+    const config = requireMsg91Config();
+    if (!config) {
+      return res.status(503).json({ error: 'OTP service is not configured', code: 'MSG91_NOT_CONFIGURED' });
+    }
+
+    const mobile = normalizeIndianMobile(phone);
+    if (!mobile) {
+      return res.status(400).json({ error: 'Enter a valid Indian mobile number.' });
+    }
+
+    try {
+      const { response, body } = await resendMsg91Otp({ authKey: config.authKey, mobile, retryType: req.body?.retryType || 'text' });
+      if (!(response.ok && String(body?.type || '').toLowerCase() === 'success')) {
+        return res.status(502).json({ error: body?.message || body?.error || 'Failed to resend OTP' });
+      }
+      await writeAuditLog({ adminId: adminRow.id, action: 'admin_otp_resent', targetType: 'admin_account', targetId: adminRow.id, req });
+      return res.status(200).json({
+        success: true,
+        requestId: body?.request_id || body?.requestId || null,
+        providerMessage: body?.message || '',
+      });
+    } catch (error) {
+      const timedOut = String(error?.name || '').toLowerCase() === 'timeouterror' || /aborted|timed out/i.test(String(error?.message || ''));
+      return res.status(timedOut ? 504 : 500).json({
+        error: timedOut ? 'OTP provider timeout while resending OTP' : 'Failed to resend OTP',
+      });
+    }
+  });
+
+  router.post('/auth/verify-otp', otpVerifyLimiter, async (req, res) => {
+    if (!isDbEnabled() || !getPool()) {
+      return res.status(503).json({ error: 'Admin persistence is not configured' });
+    }
+
+    const phone = normalizePhone(req.body?.phone || '');
+    const otp = String(req.body?.otp || '').trim();
+    if (!phone || !/^\d{10}$/.test(phone)) {
+      return res.status(400).json({ error: 'Enter a valid 10-digit admin phone number.' });
+    }
+    if (!/^\d{4}$/.test(otp)) {
+      return res.status(400).json({ error: 'Enter a valid 4-digit OTP.' });
+    }
+
+    const result = await getPool().query(
+      `SELECT id, phone, normalized_phone, display_name, role, permissions, status
+         FROM admin_accounts
+        WHERE normalized_phone = $1
+        LIMIT 1`,
+      [phone],
+    );
+    const adminRow = result.rows[0];
+    if (!adminRow) {
+      await writeAuditLog({ action: 'admin_otp_verify_failed', targetType: 'admin_account', targetId: phone, metadata: { reason: 'not_found' }, req });
+      return res.status(401).json({ error: 'Admin account not found.' });
+    }
+    if (adminRow.status !== 'active') {
+      await writeAuditLog({ adminId: adminRow.id, action: 'admin_otp_verify_denied', targetType: 'admin_account', targetId: adminRow.id, metadata: { reason: 'suspended' }, req });
+      return res.status(403).json({ error: 'Admin account is suspended.' });
+    }
+
+    const config = requireMsg91Config();
+    if (!config) {
+      return res.status(503).json({ error: 'OTP service is not configured', code: 'MSG91_NOT_CONFIGURED' });
+    }
+
+    const mobile = normalizeIndianMobile(phone);
+    if (!mobile) {
+      return res.status(400).json({ error: 'Enter a valid Indian mobile number.' });
+    }
+
+    try {
+      const { response, body } = await verifyMsg91Otp({ authKey: config.authKey, mobile, otp });
+      if (!(response.ok && String(body?.type || '').toLowerCase() === 'success')) {
+        await writeAuditLog({ adminId: adminRow.id, action: 'admin_otp_verify_failed', targetType: 'admin_account', targetId: adminRow.id, metadata: { providerStatus: response.status }, req });
+        return res.status(400).json({ error: body?.message || body?.error || 'Incorrect OTP' });
+      }
+
+      const sessionPayload = await createAdminSession(adminRow, req);
+      return res.status(200).json(sessionPayload);
+    } catch (error) {
+      const timedOut = String(error?.name || '').toLowerCase() === 'timeouterror' || /aborted|timed out/i.test(String(error?.message || ''));
+      return res.status(timedOut ? 504 : 500).json({
+        error: timedOut ? 'OTP provider timeout while verifying OTP' : 'OTP verification failed',
+      });
+    }
+  });
+
   router.post('/auth/login', loginLimiter, async (req, res) => {
     if (!isDbEnabled() || !getPool()) {
       return res.status(503).json({ error: 'Admin persistence is not configured' });
@@ -488,39 +774,8 @@ export function registerAdminModule({ app, getPool, isDbEnabled, createRateLimit
       return res.status(401).json({ error: 'Invalid admin credentials.' });
     }
 
-    await getPool().query('UPDATE admin_sessions SET revoked_at = now() WHERE admin_id = $1 AND revoked_at IS NULL', [adminRow.id]);
-
-    const sessionToken = crypto.randomBytes(48).toString('base64url');
-    const sessionHash = hashSessionToken(sessionToken);
-    const expiresAt = new Date(Date.now() + ADMIN_SESSION_TTL_HOURS * 60 * 60 * 1000);
-
-    await getPool().query(
-      `INSERT INTO admin_sessions (admin_id, token_hash, expires_at, ip_address, user_agent)
-       VALUES ($1,$2,$3,$4,$5)`,
-      [
-        adminRow.id,
-        sessionHash,
-        expiresAt.toISOString(),
-        String(getClientIp(req) || '').slice(0, 120),
-        String(req.headers['user-agent'] || '').slice(0, 300),
-      ],
-    );
-
-    await getPool().query('UPDATE admin_accounts SET last_login_at = now(), updated_at = now() WHERE id = $1', [adminRow.id]);
-    await writeAuditLog({ adminId: adminRow.id, action: 'admin_login_success', targetType: 'admin_account', targetId: adminRow.id, req });
-
-    return res.status(200).json({
-      success: true,
-      token: sessionToken,
-      expiresAt: expiresAt.toISOString(),
-      admin: {
-        id: adminRow.id,
-        phone: adminRow.phone,
-        displayName: adminRow.display_name,
-        role: adminRow.role,
-        permissions: normalizePermissionList(adminRow.permissions),
-      },
-    });
+    const sessionPayload = await createAdminSession(adminRow, req);
+    return res.status(200).json(sessionPayload);
   });
 
   router.use(adminAuthMiddleware);

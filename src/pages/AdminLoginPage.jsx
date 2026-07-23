@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { LockKeyhole, ShieldCheck } from 'lucide-react';
+import { MessageSquare, ShieldCheck } from 'lucide-react';
 
 const ADMIN_TOKEN_KEY = 'drizn_admin_token';
 const ADMIN_SESSION_KEY = 'drizn_admin_session';
@@ -43,9 +43,12 @@ async function requestJson(path, options = {}) {
 
 export default function AdminLoginPage({ navigate = null }) {
   const [phone, setPhone] = useState('');
-  const [pin, setPin] = useState('');
-  const [submitting, setSubmitting] = useState(false);
+  const [otp, setOtp] = useState('');
+  const [otpSent, setOtpSent] = useState(false);
+  const [sendingOtp, setSendingOtp] = useState(false);
+  const [verifyingOtp, setVerifyingOtp] = useState(false);
   const [error, setError] = useState('');
+  const [info, setInfo] = useState('');
   const [session, setSession] = useState(null);
 
   const maskedPhone = useMemo(() => {
@@ -79,26 +82,52 @@ export default function AdminLoginPage({ navigate = null }) {
     loadSession();
   }, []);
 
-  const submitLogin = async (event) => {
+  const sendOtp = async (event) => {
     event.preventDefault();
     setError('');
+    setInfo('');
     const normalizedPhone = normalizePhone(phone);
     if (!/^\d{10}$/.test(normalizedPhone)) {
       setError('Enter a valid 10-digit admin phone number.');
       return;
     }
-    if (String(pin || '').trim().length < 4) {
-      setError('Enter your admin PIN.');
+
+    setSendingOtp(true);
+    try {
+      await requestJson('/api/admin/auth/send-otp', {
+        method: 'POST',
+        body: { phone: normalizedPhone },
+      });
+      setOtpSent(true);
+      setInfo(`OTP sent to +91 ******${normalizedPhone.slice(-4)}.`);
+    } catch (nextError) {
+      setError(nextError?.message || 'Could not send OTP.');
+    } finally {
+      setSendingOtp(false);
+    }
+  };
+
+  const verifyOtpAndLogin = async (event) => {
+    event.preventDefault();
+    setError('');
+    setInfo('');
+    const normalizedPhone = normalizePhone(phone);
+    if (!/^\d{10}$/.test(normalizedPhone)) {
+      setError('Enter a valid 10-digit admin phone number.');
+      return;
+    }
+    if (!/^\d{4}$/.test(String(otp || '').trim())) {
+      setError('Enter a valid 4-digit OTP.');
       return;
     }
 
-    setSubmitting(true);
+    setVerifyingOtp(true);
     try {
-      const result = await requestJson('/api/admin/auth/login', {
+      const result = await requestJson('/api/admin/auth/verify-otp', {
         method: 'POST',
         body: {
           phone: normalizedPhone,
-          pin: String(pin || '').trim(),
+          otp: String(otp || '').trim(),
         },
       });
       localStorage.setItem(ADMIN_TOKEN_KEY, String(result?.token || ''));
@@ -109,12 +138,36 @@ export default function AdminLoginPage({ navigate = null }) {
       };
       localStorage.setItem(ADMIN_SESSION_KEY, JSON.stringify(nextSession));
       setSession(nextSession);
-      setPin('');
+      setOtp('');
+      setOtpSent(false);
       if (navigate) navigate('/admin');
     } catch (nextError) {
       setError(nextError?.message || 'Could not sign in to admin dashboard.');
     } finally {
-      setSubmitting(false);
+      setVerifyingOtp(false);
+    }
+  };
+
+  const resendOtp = async () => {
+    setError('');
+    setInfo('');
+    const normalizedPhone = normalizePhone(phone);
+    if (!/^\d{10}$/.test(normalizedPhone)) {
+      setError('Enter a valid 10-digit admin phone number.');
+      return;
+    }
+
+    setSendingOtp(true);
+    try {
+      await requestJson('/api/admin/auth/resend-otp', {
+        method: 'POST',
+        body: { phone: normalizedPhone, retryType: 'text' },
+      });
+      setInfo(`OTP resent to +91 ******${normalizedPhone.slice(-4)}.`);
+    } catch (nextError) {
+      setError(nextError?.message || 'Could not resend OTP.');
+    } finally {
+      setSendingOtp(false);
     }
   };
 
@@ -175,7 +228,7 @@ export default function AdminLoginPage({ navigate = null }) {
             </button>
           </div>
         ) : (
-          <form className="space-y-4" onSubmit={submitLogin}>
+          <form className="space-y-4" onSubmit={otpSent ? verifyOtpAndLogin : sendOtp}>
             <label className="block text-sm font-semibold text-slate-700">
               Admin phone number
               <input
@@ -187,31 +240,51 @@ export default function AdminLoginPage({ navigate = null }) {
                 className="mt-2 w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm font-semibold text-slate-900 outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
               />
             </label>
-            <label className="block text-sm font-semibold text-slate-700">
-              Admin PIN
-              <div className="relative mt-2">
-                <input
-                  type="password"
-                  value={pin}
-                  onChange={(event) => setPin(event.target.value.replace(/\s/g, '').slice(0, 32))}
-                  placeholder="PIN"
-                  className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 pr-10 text-sm font-semibold text-slate-900 outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
-                />
-                <LockKeyhole size={16} className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-slate-400" />
-              </div>
-            </label>
+            {otpSent && (
+              <label className="block text-sm font-semibold text-slate-700">
+                Admin OTP
+                <div className="relative mt-2">
+                  <input
+                    type="text"
+                    inputMode="numeric"
+                    value={otp}
+                    onChange={(event) => setOtp(event.target.value.replace(/\D/g, '').slice(0, 4))}
+                    placeholder="4-digit OTP"
+                    className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 pr-10 text-sm font-semibold text-slate-900 outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
+                  />
+                  <MessageSquare size={16} className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-slate-400" />
+                </div>
+              </label>
+            )}
 
             {error && (
               <p className="rounded-xl border border-rose-100 bg-rose-50 px-3 py-2 text-sm font-semibold text-rose-700">{error}</p>
             )}
 
+            {info && (
+              <p className="rounded-xl border border-emerald-100 bg-emerald-50 px-3 py-2 text-sm font-semibold text-emerald-700">{info}</p>
+            )}
+
             <button
               type="submit"
-              disabled={submitting}
+              disabled={sendingOtp || verifyingOtp}
               className="w-full rounded-xl bg-emerald-700 px-4 py-3 text-sm font-bold text-white shadow-sm transition hover:bg-emerald-800 disabled:cursor-not-allowed disabled:opacity-60"
             >
-              {submitting ? 'Signing in...' : 'Sign in to Admin'}
+              {otpSent
+                ? (verifyingOtp ? 'Verifying OTP...' : 'Verify OTP and Sign in')
+                : (sendingOtp ? 'Sending OTP...' : 'Send OTP')}
             </button>
+
+            {otpSent && (
+              <button
+                type="button"
+                onClick={resendOtp}
+                disabled={sendingOtp || verifyingOtp}
+                className="w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm font-bold text-slate-700 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {sendingOtp ? 'Resending OTP...' : 'Resend OTP'}
+              </button>
+            )}
           </form>
         )}
       </div>
