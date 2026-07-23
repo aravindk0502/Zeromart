@@ -123,10 +123,23 @@ function parseAdminAuthHeader(req) {
   return auth.slice(7).trim();
 }
 
+function readQueryFallback(req, key) {
+  const raw = String(req.originalUrl || req.url || '');
+  const queryIndex = raw.indexOf('?');
+  if (queryIndex < 0) return '';
+  try {
+    const params = new URLSearchParams(raw.slice(queryIndex + 1));
+    return String(params.get(key) || '').trim();
+  } catch {
+    return '';
+  }
+}
+
 function resolveAdminPhone(req) {
   return normalizePhone(
     req.body?.phone
     || req.query?.phone
+    || readQueryFallback(req, 'phone')
     || req.headers['x-admin-phone']
     || '',
   );
@@ -136,6 +149,7 @@ function resolveAdminOtp(req) {
   return String(
     req.body?.otp
     || req.query?.otp
+    || readQueryFallback(req, 'otp')
     || req.headers['x-admin-otp']
     || '',
   ).trim();
@@ -145,6 +159,7 @@ function resolveAdminPin(req) {
   return String(
     req.body?.pin
     || req.query?.pin
+    || readQueryFallback(req, 'pin')
     || req.headers['x-admin-pin']
     || '',
   ).trim();
