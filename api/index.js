@@ -222,7 +222,7 @@ async function forwardAuthRequest(req, res, urlPath) {
   }
 
   const method = String(req.method || 'GET').toUpperCase();
-  if (!['POST', 'GET'].includes(method)) {
+  if (!['GET', 'POST', 'PUT', 'PATCH', 'DELETE'].includes(method)) {
     return sendJson(res, 405, { error: 'Method not allowed' });
   }
 
@@ -3189,6 +3189,11 @@ export default async function handler(req, res) {
 
   if (url === '/api/auth/send-otp' || url === '/auth/send-otp') {
     return forwardAuthRequest(req, res, '/api/auth/send-otp');
+  }
+
+  if (url === '/api/admin' || url.startsWith('/api/admin/') || url === '/admin' || url.startsWith('/admin/')) {
+    const upstreamPath = url.startsWith('/api/') ? url : `/api${url}`;
+    return forwardAuthRequest(req, res, upstreamPath);
   }
 
   if (url === '/api/auth/resend-otp' || url === '/auth/resend-otp') {
