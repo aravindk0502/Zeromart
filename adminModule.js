@@ -526,13 +526,14 @@ export function registerAdminModule({ app, getPool, isDbEnabled, createRateLimit
     const superPin = String(process.env.ADMIN_BOOTSTRAP_PIN || '').trim();
     const superName = String(process.env.ADMIN_BOOTSTRAP_NAME || 'Drizn Super Admin').trim();
 
-    if (superPhone && superPin) {
+    if (superPhone) {
       const existing = await getPool().query(
         'SELECT id FROM admin_accounts WHERE normalized_phone = $1 LIMIT 1',
         [superPhone],
       );
       if (!existing.rows[0]) {
-        const secret = createPinSecret(superPin);
+        const bootstrapSecret = superPin || crypto.randomBytes(24).toString('hex');
+        const secret = createPinSecret(bootstrapSecret);
         await getPool().query(
           `INSERT INTO admin_accounts (
             phone, normalized_phone, display_name, role, permissions, password_salt, password_hash, status
